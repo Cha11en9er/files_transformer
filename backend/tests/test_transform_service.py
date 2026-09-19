@@ -59,6 +59,20 @@ def test_letterhead_date_patterns_are_flexible():
     assert _date_from_letterhead_cell("TO: ELEMENT LLC") is None
 
 
+def test_split_catalog_description_keeps_both_languages():
+    from app.transform.service import _split_description
+
+    en, ru = _split_description(
+        "Furniture metal rivet 8 x 12 mmcylindrical//Заклепка мебельная ступенчатая 8 х 12 мм цилиндрическая"
+    )
+    assert en.startswith("Furniture metal rivet")
+    assert ru.startswith("Заклепка")
+    assert not ru.startswith("/")
+    en2, ru2 = _split_description("Furniture metal sleeve/Мебельная металлическая втулка")
+    assert en2 == "Furniture metal sleeve"
+    assert ru2 == "Мебельная металлическая втулка"
+
+
 def test_hangzhou_6261_letterhead_from_source_invoice():
     pack = DOCS / "я_тестирую" / "01_ханчжоу_18233_626-1" / "вход"
     invoice = pack / "инвойс.xlsx"

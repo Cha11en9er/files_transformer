@@ -124,7 +124,8 @@ def test_compact_snapshot_keeps_qty_and_excel_context() -> None:
     assert "languages_in_this_shipment" in prompt
     assert "invoice_date" in prompt
     assert "shipment" in prompt.lower()
-    assert "0.2" in prompt
+    assert "lots[]" in prompt
+    assert "KEEP BOTH" not in prompt
     assert "letterhead" in prompt.lower() or "Cross-supplier principles" in prompt
     assert "catalog" in prompt.lower() or "сводная" in prompt
     assert snap["languages"]["ids"]

@@ -89,7 +89,7 @@ SYNONYMS: dict[str, tuple[tuple[str, float], ...]] = {
         ("规格名称", 8), ("goods", 4),
         # some suppliers put the goods name into remarks; keep weight low so a real
         # Description column always wins when both exist
-        ("remarks", 4), ("annotation", 3), ("примечание", 3),
+        ("remarks", 2), ("annotation", 1), ("примечание", 1),
     ),
     "hs_code": (
         ("hs code / код", 10), ("hs-code", 9), ("hs code", 9), ("код hs", 9), ("h.s. code", 9),
@@ -342,6 +342,12 @@ def classify_columns(columns: list[ColumnStat]) -> dict[int, str]:
                 bonus += 1.0
         if field_key == "area" and numeric:
             bonus += 0.3
+        if field_key == "description":
+            texts = [normalize_text(str(v)) for v in col.values if normalize_text(str(v))]
+            if texts:
+                short = sum(1 for t in texts if len(t) <= 18 and " " not in t) / len(texts)
+                if short >= 0.6:
+                    bonus -= 6.0
         return bonus
 
     col_by_index = {c.index: c for c in columns}

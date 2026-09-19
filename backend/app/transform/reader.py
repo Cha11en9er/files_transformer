@@ -23,6 +23,7 @@ class Sheet:
     name: str
     grid: list[list[Any]]                       # merges already expanded
     inherited: set[tuple[int, int]] = field(default_factory=set)  # (row, col) filled from a merge
+    merges: list[tuple[int, int, int, int]] = field(default_factory=list)  # 0-based inclusive ranges
     source: str = ""                            # file name
 
     @property
@@ -97,7 +98,13 @@ def _read_xlsx(path: str) -> list[Sheet]:
                 for m in ws.merged_cells.ranges
             ]
             inherited = _fill_merges(grid, ranges)
-            sheets.append(Sheet(name=str(ws.title), grid=_rectangular(grid), inherited=inherited, source=Path(path).name))
+            sheets.append(Sheet(
+                name=str(ws.title),
+                grid=_rectangular(grid),
+                inherited=inherited,
+                merges=ranges,
+                source=Path(path).name,
+            ))
     finally:
         wb.close()
     return sheets
@@ -134,7 +141,13 @@ def _read_xls(path: str) -> list[Sheet]:
         grid = [[(None if v == "" else v) for v in row] for row in grid]
         ranges = [(r0, c0, r1 - 1, c1 - 1) for (r0, r1, c0, c1) in getattr(ws, "merged_cells", [])]
         inherited = _fill_merges(grid, ranges)
-        sheets.append(Sheet(name=str(ws.name), grid=_rectangular(grid), inherited=inherited, source=Path(path).name))
+        sheets.append(Sheet(
+            name=str(ws.name),
+            grid=_rectangular(grid),
+            inherited=inherited,
+            merges=ranges,
+            source=Path(path).name,
+        ))
     return sheets
 
 

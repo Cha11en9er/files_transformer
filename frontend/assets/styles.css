@@ -271,9 +271,34 @@ input, select, button, textarea {
   background: #e7eef5;
   border: 1px solid var(--line);
 }
+button.badge {
+  font-family: inherit;
+  line-height: inherit;
+}
 .badge.unknown { background: #f3f3f3; }
 .badge.skipped { background: var(--red); }
 .badge.review { background: var(--orange); }
+.badge.clickable {
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  font: inherit;
+  font-family: inherit;
+}
+.badge.clickable:hover { filter: brightness(0.96); }
+.review-panel {
+  margin: 0 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 12px 12px;
+  background: #f7fafb;
+}
+.review-panel > summary {
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+.review-panel > summary::-webkit-details-marker { display: none; }
 
 .parse-progress { margin: 8px 0 0; }
 .parse-progress-track {
@@ -680,10 +705,25 @@ dialog {
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 0;
-  max-width: 520px;
+  max-width: 720px;
   width: calc(100% - 24px);
 }
 .dialog-form { display: grid; gap: 10px; padding: 18px; }
+.edit-flags { display: grid; gap: 6px; }
+.edit-flag {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+  background: #fff8ee;
+}
+.edit-flag.RED { background: #fdecea; border-color: #b42318; }
+.edit-lots {
+  font-size: 13px;
+  color: #3d4d57;
+}
+.edit-lots table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.edit-lots th, .edit-lots td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; }
 pre {
   background: #0f1b24;
   color: #d7e7ef;

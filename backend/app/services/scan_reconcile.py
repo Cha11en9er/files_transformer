@@ -264,6 +264,11 @@ def _append_excel_sourced_items(items: list[ItemOut], hits: list[ScanItemOut]) -
         qty = _item_qty(item)
         if key and qty is not None:
             known_lots.add((key, f"{round(float(qty), 6):g}"))
+        lots = (item.commercial_data or {}).get("lots") or []
+        for lot in lots:
+            lqty = lot.get("qty")
+            if key and lqty is not None:
+                known_lots.add((key, f"{round(float(lqty), 6):g}"))
     for hit in hits:
         if hit.verdict != "extra":
             continue

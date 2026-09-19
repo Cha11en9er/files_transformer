@@ -213,12 +213,20 @@ def nearly_equal(left: Any, right: Any, *, tol: float = 0.05) -> bool:
     return abs(a - b) <= max(tol, abs(a) * 0.002)
 
 
+_SKU_NOTE_RE = re.compile(r"^[A-Za-z0-9]{1,12}(?:[._/-][A-Za-z0-9]{1,12}){1,4}$")
+
+
 def is_factory_note(value: Any) -> bool:
     """Mill cutting marks like (15+30) or (A), not a customs description."""
     text = normalize_text(str(value or ""))
     if not text or len(text) > 48:
         return False
-    return bool(_FACTORY_NOTE_RE.match(text))
+    if _FACTORY_NOTE_RE.match(text):
+        return True
+    # Annotation codes such as D680-1 / A519-3 are component notes, not names.
+    if " " not in text and _SKU_NOTE_RE.match(text):
+        return True
+    return False
 
 
 def repair_line_amount(mapped: dict[str, Any]) -> dict[str, Any]:

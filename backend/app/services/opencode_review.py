@@ -157,9 +157,10 @@ PDF/scan pages only confirm numbers already in Excel. They never override an att
 
 A numbered DESIGN/Art No. row is a goods line. The next unnumbered row "SOFA FABRIC / family" or "ARTIFICIAL LEATHER / family" is a group total: copy unit price from there onto each child, amount = child meters × price (not the family TOTAL M2).
 PACKAGES / PACKAGE / CARTONS / CTNS is rolls or boxes (places), never commercial Quantity. QUANTITY is pcs/sets/meters. HIDES is leather pieces; Pattern on a DPL sheet is the article.
-Two lots of the same Art No. that each have their own Quantity/Amount stay two items[]. A merged qty/price/amount with extra weight rows is one commercial line: sum the own packing numbers.
+Two lots of the same Art No. stay two items[] only when the article is written again as its own cell. A merged Art No. block with extra Quantity/Amount rows is ONE item number: keep those rows as lots[] / continuation lines, do not emit extra items[] and do not invent a new No.
+Qty/price/amount stretched by merge across packing-only rows is also one commercial line: keep packing lines, sum own packing numbers.
 Do not copy a merged net/gross/cartons block onto a neighbouring Art No. that only inherited those cells.
-Stop at the printed TOTAL. "Detail packing list" and a new header after TOTAL are not extra invoice goods lines.
+Stop at the printed TOTAL. "Detail packing list" and a new header after TOTAL are component packing of already listed articles (hyphen-suffix SKU belongs to the parent already in items[]), not extra invoice goods lines.
 Skip letterhead rows (Terms of delivery/payment, bank, director, address) — they are not items.
 Skip empty sheets, date-only Sheet2, and catalog/card sheets (справочник, 1601057).
 The output field "description" is the customs Product name / Наименование товара, not mill cutting notes and not the article.
@@ -244,6 +245,7 @@ Reply with this exact JSON shape:
       "measurement": null,
       "color": null,
       "description": null,
+      "lots": null,
       "verdict": "ok",
       "notes": null
     }}
@@ -258,7 +260,7 @@ Rules:
 - If two goods-like tables exist, pick the one whose articles overlap parser_json.items. Put the other in tables[] with role "ignored" and why.
 - Always copy the printed document TOTAL into totals, including gross_weight / brutto and cartons when printed. Never drop TOTAL. Do not put the TOTAL row into items[].
 - items[] follow parser_json.items when articles match, but numbers come from attached Excel when they differ. verdict: ok if they match the workbook, question if you corrected the draft, extra if in the file but not in parser_json, missing if in parser_json but not in Excel.
-- Put every goods row from Excel into items[]. If the draft dropped a line (article may start with a digit) or merged two lots of the same Art No. that each have their own Quantity/Amount, emit extra rows. Do not invent bilingual descriptions that are not in Excel or the catalog.
+- Put every goods row from Excel into items[]. Continuation rows inside a merged Art No. stay lots[] of that item, not extra items[]. lots[] is a list of {{qty, price, amount, color}} or null when the item is a single commercial line. If the draft dropped a line whose Art No. is written again as its own cell, emit extra rows. Do not invent bilingual descriptions that are not in Excel or the catalog. Catalog names often use EN//RU - copy both sides, do not leave a leading slash.
 - qty is commercial quantity in unit. meters is packing meters. Amount is money, never m2. rolls/boxes are places. gross_weight is brutto, net_weight is netto.
 - description is customs Product name from Excel or catalog, or null. Never copy (15+30), (A), 0605 Special Order, and never invent text because an etalon once had it.
 - net_weight / gross_weight / volume / boxes / rolls: prefer packing-list commercial numbers; if draft used sender-spec rolls and packing disagrees beyond ~0.2 kg, correct to packing and verdict "question" with notes like "excel:weight packing vs spec". If WEIGHT BRUTTO / GROSS WEIGHT is a printed column, gross_weight must not stay null.
@@ -729,6 +731,7 @@ def compact_parser_snapshot(
             {
                 "article": item.get("article"),
                 "qty": commercial.get("qty"),
+                "lots": commercial.get("lots") or None,
                 "unit": commercial.get("unit"),
                 "color": commercial.get("color"),
                 "rolls": packing.get("rolls"),

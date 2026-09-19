@@ -62,7 +62,7 @@ File "Invoice n Packing list" / "поступление инвойс и паки
   sheet "Invoice + Packing list": Art No. | Color | Quantity | Unit | Price | Amount | Measurement | Gross | Net | Cartons | Volume | pcs per carton — goods WITH prices
   sheet "Packing list": same articles, weights, cartons, Volume m3, pcs per carton — no price
 Both sheets are the SAME shipment. Match Art No. Color Zinc is colour, not article.
-Merged cells: Art No. may cover two lots of the same article. KEEP BOTH rows if each has its own Quantity/Amount. Do not add the two quantities into one line.
+Merged cells: Art No. covering two Quantity/Amount rows is ONE item with lots[] (continuation), not two numbered goods lines. Keep two items[] only when the Art No. is written again as its own cell. Do not add the two quantities into one commercial line without keeping lots[].
 If Quantity/Price/Amount are merged down onto component SKUs of a set, that is ONE commercial line; sum component net/gross.
 Articles may start with digits and still be articles.
 Catalog "справочник сводная.xlsx" sheet Specification: Item/Артикул | Description/Наименование | ТНВЭД. Extra sheets 1601057, 1601030MB are mechanism cards, not invoice lines. Fill ТНВЭД + bilingual description only on exact article match. If there is no catalog, leave Description empty; do not invent text from an etalon.
