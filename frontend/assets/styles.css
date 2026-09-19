@@ -701,12 +701,67 @@ button.badge {
 }
 .hidden { display: none; }
 
+.review-launch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+}
 dialog {
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 0;
   max-width: 720px;
   width: calc(100% - 24px);
+}
+dialog.review-dialog {
+  max-width: 1120px;
+  width: calc(100% - 32px);
+  max-height: calc(100vh - 32px);
+}
+.review-dialog-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+  padding: 16px 18px 8px;
+}
+.review-dialog-head h3 { margin: 0 0 4px; font-size: 18px; }
+.review-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 18px 10px;
+}
+.review-tab {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.review-tab.active {
+  background: #123447;
+  color: #f5fafc;
+  border-color: #123447;
+}
+.review-dialog-body {
+  padding: 0 18px 18px;
+  overflow: auto;
+  max-height: calc(100vh - 180px);
+}
+.review-file-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: baseline;
+  margin: 0 0 10px;
+}
+.review-dialog-body h4 {
+  margin: 16px 0 8px;
+  font-size: 14px;
 }
 .dialog-form { display: grid; gap: 10px; padding: 18px; }
 .edit-flags { display: grid; gap: 6px; }

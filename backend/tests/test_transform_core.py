@@ -258,6 +258,79 @@ def test_xls_merged_cells_are_filled():
     assert match_key("RIO") in arts or match_key("OLD") in arts
 
 
+def test_classify_stacked_weight_and_series_art_headers():
+    cols = [
+        ColumnStat(0, "№", ["1", "2"]),
+        ColumnStat(1, "CODE", ["9506620000", "9506290000"]),
+        ColumnStat(2, "DESCRIPTION", ["Water ball", "Life jacket"]),
+        ColumnStat(3, "COUNTRY OF ORIGIN", ["CN", "CN"]),
+        ColumnStat(4, "MODEL / SERIES / ART.", ["31021", "32034"]),
+        ColumnStat(5, "MANUFACTURER / BRAND", ["Bestway", "Bestway"]),
+        ColumnStat(6, "WEIGHT NETTO, kg", ["35.20", "48.70"]),
+        ColumnStat(7, "WEIGHT NETTO WITH PRIMARY PACKAGING, kg", ["35.20", "48.70"]),
+        ColumnStat(8, "QTY", ["360", "168"]),
+        ColumnStat(9, "PRICE PER USD", ["0.1304", "1.3056"]),
+        ColumnStat(10, "AMOUNT, USD", ["46.94", "219.34"]),
+    ]
+    mapping = classify_columns(cols)
+    assert mapping[4] == "article"
+    assert mapping[8] == "qty"
+    assert mapping[9] == "price"
+    assert mapping[10] == "amount"
+    assert mapping.get(6) == "net_weight" or mapping.get(7) == "net_weight"
+
+
+def test_pdf_continuation_keeps_all_rows_and_skips_header_label():
+    from app.transform.extract import extract_sheet
+    from app.transform.merge import merge_documents
+    from app.transform.pdf import flatten_header_rows, stitch_continuation_tables
+    from app.transform.reader import Sheet
+
+    header = [
+        ["№", "CODE", "DESCRIPTION", "COUNTRY", "MODEL /", "MANUFACTURER /", "WEIGHT", None, "QTY", "PRICE PER", "AMOUNT"],
+        [None, None, None, "OF ORIGIN", "SERIES / ART.", "BRAND", "NETTO, kg", "NETTO WITH PRIMARY PACKAGING, kg", None, "USD", "USD"],
+    ]
+    page1_rows = [
+        ["1", "9506620000", "Water ball", "CN", "31021", "Bestway", "35.20", "35.20", "360", "0.1304", "46.94"],
+        ["2", "9506290000", "Life jacket", "CN", "32034", "Bestway", "48.70", "48.70", "168", "1.3056", "219.34"],
+        ["3", "9506290000", "Armbands", "CN", "32325", "Bestway", "86.70", "86.70", "672", "0.5811", "390.50"],
+        ["4", "9004909000", "Goggles 3+", "CN", "21201", "Bestway", "78.30", "78.30", "1320", "0.5817", "767.84"],
+        ["5", "9004909000", "Goggles 7+", "CN", "26034", "Bestway", "29.10", "29.10", "384", "0.7450", "286.08"],
+        ["6", "3926909200", "Mattress single", "CN", "67000", "Bestway", "1180.10", "1180.10", "660", "3.9218", "2588.39"],
+        ["7", "3926909200", "Mattress pump", "CN", "67001", "Bestway", "752.00", "752.00", "330", "4.9983", "1649.44"],
+    ]
+    page2_rows = [
+        ["8", "3926909200", "Mattress double", "CN", "67003", "Bestway", "4890.20", "4890.20", "1335", "8.0344", "10725.92"],
+        ["9", "3926909200", "Mattress double 2", "CN", "67004", "Bestway", "1130.70", "1130.70", "262", "9.4658", "2480.04"],
+        ["10", "3926909200", "Mattress pillows", "CN", "67374", "Bestway", "6858.10", "6858.10", "1569", "9.5872", "15042.32"],
+        ["11", "8414208000", "Hand pump", "CN", "62002", "Bestway", "185.90", "185.90", "504", "1.2643", "637.21"],
+        ["12", "8414208000", "Foot pump", "CN", "62004", "Bestway", "264.70", "264.70", "504", "1.8002", "907.30"],
+        ["13", "3919900000", "Repair kit", "CN", "62091", "Bestway", "21.60", "21.60", "828", "0.0289", "23.93"],
+        ["TOTAL", None, None, None, None, None, "15561.30", "15561.30", "8896", None, "35765.25"],
+    ]
+    flat = flatten_header_rows(header + page1_rows)
+    assert "SERIES / ART." in str(flat[0][4])
+    assert flat[1][4] == "31021"
+    pages = stitch_continuation_tables([(1, header + page1_rows), (2, page2_rows)])
+    assert pages[1][1][0][4]
+    sheet1 = Sheet(name="p1", grid=pages[0][1], source="INV.pdf")
+    sheet2 = Sheet(name="p2", grid=pages[1][1], source="INV.pdf")
+    ex1 = extract_sheet(sheet1)
+    ex2 = extract_sheet(sheet2, inherited_mapping=ex1.mapping, inherited_role=ex1.role)
+    assert ex1 is not None and ex2 is not None
+    arts = [row.article for row in ex1.rows + ex2.rows]
+    assert "SERIES / ART." not in arts
+    assert arts == [
+        "31021", "32034", "32325", "21201", "26034", "67000",
+        "67001", "67003", "67004", "67374", "62002", "62004", "62091",
+    ]
+    items = merge_documents([ex1, ex2])
+    assert len(items) == 13
+    by_art = {it.article: it for it in items}
+    assert by_art["67004"].fields["qty"] == 262
+    assert by_art["62091"].fields["amount"] == pytest.approx(23.93)
+
+
 def test_classify_weight_brutto_and_package_not_qty():
     cols = [
         ColumnStat(0, "Art No.", ["WAY-1", "WAY-2"]),

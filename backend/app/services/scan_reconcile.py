@@ -245,7 +245,7 @@ def _item_from_scan_hit(hit: ScanItemOut) -> ItemOut:
                 error_type=ErrorType.MODEL_CORRECTION,
                 severity=ErrorSeverity.YELLOW,
                 details={"excel": article},
-                message=f"Модель добавила позицию «{article}» из Excel",
+                message=f"Модель добавила позицию «{article}»",
                 resolved=True,
             )
         ],
@@ -278,7 +278,7 @@ def _append_excel_sourced_items(items: list[ItemOut], hits: list[ScanItemOut]) -
             continue
         if not is_plausible_article(article):
             continue
-        if hit.qty is None and hit.amount is None and hit.price is None:
+        if hit.qty is None and hit.amount is None and hit.price is None and hit.net_weight is None:
             continue
         qty = _num(hit.qty)
         lot_id = (key, f"{round(float(qty), 6):g}") if qty is not None else None
@@ -300,6 +300,11 @@ def apply_scan_review(items: list[ItemOut], review: dict[str, Any]) -> dict[str,
     hits = [_as_hit(row) for row in (review.get("items") or [])]
     if review.get("excel_attached"):
         _apply_excel_sourced_numbers(items, hits)
+        _append_excel_sourced_items(items, hits)
+        excel_totals = compute_excel_totals(items)
+        review["excel_totals"] = excel_totals.model_dump()
+    else:
+        # PDF-only upload: parser may have dropped continuation pages. Add those lots.
         _append_excel_sourced_items(items, hits)
         excel_totals = compute_excel_totals(items)
         review["excel_totals"] = excel_totals.model_dump()

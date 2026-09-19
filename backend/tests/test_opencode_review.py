@@ -128,6 +128,9 @@ def test_compact_snapshot_keeps_qty_and_excel_context() -> None:
     assert "KEEP BOTH" not in prompt
     assert "letterhead" in prompt.lower() or "Cross-supplier principles" in prompt
     assert "catalog" in prompt.lower() or "сводная" in prompt
+    assert "Later pages" in prompt
+    assert "NO Excel" in prompt
+    assert "SERIES / ART." in prompt
     assert snap["languages"]["ids"]
     assert "en" in snap["languages"]["ids"]
     assert snap["source_files"][0]["scripts"]
@@ -465,4 +468,36 @@ def test_coerce_brutto_alias_and_extra_lot_of_same_article() -> None:
     )
     assert len(items) == 2
     assert sorted(row.commercial_data["qty"] for row in items) == [20, 1480]
+
+
+def test_apply_scan_pdf_only_appends_continuation_article() -> None:
+    existing = ItemOut(
+        id=uuid4(),
+        article="31021",
+        model="31021",
+        normalized_article="31021",
+        commercial_data={"qty": 360, "amount": 46.94},
+        packing_data={},
+        customs_data={},
+    )
+    items = [existing]
+    apply_scan_review(
+        items,
+        {
+            "status": "ok",
+            "excel_attached": False,
+            "items": [
+                {
+                    "article": "67004",
+                    "qty": 262,
+                    "amount": 2480.04,
+                    "verdict": "extra",
+                    "notes": "page 2 continuation",
+                }
+            ],
+        },
+    )
+    assert len(items) == 2
+    added = next(row for row in items if row.article == "67004")
+    assert added.commercial_data["qty"] == 262
 

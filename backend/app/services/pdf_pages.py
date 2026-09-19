@@ -7,8 +7,8 @@ from pathlib import Path
 
 from app.parsing.pdf_extractor import sniff_kind
 
-MAX_IMAGES = 12
-MAX_PAGES_PER_PDF = 8
+MAX_IMAGES = 20
+MAX_PAGES_PER_PDF = 25
 MAX_SIDE = 1600
 JPEG_QUALITY = 78
 RENDER_DPI = 130

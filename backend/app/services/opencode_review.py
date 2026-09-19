@@ -27,7 +27,7 @@ from app.services.scan_examples import DOCUMENT_SHAPES
 JSON_DECODER = json.JSONDecoder()
 PREVIEW_LIMIT = 4000
 PDF_TEXT_LIMIT = 20000
-SAMPLE_ROWS = 40
+SAMPLE_ROWS = 80
 TABLE_ROWS = 250
 RAW_COLUMNS = 24
 RAW_VALUES = 16
@@ -142,6 +142,9 @@ SYSTEM_PROMPT = (
     "shipment date with the invoice number, and do not take B/L / ETD / ETA dates as invoice_date. "
     "Customs description and TN VED usually come from a reference catalog (сводная / описание / справочник), "
     "not from an empty Annotation column; if the catalog is absent, leave description null and say so. "
+    "If Excel workbooks are attached they are the source of truth for numbers. "
+    "If the upload is PDF/scan only, the page images and PDF text are the source of truth: "
+    "copy every goods row from every page. A table may continue on later pages without a header. "
     "Return one JSON object and nothing else. No markdown, no code fences, no reasoning, "
     "no preface, no trailing commentary. Unknown values are null. Do not invent HS/TN VED codes, "
     "prices or quantities that are not visible in the attached Excel, images or parser_json."
@@ -153,7 +156,8 @@ parser_json is a DRAFT built by column synonyms. It can be wrong: TOTAL M2 / are
 
 excel_attachments lists the original workbooks attached as binary files. Read those workbooks. They are the source of truth for EVERY numeric column, not only amount: qty, unit, price, amount, rolls/packages/cartons/boxes, meters, area, net_weight, gross_weight (WEIGHT BRUTTO / BRUTTO / G.W. / GROSS WEIGHT), volume, measurement, pcs_per_carton. If draft and workbook disagree, items[] must carry the workbook number and verdict "question" with notes starting with "excel:". If packing printed a brutto/gross and the draft left gross_weight null or 0, copy the printed number. If PACKAGE/CARTONS is a separate column from QUANTITY, do not put packages into qty.
 
-PDF/scan pages only confirm numbers already in Excel. They never override an attached Excel workbook.
+If excel_attachments is not empty, those workbooks are the source of truth for numbers. PDF/scan pages only confirm them and never override a workbook.
+If there is NO Excel workbook (PDF/scan only), the attached page images and the PDF text ARE the source of truth. Copy every numbered goods row from every page.
 
 A numbered DESIGN/Art No. row is a goods line. The next unnumbered row "SOFA FABRIC / family" or "ARTIFICIAL LEATHER / family" is a group total: copy unit price from there onto each child, amount = child meters × price (not the family TOTAL M2).
 PACKAGES / PACKAGE / CARTONS / CTNS is rolls or boxes (places), never commercial Quantity. QUANTITY is pcs/sets/meters. HIDES is leather pieces; Pattern on a DPL sheet is the article.
@@ -161,6 +165,10 @@ Two lots of the same Art No. stay two items[] only when the article is written a
 Qty/price/amount stretched by merge across packing-only rows is also one commercial line: keep packing lines, sum own packing numbers.
 Do not copy a merged net/gross/cartons block onto a neighbouring Art No. that only inherited those cells.
 Stop at the printed TOTAL. "Detail packing list" and a new header after TOTAL are component packing of already listed articles (hyphen-suffix SKU belongs to the parent already in items[]), not extra invoice goods lines.
+A goods table may span many pages. Later pages often continue the same columns without a header, or with a repeated/partial header. Do not stop after page 1. Read every entry in images_manifest. Keep item numbers increasing until the printed TOTAL. A stamp or signature may sit on the totals footer; ignore the stamp, still copy TOTAL numbers, and keep all goods rows above it.
+Headers may be two stacked rows: a group title (WEIGHT, COUNTRY) plus subheaders (NETTO / NETTO WITH PRIMARY PACKAGING / BRUTTO, OF ORIGIN). MODEL / SERIES / ART. is the article. PACKAGE is places (rolls/boxes), never Quantity.
+Do not emit header leftovers (SERIES / ART., BRAND, NETTO, kg) as items[].
+parser_json may have dropped continuation-page rows. If a numbered goods line is visible on a later page and missing from parser_json.items, add it with verdict "extra".
 Skip letterhead rows (Terms of delivery/payment, bank, director, address) — they are not items.
 Skip empty sheets, date-only Sheet2, and catalog/card sheets (справочник, 1601057).
 The output field "description" is the customs Product name / Наименование товара, not mill cutting notes and not the article.
@@ -537,7 +545,10 @@ def _line_table_row(line: Any) -> dict[str, Any]:
         "amount": mapped.get("amount"),
         "net_weight": mapped.get("net_weight"),
         "gross_weight": mapped.get("gross_weight"),
-        "hs_code": mapped.get("hs_code"),
+        "hs_code": mapped.get("hs_code") or mapped.get("customs_code"),
+        "customs_code": mapped.get("customs_code") or mapped.get("hs_code"),
+        "country": mapped.get("country"),
+        "manufacturer": mapped.get("manufacturer"),
         "description": mapped.get("description") or mapped.get("description_en") or mapped.get("description_ru"),
         "raw": {
             str(key): to_jsonable(raw[key])
@@ -677,17 +688,12 @@ def build_operator_context(
         sheets = ", ".join(item["sheets"][:8])
         if item["kind"] == "pdf":
             pages_label = ", ".join(str(p) for p in item["pages"]) or "-"
-            item["meaning"] = (
-                f"PDF/скан «{item['filename']}». "
-                f"Страниц в модель: {pages_label}. "
-                f"Распознанных строк: {n}."
-            )
+            item["meaning"] = f"{n} строк · стр. {pages_label}"
             pdfs.append(item)
         else:
             item["meaning"] = (
-                f"Excel «{item['filename']}»"
-                + (f", листы: {sheets}" if sheets else "")
-                + f". Распознанных строк: {n}."
+                (f"листы: {sheets}. " if sheets else "")
+                + f"{n} строк"
             )
             excel.append(item)
     return {"excel": excel, "pdfs": pdfs}
