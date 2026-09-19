@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=27" />
+  <link rel="stylesheet" href="/assets/styles.css?v=29" />
 </head>
 <body>
   <div class="app">
@@ -85,6 +85,31 @@
       </div>
 
       <div class="files-badges" id="files-badges"></div>
+
+      <details class="review-panel" id="model-review-panel">
+        <summary>Сверка PDF и исходников <span id="model-review-meta" class="hint"></span></summary>
+        <p id="model-review-meaning" class="hint"></p>
+        <div id="scan-totals" class="scan-totals"></div>
+        <div id="scan-tables" class="scan-tables"></div>
+        <div id="model-context" class="model-context"></div>
+        <div class="table-wrap">
+          <table id="scan-table">
+            <thead>
+              <tr>
+                <th>Артикул</th>
+                <th class="num">Excel кол-во</th>
+                <th class="num">Скан кол-во</th>
+                <th class="num">Excel сумма</th>
+                <th class="num">Скан сумма</th>
+                <th>Вердикт</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <pre id="model-review-body" class="hidden"></pre>
+      </details>
 
       <details class="header-panel">
         <summary>Реквизиты документа</summary>
@@ -166,6 +191,9 @@
     <form id="edit-form" class="dialog-form">
       <h3>Изменение позиции</h3>
       <input type="hidden" name="item_id" id="edit-item-id" />
+      <div id="edit-flags" class="edit-flags"></div>
+      <p id="edit-sources" class="hint edit-sources"></p>
+      <div id="edit-lots" class="edit-lots"></div>
       <label>Артикул <input name="article" id="edit-article" /></label>
       <label>Метры / кол-во <input name="qty" id="edit-qty" inputmode="decimal" /></label>
       <label>Цена <input name="price" id="edit-price" inputmode="decimal" /></label>
@@ -183,6 +211,6 @@
     </form>
   </dialog>
 
-  <script src="/assets/app.js?v=35"></script>
+  <script src="/assets/app.js?v=37"></script>
 </body>
 </html>

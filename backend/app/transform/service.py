@@ -262,6 +262,7 @@ def transform_paths(
     result = TransformResult()
     catalog: dict[str, dict[str, Any]] = {}
     input_sheets: list[ExtractedSheet] = []
+    scan_sheets: list[ExtractedSheet] = []
     all_texts: list[str] = []
     forced_catalog = {n.lower() for n in (catalog_names or set())}
 
@@ -297,21 +298,32 @@ def transform_paths(
             continue
 
         force_catalog = is_catalog_filename(display) or display.lower() in forced_catalog
+        is_scan_file = Path(path).suffix.lower() in {".pdf"} | IMAGE_SUFFIXES
         roles = []
         for ex in sheets:
             if force_catalog:
                 ex.role = "catalog"
             if ex.role == "catalog":
                 _index_catalog(catalog, ex)
+            elif is_scan_file:
+                scan_sheets.append(ex)
             else:
                 input_sheets.append(ex)
             roles.append(ex.role)
         result.files.append(FileOutcome(
             filename=display,
-            status="ok",
-            message=None,
+            status="review" if is_scan_file else "ok",
+            message=(
+                "PDF/скан сверён с Excel. Открой плашку «Сверка PDF и исходников», "
+                "чтобы увидеть распознанный текст и расхождения."
+                if is_scan_file
+                else None
+            ),
             role_summary=", ".join(sorted(set(roles))),
         ))
+
+    if not input_sheets and scan_sheets:
+        input_sheets = scan_sheets
 
     result.items = merge_documents(input_sheets, catalog=catalog)
     result.profile = detect_profile(result.items)
@@ -343,7 +355,11 @@ def _index_catalog(catalog: dict[str, dict[str, Any]], ex: ExtractedSheet) -> No
             "description": row.fields.get("description"),
             "manufacturer": row.fields.get("manufacturer"),
             "country": row.fields.get("country"),
+            "model": row.fields.get("model") or row.article,
         }
+        model_key = match_key(str(row.fields.get("model") or ""))
+        if model_key and model_key not in catalog:
+            catalog[model_key] = catalog[key]
 
 
 # --------------------------------------------------------------------------- #
@@ -353,17 +369,27 @@ def _index_catalog(catalog: dict[str, dict[str, Any]], ex: ExtractedSheet) -> No
 def _split_description(text: str | None) -> tuple[str | None, str | None]:
     if not text:
         return None, None
-    if "/" in text:
-        left, right = text.split("/", 1)
-        left, right = left.strip(), right.strip()
-        # heuristic: cyrillic side is RU
-        if re.search(r"[А-Яа-я]", right):
-            return left or None, right or None
-        if re.search(r"[А-Яа-я]", left):
-            return right or None, left or None
-    if re.search(r"[А-Яа-я]", text):
-        return None, text
-    return text, None
+    raw = str(text).strip()
+    left = right = None
+    for sep in ("//", " / ", "/"):
+        if sep not in raw:
+            continue
+        a, b = raw.split(sep, 1)
+        a, b = a.strip(" /"), b.strip(" /")
+        if a and b:
+            left, right = a, b
+            break
+    if left is None:
+        if re.search(r"[А-Яа-яЁё]", raw):
+            return None, raw
+        return raw, None
+    left_cyr = bool(re.search(r"[А-Яа-яЁё]", left))
+    right_cyr = bool(re.search(r"[А-Яа-яЁё]", right))
+    if right_cyr and not left_cyr:
+        return left or None, right or None
+    if left_cyr and not right_cyr:
+        return right or None, left or None
+    return left or None, right or None
 
 
 def canonical_to_rows(items: list[CanonicalItem]) -> list[dict[str, Any]]:
@@ -373,6 +399,36 @@ def canonical_to_rows(items: list[CanonicalItem]) -> list[dict[str, Any]]:
         desc_en, desc_ru = _split_description(f.get("description"))
         commercial = {k: f[k] for k in ("qty", "unit", "price", "amount", "currency", "color") if f.get(k) not in (None, "")}
         packing = {k: f[k] for k in ("rolls", "boxes", "meters", "area", "width", "net_weight", "gross_weight", "volume", "measurement", "pcs_per_carton", "gm") if f.get(k) not in (None, "")}
+        if f.get("_pack_group"):
+            packing["pack_group"] = f["_pack_group"]
+        if it.lines and len(it.lines) > 1:
+            lots = []
+            packing_lines = []
+            for line in it.lines:
+                lot = {k: line[k] for k in ("qty", "unit", "price", "amount", "color") if line.get(k) not in (None, "")}
+                pline = {
+                    k: line[k]
+                    for k in (
+                        "qty",
+                        "net_weight",
+                        "gross_weight",
+                        "volume",
+                        "boxes",
+                        "rolls",
+                        "measurement",
+                        "pcs_per_carton",
+                        "color",
+                    )
+                    if line.get(k) not in (None, "")
+                }
+                if lot.get("qty") not in (None, "") or lot.get("amount") not in (None, ""):
+                    lots.append(lot)
+                if pline:
+                    packing_lines.append(pline)
+            if lots:
+                commercial["lots"] = lots
+            if packing_lines:
+                packing["lines"] = packing_lines
         customs: dict[str, Any] = {}
         if f.get("hs_code"):
             customs["hs_code"] = f["hs_code"]
@@ -389,11 +445,18 @@ def canonical_to_rows(items: list[CanonicalItem]) -> list[dict[str, Any]]:
                 customs[k] = f[k]
         errors = []
         for fl in it.flags:
+            details = {
+                "sources": list(it.sources),
+                "reason": fl.get("message", ""),
+            }
+            for key in ("was", "excel", "scan", "catalog"):
+                if fl.get(key) not in (None, ""):
+                    details[key] = fl[key]
             errors.append({
                 "field_name": fl.get("field_name", "article"),
                 "error_type": fl.get("error_type", "mismatch"),
                 "severity": fl.get("severity", "yellow"),
-                "details": {},
+                "details": details,
                 "message": fl.get("message", ""),
             })
         rows.append({

@@ -111,4 +111,6 @@ def test_total_m2_is_area_not_amount() -> None:
     assert is_factory_note("(15+30)")
     assert is_factory_note("(A)")
     assert is_factory_note("0605 Special Order")
+    assert is_factory_note("D680-1")
+    assert is_factory_note("A519-3")
     assert not is_factory_note("Upholstery fabric from polyether fiber")

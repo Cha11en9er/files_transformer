@@ -49,6 +49,12 @@ def merge_row(ws: Worksheet, row: int, start_col: int, end_col: int) -> None:
     ws.merge_cells(start_row=row, start_column=start_col, end_row=row, end_column=end_col)
 
 
+def merge_column(ws: Worksheet, col: int, start_row: int, end_row: int) -> None:
+    if end_row <= start_row:
+        return
+    ws.merge_cells(start_row=start_row, start_column=col, end_row=end_row, end_column=col)
+
+
 def style_letterhead_row(ws: Worksheet, row: int, cols: int, *, title: bool = False, company: bool = False) -> None:
     if cols < 1:
         return

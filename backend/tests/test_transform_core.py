@@ -312,6 +312,9 @@ def test_transform_merged_lots_components_and_stop_at_total(tmp_path: Path):
     packing.append(["A519", 70, 10, 370, 425, 1.2])
     packing.append(["A711", 80, 2, 12, 13, 0.1])
     packing.append(["TOTAL", 1268, 48, 902, 986, 2.456])
+    packing.append(["Detail packing list"])
+    packing.append(["Art No.", "Color", "Quantity", "Unit", "Qty/CTN", "Cartons", "Measurement (Pallets)", "Gross Wt. (kg)", "Net Wt. (kg)", "Pallets"])
+    packing.append(["A519-3", "Sand black", 70, "sets", 5, 14, "110*110*125", 182, 140, 1])
     book.save(path)
 
     rows = canonical_to_rows(transform_paths([(str(path), path.name)]).items)
@@ -320,13 +323,21 @@ def test_transform_merged_lots_components_and_stop_at_total(tmp_path: Path):
         by_art.setdefault(row["article"], []).append(row)
 
     lots = by_art["I2388-120"]
-    assert sorted(item["commercial_data"]["qty"] for item in lots) == [18, 1080]
-    amounts = {item["commercial_data"]["qty"]: item["commercial_data"]["amount"] for item in lots}
+    assert len(lots) == 1
+    assert lots[0]["commercial_data"]["qty"] == pytest.approx(1098)
+    assert lots[0]["commercial_data"]["amount"] == pytest.approx(6082.92)
+    line_qty = sorted(line["qty"] for line in lots[0]["commercial_data"]["lots"])
+    assert line_qty == [18, 1080]
+    amounts = {line["qty"]: line["amount"] for line in lots[0]["commercial_data"]["lots"]}
     assert amounts[1080] == pytest.approx(5983.2)
     assert amounts[18] == pytest.approx(99.72)
-    gross = {item["commercial_data"]["qty"]: item["packing_data"]["gross_weight"] for item in lots}
-    assert gross[1080] == pytest.approx(372.5)
-    assert gross[18] == pytest.approx(6.5)
+    pack_lines = lots[0]["packing_data"]["lines"]
+    gross_vals = sorted(
+        float(line["gross_weight"])
+        for line in pack_lines
+        if isinstance(line.get("gross_weight"), (int, float))
+    )
+    assert gross_vals == pytest.approx([6.5, 372.5])
 
     d680 = by_art["D680"]
     assert len(d680) == 1
@@ -334,13 +345,85 @@ def test_transform_merged_lots_components_and_stop_at_total(tmp_path: Path):
     assert d680[0]["commercial_data"]["amount"] == pytest.approx(3268)
     assert d680[0]["packing_data"]["net_weight"] == pytest.approx(163)
     assert d680[0]["packing_data"]["gross_weight"] == pytest.approx(169)
+    assert len(d680[0]["packing_data"]["lines"]) == 3
 
     a519 = by_art["A519"][0]
     assert a519["commercial_data"]["qty"] == 70
     assert a519["packing_data"]["gross_weight"] == pytest.approx(425)
+    assert "110*110*125" in str(a519["packing_data"].get("measurement") or "")
     a711 = by_art["A711"][0]
     assert a711["commercial_data"]["qty"] == 80
     assert a711["packing_data"].get("gross_weight") == pytest.approx(13)
     assert not any(row["article"] == "A519-3" for row in rows)
     assert not any(str(row["article"]).upper().startswith("TOTAL") for row in rows)
+
+
+def test_beijing_goldluck_merged_article_is_one_item(tmp_path: Path):
+    kit = (
+        DOCS
+        / "4_pravka"
+        / "для тест"
+        / "BEIJING GOLDLUCK CO., LTD"
+    )
+    invoice = next(kit.glob("*Invoice*"), None)
+    catalog = next(kit.glob("*сводная*"), None)
+    if invoice is None or catalog is None:
+        pytest.skip("Beijing Goldluck kit not available")
+
+    from app.services.export_beijing import export_beijing_book
+    from app.transform.service import canonical_to_rows, transform_paths
+
+    result = transform_paths([(str(invoice), invoice.name), (str(catalog), catalog.name)])
+    rows = canonical_to_rows(result.items)
+    no228 = [row for row in rows if match_key(row["article"]) == match_key("NO228")]
+    assert len(no228) == 1
+    assert no228[0]["commercial_data"]["qty"] == pytest.approx(1500)
+    lots = no228[0]["commercial_data"].get("lots") or []
+    assert sorted(lot["qty"] for lot in lots) == [20, 1480]
+    d680 = next(row for row in rows if match_key(row["article"]) == match_key("D680"))
+    desc = " ".join(
+        str(d680["customs_data"].get(k) or "")
+        for k in ("description", "description_en", "description_ru")
+    )
+    assert "D680-1" not in desc
+    assert "support" in desc.lower() or "опор" in desc.lower()
+    assert not str(d680["customs_data"].get("description_ru") or "").startswith("/")
+    assert not any("A519-3" in str(row["article"]) for row in rows)
+    md811 = next(row for row in rows if match_key(row["article"]) == match_key("MD 811"))
+    assert not (md811["customs_data"].get("tnved_code") or md811["customs_data"].get("hs_code"))
+    assert any(err.get("error_type") == "catalog_not_found" for err in (md811.get("validation_errors") or []))
+
+    out = export_beijing_book(rows, tmp_path / "beijing.xlsx", result.header)
+    from openpyxl import load_workbook
+
+    wb = load_workbook(out)
+    invoice_ws = wb["Invoice"]
+    numbers = []
+    for row in invoice_ws.iter_rows(min_row=1, max_row=80, values_only=True):
+        if isinstance(row[0], int):
+            numbers.append(row[0])
+    assert numbers[-1] == 34
+    assert numbers == list(range(1, 35))
+    spec = wb["Specification"]
+    spec_nos = [row[0] for row in spec.iter_rows(min_row=1, max_row=80, values_only=True) if isinstance(row[0], int)]
+    assert spec_nos[-1] == 34
+    desc_ws = wb["описание"]
+    desc_arts = [row[0] for row in desc_ws.iter_rows(min_row=1, max_row=80, values_only=True) if row and row[0] not in (None, "Item/ Артикул")]
+    assert "A519" in desc_arts
+    assert "A519-3" not in desc_arts
+    packing = wb["Packing list"]
+    pack_nos = [row[0] for row in packing.iter_rows(min_row=1, max_row=120, values_only=True) if isinstance(row[0], int)]
+    assert pack_nos[-1] == 34
+    a519_row = None
+    a711_row = None
+    for row in packing.iter_rows(min_row=1, max_row=80, values_only=False):
+        art = row[2].value if len(row) > 2 else None
+        if art == "A519":
+            a519_row = row
+        if art == "A711":
+            a711_row = row
+    assert a519_row is not None and a711_row is not None
+    assert a519_row[7].value not in (None, "")
+    merged_coords = {str(rng) for rng in packing.merged_cells.ranges}
+    assert any("H" in coord or coord.startswith("H") for coord in merged_coords)
 

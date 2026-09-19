@@ -50,6 +50,27 @@ ROLE_KEYWORDS = {
 }
 
 
+_LINE_FIELDS = (
+    "qty",
+    "unit",
+    "price",
+    "amount",
+    "color",
+    "net_weight",
+    "gross_weight",
+    "volume",
+    "boxes",
+    "rolls",
+    "measurement",
+    "pcs_per_carton",
+    "meters",
+    "area",
+    "width",
+)
+_SKU_NOTE_RE = re.compile(r"^[A-Za-z0-9]{1,12}(?:[._/-][A-Za-z0-9]{1,12}){1,4}$")
+_COMPONENT_HEADER_RE = re.compile(r"pallet|qty\s*/\s*ctn|qty/ctn", re.IGNORECASE)
+
+
 @dataclass
 class Row:
     article: str
@@ -59,6 +80,8 @@ class Row:
     role: str
     item_no: int | None = None
     is_group: bool = False
+    component: bool = False
+    lines: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -69,6 +92,7 @@ class ExtractedSheet:
     mapping: dict[int, str]          # col index -> canonical field
     header_text: str
     rows: list[Row] = field(default_factory=list)
+    component_rows: list[Row] = field(default_factory=list)  # post-TOTAL detail packing, not goods
     detail: bool = False             # per-roll detail sheet (aggregate by sum on merge)
     letterhead: list[list[str]] = field(default_factory=list)  # cells above the table header
 
@@ -213,6 +237,51 @@ def _looks_like_new_header(joined: str, mapping: dict[int, str]) -> bool:
     return hits >= 3 and bool(mapping)
 
 
+def _is_component_header(joined: str) -> bool:
+    return bool(_COMPONENT_HEADER_RE.search(joined))
+
+
+def _snapshot_line(fields: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in fields.items() if k in _LINE_FIELDS and v not in (None, "")}
+
+
+def _drop_note_description(fields: dict[str, Any]) -> None:
+    text = str(fields.get("description") or "").strip()
+    if text and " " not in text and _SKU_NOTE_RE.match(text):
+        fields.pop("description", None)
+
+
+def _row_merge_span(sheet: Sheet, r: int, c: int) -> tuple[int, int] | None:
+    for r0, c0, r1, c1 in sheet.merges:
+        if c0 <= c <= c1 and r0 <= r <= r1:
+            return (r0, r1)
+    return None
+
+
+def _pack_group_id(sheet: Sheet, r: int, mapping: dict[int, str]) -> str | None:
+    for field_key in ("net_weight", "gross_weight", "boxes", "volume"):
+        col = next((c for c, name in mapping.items() if name == field_key), None)
+        if col is None:
+            continue
+        span = _row_merge_span(sheet, r, col)
+        if span and span[1] > span[0]:
+            return f"{sheet.source}|{sheet.name}|{span[0]}:{span[1]}"
+    return None
+
+
+def _append_continuation(prev: Row, extra: dict[str, Any]) -> None:
+    prev.lines.append(_snapshot_line(extra))
+    for key in ("qty", "amount", "meters", "area", "net_weight", "gross_weight", "volume", "boxes", "rolls"):
+        value = extra.get(key)
+        if isinstance(value, (int, float)):
+            prev.fields[key] = round((prev.fields.get(key) or 0) + value, 6)
+    for key, value in extra.items():
+        if key in prev.fields and prev.fields.get(key) not in (None, ""):
+            continue
+        if key in _LINE_FIELDS and value not in (None, ""):
+            prev.fields[key] = value
+
+
 def _strip_inherited(fields: dict[str, Any], inherited: set[str], keys: set[str]) -> dict[str, Any]:
     return {k: v for k, v in fields.items() if not (k in keys and k in inherited)}
 
@@ -254,6 +323,20 @@ def extract_sheet(sheet: Sheet) -> ExtractedSheet | None:
 
     pending_children: list[Row] = []
     seen_articles: dict[str, int] = {}
+    after_total = False
+    component_mode = False
+    active_mapping = mapping
+    active_key_col = key_col
+
+    def _bind_header(row_index: int) -> None:
+        nonlocal active_mapping, active_key_col, article_col, desc_col
+        cols = _build_columns(sheet, row_index)
+        new_map = classify_columns(cols)
+        if "article" in new_map.values() or "description" in new_map.values():
+            active_mapping = new_map
+            article_col = next((c for c, f in new_map.items() if f == "article"), None)
+            desc_col = next((c for c, f in new_map.items() if f == "description"), None)
+            active_key_col = article_col if article_col is not None else desc_col
 
     for r in range(header_row + 1, sheet.nrows):
         row = sheet.grid[r]
@@ -263,41 +346,63 @@ def extract_sheet(sheet: Sheet) -> ExtractedSheet | None:
         first_cells = " ".join(_cell(v) for v in row[:3])
         if _is_stop_row(joined, first_cells):
             _flush_children(ex, pending_children)
+            pending_children = []
+            if _TOTAL_RE.match(first_cells) or _TOTAL_RE.match(joined):
+                after_total = True
+                component_mode = False
+                continue
+            if _DETAIL_SECTION_RE.search(joined):
+                after_total = True
+                continue
             break
-        if ex.rows and _looks_like_new_header(joined, mapping):
+        if after_total and not component_mode:
+            if _DETAIL_SECTION_RE.search(joined):
+                continue
+            if _looks_like_new_header(joined, active_mapping):
+                if _is_component_header(joined):
+                    _bind_header(r)
+                    component_mode = True
+                    continue
+                break
+            continue
+        if component_mode and _looks_like_new_header(joined, active_mapping) and ex.component_rows:
+            break
+        if not after_total and ex.rows and _looks_like_new_header(joined, active_mapping):
             _flush_children(ex, pending_children)
             break
         if _is_letterhead_junk(joined):
             continue
-        fields, inherited = _row_fields(sheet, r, mapping)
-        article_raw = _cell(row[key_col]) if key_col is not None and key_col < len(row) else ""
+        fields, inherited = _row_fields(sheet, r, active_mapping)
+        _drop_note_description(fields)
+        article_raw = (
+            _cell(row[active_key_col]) if active_key_col is not None and active_key_col < len(row) else ""
+        )
         article_inherited = bool(
-            key_col is not None and (r, key_col) in sheet.inherited
+            active_key_col is not None and (r, active_key_col) in sheet.inherited
         )
         own_article = bool(article_raw) and not article_inherited
-        item_no = _item_no(sheet, r, mapping)
+        item_no = _item_no(sheet, r, active_mapping)
         own_qty = _own(fields, inherited, "qty") or _own(fields, inherited, "meters")
 
-        # a data row must carry at least one meaningful value
         if not article_raw and not any(k in fields for k in ("qty", "meters", "amount", "net_weight", "area")):
             continue
 
-        prev = pending_children[-1] if pending_children else (ex.rows[-1] if ex.rows else None)
+        bucket = ex.component_rows if component_mode else ex.rows
+        prev = pending_children[-1] if pending_children else (bucket[-1] if bucket else None)
 
-        # Component of the previous commercial line: article/qty came from a merge,
-        # this row only adds packing numbers (weights, cartons, volume).
-        if prev is not None and not own_article and not own_qty:
+        if prev is not None and not own_article and not own_qty and not component_mode:
             packing_only = _strip_inherited(fields, inherited, _COMMERCIAL_FIELDS)
-            packing_only = {k: v for k, v in packing_only.items() if k in _PACKING_FIELDS or k not in _COMMERCIAL_FIELDS}
-            _accumulate(prev.fields, packing_only)
+            packing_only = {
+                k: v for k, v in packing_only.items() if k in _PACKING_FIELDS or k not in _COMMERCIAL_FIELDS
+            }
+            _append_continuation(prev, packing_only)
             continue
 
-        # New lot of the previous Art No.: empty/inherited article, own Quantity/Amount.
-        if prev is not None and not own_article and own_qty:
+        if prev is not None and not own_article and own_qty and not component_mode:
             fields = _strip_inherited(fields, inherited, _PACKING_FIELDS)
-            article_raw = prev.article
+            _append_continuation(prev, fields)
+            continue
 
-        # Sibling SKU under a shared weight merge: keep own qty, drop inherited packing.
         if own_article and own_qty:
             fields = _strip_inherited(fields, inherited, _PACKING_FIELDS)
 
@@ -305,16 +410,16 @@ def extract_sheet(sheet: Sheet) -> ExtractedSheet | None:
         if not article:
             continue
 
-        # A group/family row is purely structural: an unnumbered row that carries the
-        # unit price for the numbered children buffered just above it
-        # (Hangzhou "SOFA FABRIC <family>" carries the price for its child models).
-        # We must NOT key off the "SOFA FABRIC" prefix, because packing lists use that
-        # very prefix as the real article on every line.
+        pack_group = _pack_group_id(sheet, r, active_mapping)
+        if pack_group:
+            fields["_pack_group"] = pack_group
+
         is_group = bool(
             own_article
             and item_no is None
             and ("price" in fields or "amount" in fields)
             and pending_children
+            and not component_mode
         )
 
         norm = normalize_article(article)
@@ -326,24 +431,31 @@ def extract_sheet(sheet: Sheet) -> ExtractedSheet | None:
             role=role,
             item_no=item_no,
             is_group=is_group,
+            component=component_mode,
+            lines=[_snapshot_line(fields)],
         )
 
         if is_group:
-            # group row carries the unit price for the buffered children
             _apply_group(pending_children, row_obj)
             _flush_children(ex, pending_children)
             pending_children = []
             continue
 
-        # child row of an invoice group = no price yet, has an item number
-        if role in {"invoice", "mixed", "goods"} and item_no is not None and "price" not in fields and "amount" not in fields:
+        if (
+            not component_mode
+            and role in {"invoice", "mixed", "goods"}
+            and item_no is not None
+            and "price" not in fields
+            and "amount" not in fields
+        ):
             pending_children.append(row_obj)
             continue
 
         _flush_children(ex, pending_children)
         pending_children = []
-        ex.rows.append(row_obj)
-        seen_articles[norm] = seen_articles.get(norm, 0) + 1
+        bucket.append(row_obj)
+        if not component_mode:
+            seen_articles[norm] = seen_articles.get(norm, 0) + 1
 
     _flush_children(ex, pending_children)
 

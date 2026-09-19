@@ -690,6 +690,10 @@ const ERROR_TYPE_RU = {
   LOW_OCR_CONFIDENCE: "Распознавание",
   CATALOG_NOT_FOUND: "Справочник",
   PERMIT_MULTIPLE_CANDIDATES: "РД",
+  catalog_not_found: "Справочник",
+  description_missing: "Описание",
+  mismatch: "Расхождение",
+  weight_pl_vs_spec: "Вес",
 };
 
 const SCAN_VERDICT_RU = {
@@ -839,9 +843,12 @@ function renderScanReview(ws, review) {
   scanBody.innerHTML = "";
   if (meaningEl) meaningEl.textContent = "";
   if (!review) {
-    reviewMeta.textContent = "Модель не вызывалась.";
+    reviewMeta.textContent = "Модель не вызывалась. PDF и исходники всё равно можно открыть по плашке файла.";
     reviewBody.textContent = "";
-    renderModelContext(null);
+    if (meaningEl) {
+      meaningEl.textContent = "Нажми плашку PDF, чтобы увидеть, что парсер прочитал из скана и с чем сравнивать Excel.";
+    }
+    renderModelContext(ws.model_review || { context: { excel: [], pdfs: [] } });
     return;
   }
   const bits = [review.model || "модель"];
@@ -1069,17 +1076,27 @@ function renderWorkspace() {
   const badges = $("#files-badges");
   badges.innerHTML = "";
   (ws.files || []).forEach((f) => {
-    const span = document.createElement("span");
     const parseStatus = f.parse_status || "ok";
-    span.className = `badge ${f.doc_type ? "" : "unknown"} ${parseStatus === "ok" ? "" : parseStatus}`.trim();
-    const typeRu = DOC_TYPE_RU[f.doc_type] || (f.filename?.toLowerCase().endsWith(".pdf") ? "PDF" : "Не определен");
+    const isPdf = String(f.filename || "").toLowerCase().endsWith(".pdf");
+    const clickable = parseStatus === "review" || isPdf;
+    const span = document.createElement(clickable ? "button" : "span");
+    span.type = clickable ? "button" : undefined;
+    span.className = `badge ${f.doc_type ? "" : "unknown"} ${parseStatus === "ok" ? "" : parseStatus} ${clickable ? "clickable" : ""}`.trim();
+    const typeRu = DOC_TYPE_RU[f.doc_type] || (isPdf ? "PDF" : "Не определен");
     const ocrHint =
       f.ocr_confidence != null ? ` · распознавание ${Math.round(Number(f.ocr_confidence) * 100)}%` : "";
     let statusHint = "";
     if (parseStatus === "skipped") statusHint = " · пропущен";
     else if (parseStatus === "review") statusHint = " · требуется проверка";
-    span.title = f.parse_message || "";
+    span.title = f.parse_message || (clickable ? "Открыть сверку PDF и исходников" : "");
+    span.setAttribute("aria-controls", "model-review-panel");
     span.textContent = `${f.filename} - ${typeRu}${ocrHint}${statusHint}`;
+    if (clickable) {
+      span.addEventListener("click", (event) => {
+        event.preventDefault();
+        openReviewPanel(isPdf ? f.filename : null);
+      });
+    }
     badges.appendChild(span);
   });
 
@@ -1183,8 +1200,72 @@ $("#scan-table")?.addEventListener("click", (e) => {
   if (btn.dataset.scanAction === "add") addItemFromScan(hit);
 });
 
-function editField(id) {
-  return document.getElementById(id);
+function openReviewPanel(filename) {
+  const panel = $("#model-review-panel");
+  if (!panel) return;
+  panel.open = true;
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (!filename) return;
+  const cards = panel.querySelectorAll(".context-card h3");
+  cards.forEach((title) => {
+    const card = title.closest(".context-card");
+    if (!card) return;
+    if (title.textContent.toLowerCase().includes(String(filename).toLowerCase())) {
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  });
+}
+
+function editFlagHtml(errors) {
+  const active = (errors || []).filter((e) => !e.resolved);
+  if (!active.length) {
+    return '<p class="hint">Замечаний по строке нет. Можно править значения вручную.</p>';
+  }
+  return active
+    .map((e) => {
+      const typeLabel = ERROR_TYPE_RU[e.error_type] || SEVERITY_RU[e.severity] || e.error_type || "";
+      const field = FIELD_RU[e.field_name] || e.field_name || "";
+      const details = e.details || {};
+      const sources = Array.isArray(details.sources) ? details.sources.join("; ") : "";
+      const compared = [
+        details.was != null ? `было ${details.was}` : "",
+        details.excel != null ? `Excel ${details.excel}` : "",
+        details.scan != null ? `скан ${details.scan}` : "",
+        details.catalog != null ? `справочник: ${details.catalog}` : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+      const reason = e.message || details.reason || "";
+      return `<div class="edit-flag ${escapeHtml(e.severity || "")}">
+        <strong>${escapeHtml(typeLabel)}${field ? ` · ${escapeHtml(field)}` : ""}</strong>
+        <div>${escapeHtml(reason)}</div>
+        ${compared ? `<div class="hint">С чем сравнить: ${escapeHtml(compared)}</div>` : ""}
+        ${sources ? `<div class="hint">Откуда значение: ${escapeHtml(sources)}</div>` : ""}
+      </div>`;
+    })
+    .join("");
+}
+
+function editLotsHtml(item) {
+  const lots = item?.commercial_data?.lots || [];
+  const lines = item?.packing_data?.lines || [];
+  if (!lots.length && !lines.length) return "";
+  const n = Math.max(lots.length, lines.length);
+  const body = [];
+  for (let i = 0; i < n; i += 1) {
+    const lot = lots[i] || {};
+    const line = lines[i] || {};
+    body.push(`<tr>
+      <td>${i + 1}</td>
+      <td class="num">${formatNum(lot.qty ?? "")}</td>
+      <td class="money">${formatMoney(lot.amount ?? "")}</td>
+      <td class="num">${formatNum(line.net_weight ?? "")}</td>
+      <td class="num">${formatNum(line.gross_weight ?? "")}</td>
+      <td>${escapeHtml(line.measurement || lot.color || "")}</td>
+    </tr>`);
+  }
+  return `<p class="hint">Строки-продолжения внутри этой позиции (не отдельные номера товара)</p>
+    <table><thead><tr><th>№</th><th class="num">Кол-во</th><th>Сумма</th><th class="num">Нетто</th><th class="num">Брутто</th><th>Упаковка</th></tr></thead><tbody>${body.join("")}</tbody></table>`;
 }
 
 function openEdit(itemId) {
@@ -1210,6 +1291,18 @@ function openEdit(itemId) {
     item.customs_data?.description ?? item.customs_data?.description_en ?? "";
   editField("edit-desc-ru").value = item.customs_data?.description_ru ?? "";
   $("#edit-status").textContent = "";
+  const flagsEl = $("#edit-flags");
+  if (flagsEl) flagsEl.innerHTML = editFlagHtml(item.validation_errors);
+  const srcEl = $("#edit-sources");
+  if (srcEl) {
+    const traces = item.source_traces || {};
+    const sources = traces.sources || Object.keys(traces);
+    srcEl.textContent = sources && sources.length
+      ? `Откуда взяты данные: ${[].concat(sources).join("; ")}`
+      : "";
+  }
+  const lotsEl = $("#edit-lots");
+  if (lotsEl) lotsEl.innerHTML = editLotsHtml(item);
   $("#edit-dialog").showModal();
 }
 
