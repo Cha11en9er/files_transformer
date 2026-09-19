@@ -77,6 +77,10 @@ def test_header_synonyms_pattern_hides_ceki_fields() -> None:
     assert classify_header("MAL CINSI") == "description"
     assert classify_header("Art No.") == "article"
     assert classify_header("净重") == "net_weight"
+    assert classify_header("MODEL / SERIES / ART.") == "article"
+    assert classify_header("WEIGHT NETTO WITH PRIMARY PACKAGING, kg") == "net_weight"
+    assert classify_header("PACKAGE") == "rolls"
+    assert classify_header("PRICE PER USD") == "price"
 
 
 def test_total_m2_is_area_not_amount() -> None:

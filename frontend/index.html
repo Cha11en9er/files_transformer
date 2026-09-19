@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=29" />
+  <link rel="stylesheet" href="/assets/styles.css?v=30" />
 </head>
 <body>
   <div class="app">
@@ -85,31 +85,10 @@
       </div>
 
       <div class="files-badges" id="files-badges"></div>
-
-      <details class="review-panel" id="model-review-panel">
-        <summary>Сверка PDF и исходников <span id="model-review-meta" class="hint"></span></summary>
-        <p id="model-review-meaning" class="hint"></p>
-        <div id="scan-totals" class="scan-totals"></div>
-        <div id="scan-tables" class="scan-tables"></div>
-        <div id="model-context" class="model-context"></div>
-        <div class="table-wrap">
-          <table id="scan-table">
-            <thead>
-              <tr>
-                <th>Артикул</th>
-                <th class="num">Excel кол-во</th>
-                <th class="num">Скан кол-во</th>
-                <th class="num">Excel сумма</th>
-                <th class="num">Скан сумма</th>
-                <th>Вердикт</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <pre id="model-review-body" class="hidden"></pre>
-      </details>
+      <div class="review-launch hidden" id="review-launch">
+        <button type="button" class="btn" id="btn-review">Что распозналось в PDF</button>
+        <span id="model-review-meta" class="hint"></span>
+      </div>
 
       <details class="header-panel">
         <summary>Реквизиты документа</summary>
@@ -211,6 +190,18 @@
     </form>
   </dialog>
 
-  <script src="/assets/app.js?v=37"></script>
+  <dialog id="review-dialog" class="review-dialog">
+    <div class="review-dialog-head">
+      <div>
+        <h3>Распознавание PDF</h3>
+        <p id="review-dialog-meta" class="hint"></p>
+      </div>
+      <button type="button" class="btn" id="review-dialog-close">Закрыть</button>
+    </div>
+    <div id="review-dialog-tabs" class="review-tabs"></div>
+    <div id="review-dialog-body" class="review-dialog-body"></div>
+  </dialog>
+
+  <script src="/assets/app.js?v=38"></script>
 </body>
 </html>

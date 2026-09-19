@@ -94,6 +94,14 @@ Ipekis: Articul may look like mill codes; ROLL NR/Номер рулона is not
 KDF Tekstop: read BOTH spec sheets. Articul like BLOOM (BLOOM); do not mix neighbouring HS columns into the article.
 Escada packing sheet name "Ceki" = PACKING LIST / CEKI LISTESI. Goods may start after "DESCRIPTION OF THE GOODS / MAL CINSI".
 
+--- Multi-page PDF invoice / packing (any supplier) ---
+A goods table often continues on the next page without repeating the full header.
+Page 2+ may start at the next item number. Keep reading until the printed TOTAL.
+Two-row headers are common: parent WEIGHT over NETTO / NETTO WITH PRIMARY PACKAGING / BRUTTO.
+MODEL / SERIES / ART. is the article. PACKAGE / PACKAG E is places, QUANTITY is pcs.
+A stamp or signature may overlap the totals footer; the goods rows above stay readable.
+When the upload is PDF-only (no Excel workbook), those pages are the source of truth.
+
 --- What to extract ---
 items[]: article, qty or meters, unit, rolls, price, amount, net_weight, gross_weight, description if printed or catalog-matched.
 header[]: invoice_no, invoice_date (including title-embedded dates), contract_no, container when visible.

@@ -77,6 +77,8 @@ SYNONYMS: dict[str, tuple[tuple[str, float], ...]] = {
         ("货号", 9), ("品号", 8), ("desen adı", 7), ("desen adi", 7), ("pattern", 5),
         ("design", 4), ("дизайн", 4), ("model", 4), ("модель", 4), ("style", 4),
         ("sku", 6), ("art", 3), ("арт", 3), ("item", 3), ("desing", 4),
+        ("series / art", 9), ("series/art", 9), ("model / series", 8),
+        ("model./series", 8),
     ),
     "color": (
         ("color/цвет", 9), ("colour", 8), ("цвет", 8), ("color", 8), ("renk", 8), ("colore", 8),
@@ -114,7 +116,8 @@ SYNONYMS: dict[str, tuple[tuple[str, float], ...]] = {
         ("price per meter", 10), ("price per square meter", 10), ("price per 1 meter", 10),
         ("unit price", 9), ("цена за метр", 10), ("цена за единицу", 10), ("цена за кв", 10),
         ("per meter", 8), ("за пог", 8), ("birim fiyat", 9), ("euro/m2", 9), ("€/m2", 9),
-        ("$/m", 8), ("单价", 8), ("unit price(rmb)", 10), ("price (cny)", 9), ("price", 4),
+        ("$/m", 8), ("单价", 8), ("unit price(rmb)", 10), ("price (cny)", 9),
+        ("price per", 8), ("price", 4),
         ("цена", 4), ("fiyat", 5),
     ),
     "amount": (
@@ -146,6 +149,7 @@ SYNONYMS: dict[str, tuple[tuple[str, float], ...]] = {
         ("n.w, kg", 10), ("net weight", 9), ("netto weight", 9), ("вес нетто", 10),
         ("нетто", 7), ("n.w", 7), ("net wt", 8), ("净重", 8), ("net kilogram", 8),
         ("weight netto", 9), ("weight net", 8), ("nett", 5),
+        ("netto with primary", 8), ("primary packaging", 6),
     ),
     "gross_weight": (
         ("g.w, kg", 10), ("gross weight", 9), ("вес брутто", 10), ("weight brutto", 10),

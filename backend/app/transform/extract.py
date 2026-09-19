@@ -69,6 +69,12 @@ _LINE_FIELDS = (
 )
 _SKU_NOTE_RE = re.compile(r"^[A-Za-z0-9]{1,12}(?:[._/-][A-Za-z0-9]{1,12}){1,4}$")
 _COMPONENT_HEADER_RE = re.compile(r"pallet|qty\s*/\s*ctn|qty/ctn", re.IGNORECASE)
+_HEADER_LABEL_ARTICLE = re.compile(
+    r"^(?:model|series|art\.?|article|артикул|item|design|code|description|"
+    r"qty|quantity|netto|brutto|weight|origin|brand|manufacturer)"
+    r"(?:\s*/\s*[\w./]+)*\.?$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -305,12 +311,67 @@ def _item_no(sheet: Sheet, r: int, mapping: dict[int, str]) -> int | None:
     return None
 
 
-def extract_sheet(sheet: Sheet) -> ExtractedSheet | None:
+def _is_header_label_article(article: str) -> bool:
+    text = (article or "").strip()
+    if not text:
+        return False
+    return bool(_HEADER_LABEL_ARTICLE.match(text))
+
+
+def _continuation_start(sheet: Sheet, mapping: dict[int, str]) -> int:
+    """Row before the first data line when a later page repeats or drops the header."""
+    for r in range(min(4, sheet.nrows)):
+        joined = " ".join(_cell(v) for v in sheet.grid[r])
+        if not joined:
+            continue
+        if _looks_like_new_header(joined, mapping) or _is_header_label_article(joined):
+            continue
+        first = _cell(sheet.grid[r][0] if sheet.grid[r] else "")
+        if _HEADER_LABEL_ARTICLE.match(first):
+            continue
+        return r - 1
+    return -1
+
+
+def mapping_fits_sheet(sheet: Sheet, mapping: dict[int, str]) -> bool:
+    """True when at least two rows look like goods under a carried-over header."""
+    if not mapping:
+        return False
+    hits = 0
+    for r in range(sheet.nrows):
+        fields, _inherited = _row_fields(sheet, r, mapping)
+        article = ""
+        for c, name in mapping.items():
+            if name == "article" and c < len(sheet.grid[r]):
+                article = _cell(sheet.grid[r][c])
+                break
+        if _is_header_label_article(article):
+            continue
+        if article or any(fields.get(k) not in (None, "") for k in ("qty", "amount", "net_weight", "meters")):
+            hits += 1
+        if hits >= 2:
+            return True
+    return False
+
+
+def extract_sheet(
+    sheet: Sheet,
+    *,
+    inherited_mapping: dict[int, str] | None = None,
+    inherited_role: str | None = None,
+) -> ExtractedSheet | None:
     header_row, mapping, _cols = find_header(sheet)
+    used_inherited = False
     if header_row < 0 or "article" not in set(mapping.values()) and "description" not in set(mapping.values()):
-        return None
-    text = _sheet_text(sheet, header_row)
-    role = classify_role(text, set(mapping.values()), source=sheet.source)
+        if not inherited_mapping:
+            return None
+        mapping = inherited_mapping
+        header_row = _continuation_start(sheet, mapping)
+        used_inherited = True
+    text = _sheet_text(sheet, max(header_row, 0))
+    role = inherited_role if used_inherited and inherited_role else classify_role(
+        text, set(mapping.values()), source=sheet.source
+    )
     article_col = next((c for c, f in mapping.items() if f == "article"), None)
     desc_col = next((c for c, f in mapping.items() if f == "description"), None)
     key_col = article_col if article_col is not None else desc_col
@@ -408,6 +469,8 @@ def extract_sheet(sheet: Sheet) -> ExtractedSheet | None:
 
         article = article_raw
         if not article:
+            continue
+        if _is_header_label_article(article):
             continue
 
         pack_group = _pack_group_id(sheet, r, active_mapping)

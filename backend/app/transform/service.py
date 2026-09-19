@@ -18,7 +18,7 @@ from typing import Any
 from app.parsing.header_extract import extract_header_fields, extract_header_from_letterheads, is_catalog_filename, merge_header_fields
 from app.parsing.normalize import normalize_text
 from app.transform.errors import FileReadError, humanize_for_file
-from app.transform.extract import ExtractedSheet, extract_sheet
+from app.transform.extract import ExtractedSheet, extract_sheet, mapping_fits_sheet
 from app.transform.merge import CanonicalItem, match_key, merge_documents
 from app.transform.pdf import read_pdf
 from app.transform.reader import EXCEL_SUFFIXES, read_workbook
@@ -200,10 +200,20 @@ def _read_sheets(path: str, display: str) -> tuple[list[ExtractedSheet], list[st
         result = read_pdf(path)
         if result.text:
             texts.append(result.text)
+        inherited_mapping: dict[int, str] | None = None
+        inherited_role: str | None = None
         for sheet in result.sheets:
             ex = extract_sheet(sheet)
+            if ex is None and inherited_mapping and mapping_fits_sheet(sheet, inherited_mapping):
+                ex = extract_sheet(
+                    sheet,
+                    inherited_mapping=inherited_mapping,
+                    inherited_role=inherited_role,
+                )
             if ex:
                 sheets.append(ex)
+                inherited_mapping = ex.mapping
+                inherited_role = ex.role
         scanned = result.scanned
     elif suffix in IMAGE_SUFFIXES:
         scanned = True  # images are handled by the vision model, not here
@@ -310,17 +320,25 @@ def transform_paths(
             else:
                 input_sheets.append(ex)
             roles.append(ex.role)
-        result.files.append(FileOutcome(
-            filename=display,
-            status="review" if is_scan_file else "ok",
-            message=(
-                "PDF/скан сверён с Excel. Открой плашку «Сверка PDF и исходников», "
-                "чтобы увидеть распознанный текст и расхождения."
-                if is_scan_file
-                else None
-            ),
-            role_summary=", ".join(sorted(set(roles))),
-        ))
+        n = sum(len(ex.rows) for ex in sheets)
+        if is_scan_file:
+            result.files.append(FileOutcome(
+                filename=display,
+                status="ok" if n else "review",
+                message=(
+                    f"{n} позиций. Нажми файл, чтобы открыть таблицу."
+                    if n
+                    else "Таблица не собралась. Нажми файл, чтобы проверить распознавание."
+                ),
+                role_summary=", ".join(sorted(set(roles))),
+            ))
+        else:
+            result.files.append(FileOutcome(
+                filename=display,
+                status="ok",
+                message=None,
+                role_summary=", ".join(sorted(set(roles))),
+            ))
 
     if not input_sheets and scan_sheets:
         input_sheets = scan_sheets

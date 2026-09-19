@@ -37,6 +37,9 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "品号",
         "art no",
         "art. no",
+        "series / art",
+        "series/art",
+        "model / series",
         "pattern",
         "desen adı",
         "desen adi",
@@ -92,7 +95,19 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "area": ("кв.м", "area", "м²", "m2", "sqm", "площад", "mq"),
     "gm": ("g/m", "g.m", "gsm"),
     "width": ("widht", "width", "ширина"),
-    "net_weight": ("net weight", "n.w", "nw", "нетто", "net wt", "net kilogram", "净重", "weight netto", "weight net"),
+    "net_weight": (
+        "net weight",
+        "n.w",
+        "nw",
+        "нетто",
+        "net wt",
+        "net kilogram",
+        "净重",
+        "weight netto",
+        "weight net",
+        "netto with primary",
+        "primary packaging",
+    ),
     "gross_weight": (
         "gross weight",
         "g.w",
@@ -279,6 +294,8 @@ def classify_header(header: str) -> str | None:
         return "article"
     if "art no" in h or re.search(r"(^|[^a-z])art\.?\s*no", h):
         return "article"
+    if "series / art" in h or "series/art" in h or "model / series" in h:
+        return "article"
     if any(
         tok in h
         for tok in (
@@ -308,6 +325,8 @@ def classify_header(header: str) -> str | None:
     if re.search(r"(^|[^a-z])product name([^a-z]|$)", h) and "наименование товара" not in h:
         return "article"
     if "package" in h:
+        if "weight" in h or "netto" in h or "нетто" in h or "kg" in h:
+            return "net_weight"
         return "rolls"
     if "номер рулона" in h or "rulon" in h or "roll no" in h or "roll nr" in h:
         return None
@@ -335,12 +354,14 @@ def classify_header(header: str) -> str | None:
         return "area"
     if "total price" in h or "цена, долл" in h or "сумма" in h or "tutar" in h or "金额" in h:
         return "amount"
-    if "per meter" in h or "за пог" in h or "unit price" in h or "birim fiyat" in h or "单价" in h:
+    if "per meter" in h or "за пог" in h or "unit price" in h or "birim fiyat" in h or "单价" in h or "price per" in h:
         return "price"
     if "miktar" in h or "adet" in h or "数量" in h:
         return "qty"
     if h in {"fiyat", "price $", "unit $", "usd"} or (("$" in h or "€" in h) and "total" not in h and "amount" not in h):
         return "price"
+    if "netto with primary" in h or "primary packaging" in h:
+        return "net_weight"
     if "нетто" in h or "n.w" in h or "net weight" in h or "weight net" in h:
         return "net_weight"
     if "брутто" in h or "brutto" in h or "g.w" in h or "gross weight" in h:

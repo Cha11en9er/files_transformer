@@ -517,9 +517,9 @@ async function processShipment() {
         if (status === "skipped") {
           li.textContent = `Пропущен: ${filename}${message ? ` (${message})` : ""}`;
         } else if (status === "review") {
-          li.textContent = `Обработан с замечаниями: ${filename}${message ? ` (${message})` : ""}`;
+          li.textContent = message ? `${filename}: ${message}` : `Нужна проверка: ${filename}`;
         } else {
-          li.textContent = `Обработан: ${filename}`;
+          li.textContent = message ? `${filename}: ${message}` : `Обработан: ${filename}`;
         }
         log.appendChild(li);
       },
@@ -779,140 +779,205 @@ function contextCell(value) {
   return escapeHtml(value);
 }
 
-function renderContextTable(rows) {
-  const list = (rows || []).filter((row) => row && (row.article || row.qty != null || row.amount != null || row.raw));
-  if (!list.length) return "<p class=\"hint\">Таблица пустая - в этом файле парсер не собрал строки.</p>";
+function recognizedRows(file) {
+  return (file?.table || []).filter(
+    (row) => row && (row.article || row.qty != null || row.amount != null || row.net_weight != null)
+  );
+}
+
+function renderRecognizedTable(rows) {
+  const list = recognizedRows({ table: rows });
+  if (!list.length) {
+    return "<p class=\"hint\">В этом файле таблица товаров не собралась.</p>";
+  }
   const body = list
     .slice(0, 250)
-    .map((row) => {
-      const rawBits = row.raw
-        ? Object.entries(row.raw)
-            .slice(0, 8)
-            .map(([k, v]) => `${k}: ${v}`)
-            .join("; ")
-        : "";
+    .map((row, index) => {
+      const code = row.customs_code || row.hs_code || "";
+      const desc = row.description || "";
       return `<tr>
+        <td class="row-no">${index + 1}</td>
         <td>${escapeHtml(row.article || "-")}</td>
+        <td class="num">${contextCell(row.rolls ?? row.boxes)}</td>
         <td class="num">${contextCell(row.qty ?? row.meters)}</td>
         <td class="num">${contextCell(row.price)}</td>
         <td class="money">${contextCell(row.amount)}</td>
         <td class="num">${contextCell(row.net_weight)}</td>
         <td class="num">${contextCell(row.gross_weight)}</td>
-        <td>${escapeHtml(rawBits || "-")}</td>
+        <td class="code">${escapeHtml(code || "-")}</td>
+        <td class="${longCellClass(desc)}">${renderLongHtml(desc)}</td>
       </tr>`;
     })
     .join("");
   return `<div class="table-wrap"><table class="context-mini">
-    <thead><tr><th>Артикул</th><th class="num">Кол-во</th><th class="num">Цена</th><th class="money">Сумма</th><th class="num">Нетто</th><th class="num">Брутто</th><th>Как в файле</th></tr></thead>
+    <thead><tr>
+      <th class="row-no">№</th>
+      <th>Артикул</th>
+      <th class="num">Места</th>
+      <th class="num">Кол-во</th>
+      <th class="num">Цена</th>
+      <th class="money">Сумма</th>
+      <th class="num">Нетто</th>
+      <th class="num">Брутто</th>
+      <th>Код</th>
+      <th>Описание</th>
+    </tr></thead>
     <tbody>${body}</tbody>
   </table></div>`;
 }
 
-function renderSourceCard(file, titlePrefix) {
-  const card = document.createElement("article");
-  card.className = "context-card";
-  const pages = (file.pages || []).length ? ` · стр. ${(file.pages || []).join(", ")}` : "";
-  card.innerHTML = `
-    <h3>${escapeHtml(titlePrefix)} ${escapeHtml(file.filename || "")}${pages}</h3>
-    <p class="hint">${escapeHtml(file.meaning || "")}</p>
-    ${file.text ? `<pre class="context-text">${escapeHtml(file.text)}</pre>` : "<p class=\"hint\">Текста распознавания нет.</p>"}
-    ${renderContextTable(file.table)}
-  `;
-  return card;
-}
-
-function renderModelContext(review) {
-  const host = $("#model-context");
-  if (!host) return;
-  host.innerHTML = "";
-  const ctx = review?.context || {};
-  (ctx.excel || []).forEach((file) => host.appendChild(renderSourceCard(file, "Excel")));
-  (ctx.pdfs || []).forEach((file) => host.appendChild(renderSourceCard(file, "PDF")));
-}
-
-function renderScanReview(ws, review) {
-  const reviewMeta = $("#model-review-meta");
-  const reviewBody = $("#model-review-body");
-  const meaningEl = $("#model-review-meaning");
-  const tablesEl = $("#scan-tables");
-  const totalsEl = $("#scan-totals");
-  const scanBody = $("#scan-table tbody");
-  if (!reviewMeta || !reviewBody || !scanBody) return;
-  tablesEl.innerHTML = "";
-  totalsEl.innerHTML = "";
-  scanBody.innerHTML = "";
-  if (meaningEl) meaningEl.textContent = "";
-  if (!review) {
-    reviewMeta.textContent = "Модель не вызывалась. PDF и исходники всё равно можно открыть по плашке файла.";
-    reviewBody.textContent = "";
-    if (meaningEl) {
-      meaningEl.textContent = "Нажми плашку PDF, чтобы увидеть, что парсер прочитал из скана и с чем сравнивать Excel.";
-    }
-    renderModelContext(ws.model_review || { context: { excel: [], pdfs: [] } });
-    return;
-  }
-  const bits = [review.model || "модель"];
-  if (review.image_count != null) bits.push(`${review.image_count} стр. как изображения`);
-  if (review.status === "ok") bits.push("JSON получен");
-  else if (review.status === "error") bits.push(humanizeClientError(review.error) || "ошибка");
-  else bits.push(humanizeClientError(review.error) || "пропущено");
-  reviewMeta.textContent = bits.join(" · ");
-  if (meaningEl) meaningEl.textContent = review.meaning || "";
-  renderModelContext(review);
-  if (review.payload != null) {
-    reviewBody.textContent = JSON.stringify(review.payload, null, 2);
-  } else {
-    reviewBody.textContent = review.raw_text || review.error || "";
-  }
-  (review.tables || []).forEach((table) => {
-    const chip = document.createElement("div");
-    chip.className = `scan-table-chip ${table.role || "ignored"}`;
-    const cols = table.columns ? Object.entries(table.columns).map(([k, v]) => `${k}: ${v}`).join(", ") : "";
-    chip.innerHTML = `<span>${escapeHtml(table.role || "ignored")}</span> ${escapeHtml(table.source || "")} p.${table.page ?? "-"}<br>${escapeHtml(table.why || "")}${cols ? `<br>${escapeHtml(cols)}` : ""}`;
-    tablesEl.appendChild(chip);
-  });
-  const excelTotals = review.excel_totals || {};
-  const scanTotals = review.totals || {};
-  [
-    ["qty", "Кол-во / м"],
+function renderTotalsStrip(review) {
+  const excelTotals = review?.excel_totals || {};
+  const scanTotals = review?.totals || {};
+  const hasExcel = Boolean(review?.excel_attached || (review?.context?.excel || []).length);
+  const parts = [
+    ["qty", "Кол-во"],
     ["amount", "Сумма"],
     ["net_weight", "Нетто"],
     ["gross_weight", "Брутто"],
-  ].forEach(([key, label]) => {
-    const excelVal = excelTotals[key] ?? (key === "qty" ? excelTotals.meters : null);
-    const scanVal = scanTotals[key] ?? (key === "qty" ? scanTotals.meters : null);
-    if (excelVal == null && scanVal == null) return;
-    const box = document.createElement("div");
-    const mismatch = excelVal != null && scanVal != null && Math.abs(Number(excelVal) - Number(scanVal)) > 0.5;
-    box.className = `scan-total${mismatch || (review.totals_mismatch && key === "qty") ? " mismatch" : ""}`;
-    const fmt = key === "amount" ? formatMoney : formatNum;
-    box.innerHTML = `<div class="k">${escapeHtml(label)}</div><div class="v">Excel ${fmt(excelVal)} · скан ${fmt(scanVal)}</div>`;
-    totalsEl.appendChild(box);
-  });
+  ]
+    .map(([key, label]) => {
+      const tableVal = excelTotals[key] ?? (key === "qty" ? excelTotals.meters : null);
+      const pdfVal = scanTotals[key] ?? (key === "qty" ? scanTotals.meters : null);
+      if (tableVal == null && pdfVal == null) return "";
+      const mismatch = tableVal != null && pdfVal != null && Math.abs(Number(tableVal) - Number(pdfVal)) > 0.5;
+      const fmt = key === "amount" ? formatMoney : formatNum;
+      const left = hasExcel ? `таблица ${fmt(tableVal)}` : `собрано ${fmt(tableVal)}`;
+      return `<div class="scan-total${mismatch ? " mismatch" : ""}"><div class="k">${escapeHtml(label)}</div><div class="v">${left} · PDF ${fmt(pdfVal)}</div></div>`;
+    })
+    .filter(Boolean)
+    .join("");
+  return parts ? `<div class="scan-totals">${parts}</div>` : "";
+}
+
+function renderCompareTable(ws, review) {
+  const hits = review?.items || [];
+  if (!hits.length) return "";
+  const hasExcel = Boolean(review?.excel_attached || (review?.context?.excel || []).length);
+  const leftQty = hasExcel ? "Excel кол-во" : "В таблице";
+  const rightQty = "В PDF";
+  const leftSum = hasExcel ? "Excel сумма" : "Сумма";
   const byId = Object.fromEntries((ws.items || []).map((item) => [String(item.id), item]));
-  (review.items || []).forEach((hit, index) => {
-    const item = hit.item_id ? byId[String(hit.item_id)] : null;
-    const excelQty = item ? itemQty(item) : null;
-    const scanQty = hit.qty ?? hit.meters;
-    const excelAmount = item?.commercial_data?.amount ?? null;
-    const tr = document.createElement("tr");
-    tr.dataset.index = String(index);
-    const canApply = Boolean(item) && hit.verdict === "question";
-    const canAdd = !item && hit.verdict === "extra";
-    let action = "-";
-    if (canApply) action = `<button type="button" class="btn" data-scan-action="apply" data-index="${index}">Подставить из скана</button>`;
-    else if (canAdd) action = `<button type="button" class="btn" data-scan-action="add" data-index="${index}">Добавить в таблицу</button>`;
-    tr.innerHTML = `
-      <td>${escapeHtml(hit.article || hit.matched_article || "-")}</td>
-      <td class="num">${formatNum(excelQty)}</td>
-      <td class="num">${formatNum(scanQty)}</td>
-      <td class="money">${formatMoney(excelAmount)}</td>
-      <td class="money">${formatMoney(hit.amount)}</td>
-      <td class="verdict-${escapeHtml(hit.verdict || "question")}">${escapeHtml(SCAN_VERDICT_RU[hit.verdict] || hit.verdict || "")}${hit.notes ? ` · ${escapeHtml(hit.notes)}` : ""}</td>
-      <td>${action}</td>
-    `;
-    scanBody.appendChild(tr);
-  });
+  const body = hits
+    .map((hit, index) => {
+      const item = hit.item_id ? byId[String(hit.item_id)] : null;
+      const excelQty = item ? itemQty(item) : null;
+      const scanQty = hit.qty ?? hit.meters;
+      const excelAmount = item?.commercial_data?.amount ?? null;
+      const canApply = Boolean(item) && hit.verdict === "question";
+      const canAdd = !item && hit.verdict === "extra";
+      let action = "";
+      if (canApply) action = `<button type="button" class="btn" data-scan-action="apply" data-index="${index}">Подставить из PDF</button>`;
+      else if (canAdd) action = `<button type="button" class="btn" data-scan-action="add" data-index="${index}">Добавить в таблицу</button>`;
+      return `<tr>
+        <td>${escapeHtml(hit.article || hit.matched_article || "-")}</td>
+        <td class="num">${formatNum(excelQty)}</td>
+        <td class="num">${formatNum(scanQty)}</td>
+        <td class="money">${formatMoney(excelAmount)}</td>
+        <td class="money">${formatMoney(hit.amount)}</td>
+        <td class="verdict-${escapeHtml(hit.verdict || "question")}">${escapeHtml(SCAN_VERDICT_RU[hit.verdict] || hit.verdict || "")}${hit.notes ? ` · ${escapeHtml(hit.notes)}` : ""}</td>
+        <td>${action}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<h4>Сверка с таблицей поставки</h4>
+    <div class="table-wrap"><table class="context-mini" id="scan-table">
+      <thead><tr>
+        <th>Артикул</th>
+        <th class="num">${escapeHtml(leftQty)}</th>
+        <th class="num">${escapeHtml(rightQty)}</th>
+        <th class="money">${escapeHtml(leftSum)}</th>
+        <th class="money">PDF сумма</th>
+        <th>Вердикт</th>
+        <th></th>
+      </tr></thead>
+      <tbody>${body}</tbody>
+    </table></div>`;
+}
+
+function reviewSources(ws) {
+  const ctx = ws?.model_review?.context || {};
+  const pdfs = ctx.pdfs || [];
+  const excel = ctx.excel || [];
+  return { pdfs, excel, files: [...pdfs, ...excel] };
+}
+
+function renderReviewMeta(ws, review) {
+  const reviewMeta = $("#model-review-meta");
+  const launch = $("#review-launch");
+  const { files } = reviewSources(ws);
+  if (launch) launch.classList.toggle("hidden", !files.length);
+  if (!reviewMeta) return;
+  if (!review) {
+    reviewMeta.textContent = files.length ? "Нажми файл или кнопку, чтобы открыть таблицу." : "";
+    return;
+  }
+  const bits = [];
+  if (review.image_count) bits.push(`${review.image_count} стр.`);
+  if (review.status === "ok") bits.push("модель ответила");
+  else if (review.status === "error") bits.push(humanizeClientError(review.error) || "модель не ответила");
+  reviewMeta.textContent = bits.join(" · ");
+}
+
+function renderFilePane(file) {
+  const pages = (file.pages || []).length ? `стр. ${(file.pages || []).join(", ")}` : "";
+  const n = recognizedRows(file).length;
+  const kind = file.kind === "pdf" || String(file.filename || "").toLowerCase().endsWith(".pdf") ? "PDF" : "Excel";
+  return `
+    <div class="review-file-meta">
+      <strong>${escapeHtml(kind)} ${escapeHtml(file.filename || "")}</strong>
+      <span class="hint">${escapeHtml([pages, `${n} строк`].filter(Boolean).join(" · "))}</span>
+    </div>
+    ${renderRecognizedTable(file.table)}
+  `;
+}
+
+function fillReviewDialog(ws, filename) {
+  const tabs = $("#review-dialog-tabs");
+  const body = $("#review-dialog-body");
+  const meta = $("#review-dialog-meta");
+  if (!tabs || !body) return;
+  const review = ws.model_review;
+  const { files } = reviewSources(ws);
+  const wanted = filename
+    ? files.find((file) => String(file.filename || "").toLowerCase() === String(filename).toLowerCase())
+    : files[0];
+  tabs.innerHTML = files
+    .map((file) => {
+      const n = recognizedRows(file).length;
+      const active = wanted && file.filename === wanted.filename ? " active" : "";
+      return `<button type="button" class="review-tab${active}" data-review-file="${escapeHtml(file.filename || "")}">${escapeHtml(file.filename || "файл")} · ${n}</button>`;
+    })
+    .join("");
+  if (meta) {
+    meta.textContent = review?.meaning
+      ? String(review.meaning).slice(0, 180)
+      : wanted
+        ? `${recognizedRows(wanted).length} строк`
+        : "";
+  }
+  if (!wanted) {
+    body.innerHTML = "<p class=\"hint\">Нет распознанных таблиц.</p>";
+    return;
+  }
+  body.innerHTML = `
+    ${renderFilePane(wanted)}
+    ${renderTotalsStrip(review)}
+    ${renderCompareTable(ws, review)}
+  `;
+}
+
+function renderScanReview(ws, review) {
+  renderReviewMeta(ws, review);
+}
+
+function openReviewPanel(filename) {
+  const ws = state.workspace;
+  if (!ws) return;
+  const dialog = $("#review-dialog");
+  if (!dialog) return;
+  fillReviewDialog(ws, filename);
+  if (typeof dialog.showModal === "function") dialog.showModal();
 }
 
 function applyScanToItem(hit) {
@@ -1088,8 +1153,8 @@ function renderWorkspace() {
     let statusHint = "";
     if (parseStatus === "skipped") statusHint = " · пропущен";
     else if (parseStatus === "review") statusHint = " · требуется проверка";
-    span.title = f.parse_message || (clickable ? "Открыть сверку PDF и исходников" : "");
-    span.setAttribute("aria-controls", "model-review-panel");
+    span.title = f.parse_message || (clickable ? "Открыть таблицу распознавания" : "");
+    span.setAttribute("aria-controls", "review-dialog");
     span.textContent = `${f.filename} - ${typeRu}${ocrHint}${statusHint}`;
     if (clickable) {
       span.addEventListener("click", (event) => {
@@ -1100,9 +1165,7 @@ function renderWorkspace() {
     badges.appendChild(span);
   });
 
-  if ($("#model-review-panel")) {
-    renderScanReview(ws, ws.model_review);
-  }
+  renderScanReview(ws, ws.model_review);
   if ($("#export-preview-panel")) {
     refreshExportPreview();
   }
@@ -1190,7 +1253,13 @@ document.addEventListener("click", (e) => {
   td.innerHTML = `<span class="cell-full">${escapeHtml(full)}</span><button type="button" class="cell-hide">скрыть</button>`;
 });
 
-$("#scan-table")?.addEventListener("click", (e) => {
+$("#review-dialog")?.addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-review-file]");
+  if (tab) {
+    e.preventDefault();
+    fillReviewDialog(state.workspace, tab.dataset.reviewFile);
+    return;
+  }
   const btn = e.target.closest("[data-scan-action]");
   if (!btn) return;
   const index = Number(btn.dataset.index);
@@ -1198,23 +1267,11 @@ $("#scan-table")?.addEventListener("click", (e) => {
   if (!hit) return;
   if (btn.dataset.scanAction === "apply") applyScanToItem(hit);
   if (btn.dataset.scanAction === "add") addItemFromScan(hit);
+  fillReviewDialog(state.workspace, $("#review-dialog-tabs .review-tab.active")?.dataset.reviewFile);
 });
 
-function openReviewPanel(filename) {
-  const panel = $("#model-review-panel");
-  if (!panel) return;
-  panel.open = true;
-  panel.scrollIntoView({ behavior: "smooth", block: "start" });
-  if (!filename) return;
-  const cards = panel.querySelectorAll(".context-card h3");
-  cards.forEach((title) => {
-    const card = title.closest(".context-card");
-    if (!card) return;
-    if (title.textContent.toLowerCase().includes(String(filename).toLowerCase())) {
-      card.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-  });
-}
+$("#btn-review")?.addEventListener("click", () => openReviewPanel());
+$("#review-dialog-close")?.addEventListener("click", () => $("#review-dialog")?.close());
 
 function editFlagHtml(errors) {
   const active = (errors || []).filter((e) => !e.resolved);

@@ -69,7 +69,33 @@ def is_plausible_article(value: str | None) -> bool:
     if not text or len(text) > 60:
         return False
     low = text.lower()
-    if low in {"meters", "quantity", "description", "unit", "price", "amount", "total", "pcs", "qty", "rolls"}:
+    if low in {
+        "meters",
+        "quantity",
+        "description",
+        "unit",
+        "price",
+        "amount",
+        "total",
+        "pcs",
+        "qty",
+        "rolls",
+        "series / art.",
+        "series / art",
+        "model / series / art.",
+        "model./series / art.",
+        "brand",
+        "origin",
+        "netto, kg",
+        "code",
+    }:
+        return False
+    if re.fullmatch(
+        r"(?:model|series|art\.?|article|артикул|item|design|code|description|"
+        r"qty|quantity|netto|brutto|weight|origin|brand)"
+        r"(?:\s*/\s*[\w./]+)*\.?",
+        low,
+    ):
         return False
     if "new order" in low or "total roll" in low or low.startswith("bank") or "+90" in text.replace(" ", ""):
         return False

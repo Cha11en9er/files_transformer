@@ -450,22 +450,31 @@ def _iter_create_events(
         header_fields = merge_header_fields(result.header or {}, header_fields)
 
         model_names: list[str] = []
+        pdf_names: list[str] = []
         for path in usable_paths:
-            if path.suffix.lower() in {".xlsx", ".xls", ".xlsm"}:
+            suffix = path.suffix.lower()
+            if suffix in {".xlsx", ".xls", ".xlsm"}:
                 if "сводная" in path.name.lower() or "справочник" in path.name.lower():
                     continue
                 model_names.append(path.name)
+            elif suffix == ".pdf":
+                pdf_names.append(path.name)
+        if model_names:
+            model_label = ", ".join(model_names)
+            model_message = "Модель читает Excel: " + model_label
+        elif pdf_names:
+            model_label = ", ".join(pdf_names)
+            model_message = "Модель читает PDF: " + model_label
+        else:
+            model_label = "собранные таблицы"
+            model_message = "Модель проверяет собранные таблицы"
         yield {
             "event": "progress",
             "current": total,
             "total": total,
-            "filename": ", ".join(model_names) or "таблицы Excel",
+            "filename": model_label,
             "stage": "model",
-            "message": (
-                "Модель читает Excel: " + ", ".join(model_names)
-                if model_names
-                else "Модель проверяет собранные таблицы"
-            ),
+            "message": model_message,
         }
         vision_dir = tmp_dir / "vision"
         try:
@@ -484,7 +493,7 @@ def _iter_create_events(
                 "total": total,
                 "filename": ", ".join(seen_pdf),
                 "stage": "model",
-                "message": "Модель читает скан: " + ", ".join(seen_pdf),
+                "message": "Модель смотрит страницы: " + ", ".join(seen_pdf),
             }
         yield {
             "event": "progress",
