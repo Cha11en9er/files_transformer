@@ -1,0 +1,49 @@
+---
+description: Универсальный трансформер без хардкода; правки в ядре, не костыли; проверять всех потребителей поля
+alwaysApply: true
+---
+
+# Гибкий трансформер, не костыли
+
+Каждый вход уникален. Нельзя ветвить логику по отправителю, артикулу, номеру инвойса, имени файла или «как в эталоне 18018». Правила живут на заголовках колонок, merge (`inherited` vs своя цифра), роли листа и стоп-строках (TOTAL, новый section header).
+
+## Запрещено
+
+- `if article.startswith("A519")` / `if "D680" in article` / `if "beijing" in filename`
+- Патч после трансформации: `fix_beijing_detail()`, `patch_packages_column()` поверх готовых items
+- Дублировать ту же эвристику в `parsing/` и `transform/` по-разному
+- Подставлять описание или ТН ВЭД из старого эталона, если нет однозначного catalog
+- Молча выбрать одно из двух конфликтующих чисел
+
+## Как делать
+
+Новое поведение вшивать в существующий шаг (`reader` / `extract` / `merge` / `canonical` / export), а не рядом.
+
+- Две партии одного Art No. с собственными Quantity/Amount - две строки, не один `match_key`.
+- Qty/price/amount растянуты merge на несколько строк - одна коммерческая позиция, веса/места суммировать.
+- После TOTAL и «Detail packing list» (любой новый header) чтение тела таблицы заканчивается, не `continue`.
+- `package` ≠ `quantity`. Синоним править в `canonical.py` / `field_map.py`, не мапить PACKAGE в qty «потому что Bestway».
+- Префикс артикула (A519-3 → A519) - только как явное правило «компонента к родителю», не список SKU.
+
+```python
+# BAD
+if article.startswith("NO228"):
+    items[-1]["qty"] += row.qty
+
+# GOOD
+own_qty = "qty" in fields and (r, qty_col) not in sheet.inherited
+if not article and own_qty:
+    emit_new_lot(prev_article, fields)  # любой поставщик
+```
+
+## Правка поля = правка всего пути
+
+Переименовал/добавил ключ в `CanonicalItem.fields` или в `commercial_data` / `packing_data` / `customs_data` - пройди всех, кто читает:
+
+`canonical.py`, `extract.py`, `merge.py`, `service.canonical_to_rows`, `export.py`, `export_beijing.py`, `export_18233_templates.py`, `opencode_review.py`, `reconcile.py`, `frontend/assets/app.js`, тесты.
+
+После изменения grep по старому имени. Проверь: пустой ключ не уходит в экспорт (как `tnved=None` при живом catalog), rename не оставляет писателя на `rolls` и читателя на `packages`. Если поменял extract, прогони и 18233, и Beijing, и хотя бы один чужой комплект - фикс merge на Goldluck не должен сломать SOFA FABRIC.
+
+Тест на синтетической таблице (merge + две qty + TOTAL + вторая секция), не на захардкоженном артикуле из 003-26E.
+
+Не уверен в цифре - флаг оператору, не «исправить как в прошлом файле».
