@@ -1,3 +1,21 @@
+# Project
+.env
+.env.*
+!.env.example
+!backend/.env.example
+*.db
+backend/uploads/
+backend/exports/
+uploads/
+exports/
+documents/
+materials/
+backend/_anydoc_probe/
+backend/out/
+out/
+*.tar.gz
+pytest-cache-files-*/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

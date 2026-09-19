@@ -1,0 +1,17 @@
+[Unit]
+Description=Customs documents workspace
+After=network.target opencode.service
+Wants=opencode.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/files_transformer/backend
+ExecStart=/opt/files_transformer/backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8010
+Restart=always
+RestartSec=3
+User=root
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/files_transformer/backend/.env
+
+[Install]
+WantedBy=multi-user.target

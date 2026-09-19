@@ -1,0 +1,400 @@
+"""Sheet -> canonical rows.
+
+Given one `Sheet` (grid with merges expanded) we:
+1. find the header row (the row whose columns map to the most canonical fields);
+2. classify the sheet role (goods / packing / specification / catalog / mixed);
+3. read every data row into canonical fields, handling
+   - blank-article continuation rows (a lot of the same article split over rows),
+   - the "numbered child + unnumbered SOFA FABRIC family" invoice layout where the
+     family row carries the unit price for its children.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Any
+
+from app.parsing.header_extract import is_catalog_filename
+from app.parsing.normalize import normalize_article, normalize_text
+from app.transform.canonical import (
+    NUMERIC_FIELDS,
+    ColumnStat,
+    classify_columns,
+    is_number_like,
+    parse_number,
+)
+from app.transform.reader import Sheet
+
+HEADER_SCAN = 25
+SAMPLE = 20
+
+_TOTAL_RE = re.compile(r"^\s*(total|grand\s*total|итого|всего|genel\s*toplam|合计|总计)\b", re.IGNORECASE)
+_DETAIL_SECTION_RE = re.compile(r"detail\s*packing|подробн", re.IGNORECASE)
+_NAKED_SECTION_RE = re.compile(r"^\s*(packing\s*list|invoice|specification|инвойс|упаковочн|спецификац)\s*$", re.IGNORECASE)
+_JUNK_RE = re.compile(
+    r"(terms of (?:delivery|payment)|bank name|swift|director|sold to|consignee|"
+    r"beneficiary|account\s*no|tel\s*:|fax\s*:|e-?mail|инн\b|огрн|б\/сч)",
+    re.IGNORECASE,
+)
+_PACKING_FIELDS = frozenset(
+    {"net_weight", "gross_weight", "volume", "boxes", "rolls", "measurement", "pcs_per_carton"}
+)
+_COMMERCIAL_FIELDS = frozenset({"qty", "price", "amount", "unit", "meters", "currency"})
+
+ROLE_KEYWORDS = {
+    "invoice": ("commercial invoice", "invoice", "инвойс", "商业发票", "发票", "фактура"),
+    "packing": ("packing list", "упаковочный", "装箱单", "çeki", "ceki", "seçme listesi", "packing"),
+    "specification": ("specification", "спецификация", "规格"),
+    "catalog": ("справочник", "сводная", "catalog", "описание", "риск"),
+}
+
+
+@dataclass
+class Row:
+    article: str
+    normalized: str
+    fields: dict[str, Any]
+    source: str
+    role: str
+    item_no: int | None = None
+    is_group: bool = False
+
+
+@dataclass
+class ExtractedSheet:
+    name: str
+    source: str
+    role: str
+    mapping: dict[int, str]          # col index -> canonical field
+    header_text: str
+    rows: list[Row] = field(default_factory=list)
+    detail: bool = False             # per-roll detail sheet (aggregate by sum on merge)
+    letterhead: list[list[str]] = field(default_factory=list)  # cells above the table header
+
+
+def _cell(v: Any) -> str:
+    return normalize_text("" if v is None else str(v))
+
+
+def _letterhead_cell(v: Any) -> str:
+    if v is None:
+        return ""
+    return str(v).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _score_mapping(mapping: dict[int, str]) -> int:
+    fields = set(mapping.values())
+    score = 0
+    if "article" in fields or "description" in fields:
+        score += 2
+    score += len(fields & {"qty", "meters", "area", "rolls"})
+    score += len(fields & {"price", "amount"})
+    score += len(fields & {"net_weight", "gross_weight"})
+    score += len(fields & {"hs_code", "customs_code"})
+    return score
+
+
+def _build_columns(sheet: Sheet, header_row: int) -> list[ColumnStat]:
+    headers = sheet.grid[header_row]
+    cols: list[ColumnStat] = []
+    for c in range(sheet.ncols):
+        header = _cell(headers[c] if c < len(headers) else "")
+        values = [
+            sheet.grid[r][c]
+            for r in range(header_row + 1, min(header_row + 1 + SAMPLE, sheet.nrows))
+            if c < len(sheet.grid[r])
+        ]
+        cols.append(ColumnStat(index=c, header=header, values=values))
+    return cols
+
+
+def find_header(sheet: Sheet) -> tuple[int, dict[int, str], list[ColumnStat]]:
+    """Return (header_row_index, mapping, columns). header_row = -1 if none good."""
+    best: tuple[int, int, dict[int, str], list[ColumnStat]] | None = None
+    limit = min(sheet.nrows, HEADER_SCAN)
+    for r in range(limit):
+        cols = _build_columns(sheet, r)
+        mapping = classify_columns(cols)
+        score = _score_mapping(mapping)
+        if best is None or score > best[0]:
+            best = (score, r, mapping, cols)
+    if best is None or best[0] < 3:
+        return -1, {}, []
+    return best[1], best[2], best[3]
+
+
+def _sheet_text(sheet: Sheet, header_row: int) -> str:
+    top = " ".join(
+        _cell(v)
+        for r in range(0, max(header_row, 0) + 1)
+        for v in sheet.grid[r]
+    )
+    return f"{sheet.name} {top}".lower()
+
+
+def classify_role(text: str, mapping_fields: set[str], source: str = "") -> str:
+    if is_catalog_filename(source):
+        return "catalog"
+    scores = {role: 0 for role in ROLE_KEYWORDS}
+    for role, words in ROLE_KEYWORDS.items():
+        for w in words:
+            if w in text:
+                scores[role] += text.count(w)
+    # structural hints
+    has_price = bool(mapping_fields & {"price", "amount"})
+    has_weight = bool(mapping_fields & {"net_weight", "gross_weight", "measurement", "volume"})
+    has_code = bool(mapping_fields & {"hs_code", "customs_code"})
+    has_shipping_qty = bool(mapping_fields & {"qty", "meters", "rolls", "area"})
+
+    if scores["catalog"] and has_code and not has_shipping_qty:
+        return "catalog"
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    top_role, top_score = ranked[0]
+    if top_score >= 1 and (ranked[1][1] == 0 or top_score - ranked[1][1] >= 1):
+        # keyword winner, but sanity-check against structure for mixed sheets
+        if top_role == "packing" and has_price and "invoice" in text:
+            return "mixed"
+        return top_role
+    # fall back to structure
+    if has_price and has_weight:
+        return "mixed"
+    if has_price:
+        return "invoice"
+    if has_weight:
+        return "packing"
+    if has_code and not has_shipping_qty:
+        return "catalog"
+    return "goods"
+
+
+def _row_fields(sheet: Sheet, r: int, mapping: dict[int, str]) -> tuple[dict[str, Any], set[str]]:
+    out: dict[str, Any] = {}
+    inherited: set[str] = set()
+    row = sheet.grid[r]
+    for c, field_key in mapping.items():
+        if c >= len(row):
+            continue
+        raw = row[c]
+        text = _cell(raw)
+        if not text:
+            continue
+        if (r, c) in sheet.inherited:
+            inherited.add(field_key)
+        if field_key in NUMERIC_FIELDS:
+            num = parse_number(raw)
+            if num is not None:
+                out[field_key] = num
+        elif field_key == "measurement":
+            out[field_key] = text
+        else:
+            out[field_key] = text
+    return out, inherited
+
+
+def _is_stop_row(joined: str, first_cells: str) -> bool:
+    if _TOTAL_RE.match(first_cells) or _TOTAL_RE.match(joined):
+        return True
+    if _DETAIL_SECTION_RE.search(joined):
+        return True
+    if _NAKED_SECTION_RE.match(joined):
+        return True
+    return False
+
+
+def _is_letterhead_junk(joined: str) -> bool:
+    return bool(_JUNK_RE.search(joined))
+
+
+def _looks_like_new_header(joined: str, mapping: dict[int, str]) -> bool:
+    low = joined.lower()
+    hints = ("art no", "артикул", "quantity", "unit price", "amount", "description of", "net wt", "gross wt")
+    hits = sum(1 for token in hints if token in low)
+    return hits >= 3 and bool(mapping)
+
+
+def _strip_inherited(fields: dict[str, Any], inherited: set[str], keys: set[str]) -> dict[str, Any]:
+    return {k: v for k, v in fields.items() if not (k in keys and k in inherited)}
+
+
+def _own(fields: dict[str, Any], inherited: set[str], key: str) -> bool:
+    return key in fields and fields.get(key) not in (None, "") and key not in inherited
+
+
+def _item_no(sheet: Sheet, r: int, mapping: dict[int, str]) -> int | None:
+    # column 0 is usually the running number; take the left-most non-mapped numeric cell
+    mapped = set(mapping)
+    for c in range(min(3, sheet.ncols)):
+        if c in mapped:
+            continue
+        v = sheet.grid[r][c] if c < len(sheet.grid[r]) else None
+        if v is None:
+            continue
+        n = parse_number(v)
+        if n is not None and float(n).is_integer() and 0 < n < 100000:
+            return int(n)
+    return None
+
+
+def extract_sheet(sheet: Sheet) -> ExtractedSheet | None:
+    header_row, mapping, _cols = find_header(sheet)
+    if header_row < 0 or "article" not in set(mapping.values()) and "description" not in set(mapping.values()):
+        return None
+    text = _sheet_text(sheet, header_row)
+    role = classify_role(text, set(mapping.values()), source=sheet.source)
+    article_col = next((c for c, f in mapping.items() if f == "article"), None)
+    desc_col = next((c for c, f in mapping.items() if f == "description"), None)
+    key_col = article_col if article_col is not None else desc_col
+
+    letterhead = [[_letterhead_cell(v) for v in sheet.grid[r]] for r in range(0, header_row)]
+    ex = ExtractedSheet(
+        name=sheet.name, source=sheet.source, role=role, mapping=mapping,
+        header_text=text, letterhead=letterhead,
+    )
+
+    pending_children: list[Row] = []
+    seen_articles: dict[str, int] = {}
+
+    for r in range(header_row + 1, sheet.nrows):
+        row = sheet.grid[r]
+        joined = " ".join(_cell(v) for v in row).strip()
+        if not joined:
+            continue
+        first_cells = " ".join(_cell(v) for v in row[:3])
+        if _is_stop_row(joined, first_cells):
+            _flush_children(ex, pending_children)
+            break
+        if ex.rows and _looks_like_new_header(joined, mapping):
+            _flush_children(ex, pending_children)
+            break
+        if _is_letterhead_junk(joined):
+            continue
+        fields, inherited = _row_fields(sheet, r, mapping)
+        article_raw = _cell(row[key_col]) if key_col is not None and key_col < len(row) else ""
+        article_inherited = bool(
+            key_col is not None and (r, key_col) in sheet.inherited
+        )
+        own_article = bool(article_raw) and not article_inherited
+        item_no = _item_no(sheet, r, mapping)
+        own_qty = _own(fields, inherited, "qty") or _own(fields, inherited, "meters")
+
+        # a data row must carry at least one meaningful value
+        if not article_raw and not any(k in fields for k in ("qty", "meters", "amount", "net_weight", "area")):
+            continue
+
+        prev = pending_children[-1] if pending_children else (ex.rows[-1] if ex.rows else None)
+
+        # Component of the previous commercial line: article/qty came from a merge,
+        # this row only adds packing numbers (weights, cartons, volume).
+        if prev is not None and not own_article and not own_qty:
+            packing_only = _strip_inherited(fields, inherited, _COMMERCIAL_FIELDS)
+            packing_only = {k: v for k, v in packing_only.items() if k in _PACKING_FIELDS or k not in _COMMERCIAL_FIELDS}
+            _accumulate(prev.fields, packing_only)
+            continue
+
+        # New lot of the previous Art No.: empty/inherited article, own Quantity/Amount.
+        if prev is not None and not own_article and own_qty:
+            fields = _strip_inherited(fields, inherited, _PACKING_FIELDS)
+            article_raw = prev.article
+
+        # Sibling SKU under a shared weight merge: keep own qty, drop inherited packing.
+        if own_article and own_qty:
+            fields = _strip_inherited(fields, inherited, _PACKING_FIELDS)
+
+        article = article_raw
+        if not article:
+            continue
+
+        # A group/family row is purely structural: an unnumbered row that carries the
+        # unit price for the numbered children buffered just above it
+        # (Hangzhou "SOFA FABRIC <family>" carries the price for its child models).
+        # We must NOT key off the "SOFA FABRIC" prefix, because packing lists use that
+        # very prefix as the real article on every line.
+        is_group = bool(
+            own_article
+            and item_no is None
+            and ("price" in fields or "amount" in fields)
+            and pending_children
+        )
+
+        norm = normalize_article(article)
+        row_obj = Row(
+            article=article,
+            normalized=norm,
+            fields=fields,
+            source=f"{sheet.source} · {sheet.name}",
+            role=role,
+            item_no=item_no,
+            is_group=is_group,
+        )
+
+        if is_group:
+            # group row carries the unit price for the buffered children
+            _apply_group(pending_children, row_obj)
+            _flush_children(ex, pending_children)
+            pending_children = []
+            continue
+
+        # child row of an invoice group = no price yet, has an item number
+        if role in {"invoice", "mixed", "goods"} and item_no is not None and "price" not in fields and "amount" not in fields:
+            pending_children.append(row_obj)
+            continue
+
+        _flush_children(ex, pending_children)
+        pending_children = []
+        ex.rows.append(row_obj)
+        seen_articles[norm] = seen_articles.get(norm, 0) + 1
+
+    _flush_children(ex, pending_children)
+
+    # detail sheet? a per-roll specification lists the same article on many lines.
+    # Require both a high repeat AND a low unique/row ratio so that a normal
+    # one-line-per-article invoice (Beijing) is never treated as detail.
+    counts: dict[str, int] = {}
+    for row_obj in ex.rows:
+        counts[row_obj.normalized] = counts.get(row_obj.normalized, 0) + 1
+    unique = len(counts)
+    nrows = len(ex.rows)
+    if nrows and unique and max(counts.values()) >= 3 and (nrows / unique) >= 2.0:
+        ex.detail = True
+        if role != "catalog":
+            ex.role = "specification"
+    return ex
+
+
+def _accumulate(target: dict[str, Any], extra: dict[str, Any]) -> None:
+    for key, value in extra.items():
+        if key in NUMERIC_FIELDS and isinstance(value, (int, float)):
+            target[key] = round((target.get(key) or 0) + value, 6)
+        elif key not in target or target.get(key) in (None, ""):
+            target[key] = value
+
+
+def _price_basis(fields: dict[str, Any]) -> float | None:
+    for key in ("meters", "qty", "area"):
+        v = fields.get(key)
+        if isinstance(v, (int, float)) and v:
+            return float(v)
+    return None
+
+
+def _apply_group(children: list[Row], group: Row) -> None:
+    price = group.fields.get("price")
+    if not children:
+        return
+    for child in children:
+        if price is not None:
+            child.fields.setdefault("price", price)
+            basis = _price_basis(child.fields)
+            if basis is not None and "amount" not in child.fields:
+                child.fields["amount"] = round(basis * float(price), 2)
+        # inherit HS / customs / currency / unit from the group when missing
+        for key in ("hs_code", "customs_code", "currency", "unit"):
+            if key in group.fields and key not in child.fields:
+                child.fields[key] = group.fields[key]
+        child.fields["_group"] = group.article
+
+
+def _flush_children(ex: ExtractedSheet, children: list[Row]) -> None:
+    for child in children:
+        ex.rows.append(child)
