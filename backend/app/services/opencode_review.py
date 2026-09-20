@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import re
+import time as time_mod
 from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
@@ -350,17 +351,183 @@ def settings() -> dict[str, Any]:
     }
 
 
+OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
+OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
+
+
+def _usd_text(value: float | None) -> str:
+    if value is None:
+        return ""
+    return f"${value:.2f}"
+
+
+def _model_label(model: str) -> str:
+    slug = (model or "").rsplit("/", 1)[-1]
+    chunks: list[str] = []
+    for part in slug.replace("_", "-").split("-"):
+        if not part:
+            continue
+        lower = part.lower()
+        if lower.startswith("qwen"):
+            chunks.append("Qwen" + part[4:])
+        elif lower.isdigit():
+            chunks.append(part)
+        else:
+            chunks.append(part[:1].upper() + part[1:])
+    return " ".join(chunks) or (model or "модель")
+
+
+def _empty_billing() -> dict[str, Any]:
+    return {
+        "usage_usd": None,
+        "remaining_usd": None,
+        "purchased_usd": None,
+        "remaining_is_key_limit": False,
+        "billing_error": None,
+    }
+
+
+def _extract_openrouter_key(blob: Any) -> str:
+    if isinstance(blob, dict):
+        block = blob.get("openrouter")
+        if isinstance(block, dict):
+            for name in ("key", "apiKey", "api_key", "token"):
+                value = str(block.get(name) or "").strip()
+                if value.startswith("sk-or-"):
+                    return value
+        for value in blob.values():
+            found = _extract_openrouter_key(value)
+            if found:
+                return found
+    elif isinstance(blob, list):
+        for item in blob:
+            found = _extract_openrouter_key(item)
+            if found:
+                return found
+    return ""
+
+
+def _openrouter_api_key() -> str:
+    env = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+    if env.startswith("sk-or-"):
+        return env
+    home = Path(os.getenv("HOME") or Path.home())
+    paths = [
+        home / ".local" / "share" / "opencode" / "auth.json",
+        home / ".opencode" / "auth.json",
+    ]
+    xdg = os.getenv("XDG_DATA_HOME")
+    if xdg:
+        paths.insert(0, Path(xdg) / "opencode" / "auth.json")
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        found = _extract_openrouter_key(data)
+        if found:
+            return found
+    return ""
+
+
+def fetch_openrouter_billing() -> dict[str, Any]:
+    """Account/key spend from OpenRouter. Never returns the API key."""
+    out = _empty_billing()
+    if settings()["provider_id"] != "openrouter":
+        return out
+    key = _openrouter_api_key()
+    mgmt = (os.getenv("OPENROUTER_MANAGEMENT_KEY") or "").strip()
+    if not key and not mgmt:
+        out["billing_error"] = "нет ключа OpenRouter"
+        return out
+    try:
+        with httpx.Client(timeout=httpx.Timeout(6.0, connect=3.0)) as client:
+            if key:
+                reply = client.get(OPENROUTER_KEY_URL, headers={"Authorization": f"Bearer {key}"})
+                if reply.status_code == 200:
+                    data = (reply.json() or {}).get("data") or {}
+                    out["usage_usd"] = _as_float(data.get("usage"))
+                    remaining = _as_float(data.get("limit_remaining"))
+                    if remaining is not None:
+                        out["remaining_usd"] = remaining
+                        out["remaining_is_key_limit"] = True
+            token = mgmt or key
+            credits = client.get(OPENROUTER_CREDITS_URL, headers={"Authorization": f"Bearer {token}"})
+            if credits.status_code == 200:
+                data = (credits.json() or {}).get("data") or {}
+                purchased = _as_float(data.get("total_credits"))
+                used = _as_float(data.get("total_usage"))
+                out["purchased_usd"] = purchased
+                if purchased is not None and used is not None:
+                    out["remaining_usd"] = round(purchased - used, 6)
+                    out["remaining_is_key_limit"] = False
+                    if out["usage_usd"] is None:
+                        out["usage_usd"] = used
+            elif credits.status_code >= 400 and out["usage_usd"] is None:
+                out["billing_error"] = humanize_message(credits.text[:200])
+    except Exception as exc:
+        out["billing_error"] = humanize_exception(exc)
+    return out
+
+
+def _usage_delta(before: dict[str, Any], after: dict[str, Any]) -> float | None:
+    start = before.get("usage_usd")
+    end = after.get("usage_usd")
+    if start is None or end is None:
+        return None
+    return round(max(0.0, float(end) - float(start)), 6)
+
+
+def _with_billing(payload: dict[str, Any]) -> dict[str, Any]:
+    cfg = settings()
+    billing = fetch_openrouter_billing() if cfg["provider_id"] == "openrouter" else _empty_billing()
+    payload.update(billing)
+    payload["model"] = cfg["model"]
+    payload["model_label"] = _model_label(cfg["model"])
+    remaining = _usd_text(billing.get("remaining_usd"))
+    usage = _usd_text(billing.get("usage_usd"))
+    label = payload["model_label"]
+    if payload.get("status") == "ok":
+        if remaining and not billing.get("remaining_is_key_limit"):
+            payload["title"] = f"{label} · остаток {remaining}"
+        elif remaining:
+            payload["title"] = f"{label} · лимит ключа {remaining}"
+        elif usage:
+            payload["title"] = f"{label} · расход {usage}"
+        else:
+            payload["title"] = f"{label} · жива"
+    money_bits: list[str] = []
+    if usage:
+        money_bits.append(f"расход {usage}")
+    if remaining:
+        noun = "лимит ключа" if billing.get("remaining_is_key_limit") else "остаток"
+        money_bits.append(f"{noun} {remaining}")
+    payload["money"] = " · ".join(money_bits)
+    detail = payload.get("detail") or ""
+    if billing.get("billing_error") and not money_bits:
+        payload["detail"] = f"{detail} {billing['billing_error']}".strip()
+    elif money_bits:
+        payload["detail"] = f"{detail} · {payload['money']}".strip(" ·")
+    return payload
+
+
 def probe_opencode() -> dict[str, Any]:
     """Cheap liveness check for the header indicator. Never returns secrets."""
     cfg = settings()
     model = cfg["model"]
     if not cfg["enabled"]:
-        return {
+        payload = {
             "status": "off",
             "title": "Модель выключена",
             "detail": "В .env стоит OPENCODE_ENABLED=0.",
             "model": model,
+            "model_label": _model_label(model),
+            "money": "",
         }
+        payload.update(_empty_billing())
+        return payload
     auth = (cfg["username"], cfg["password"]) if cfg["password"] else None
     last_error = "нет ответа"
     try:
@@ -372,35 +539,35 @@ def probe_opencode() -> dict[str, Any]:
                     last_error = humanize_exception(exc)
                     continue
                 if reply.status_code in {200, 204, 404, 405}:
-                    return {
+                    return _with_billing({
                         "status": "ok",
                         "title": "Модель жива",
                         "detail": f"{cfg['url']} · {model}",
                         "model": model,
-                    }
+                    })
                 if reply.status_code in {401, 403}:
                     if not cfg["password"]:
-                        return {
+                        return _with_billing({
                             "status": "auth",
                             "title": "Нет пароля в .env",
                             "detail": "OpenCode на 4096 уже работает, но ждёт OPENCODE_SERVER_PASSWORD из backend/.env.",
                             "model": model,
-                        }
-                    return {
+                        })
+                    return _with_billing({
                         "status": "auth",
                         "title": "Пароль не подошёл",
                         "detail": "Пароль в backend/.env не совпадает с паролем службы opencode.",
                         "model": model,
-                    }
+                    })
                 last_error = humanize_message(f"{reply.status_code}: {reply.text[:200]}")
     except Exception as exc:
         last_error = humanize_exception(exc)
-    return {
+    return _with_billing({
         "status": "down",
         "title": "Модель не отвечает",
         "detail": last_error,
         "model": model,
-    }
+    })
 
 
 HELLO_PROMPT = (
@@ -433,6 +600,8 @@ def ping_opencode(prompt: str | None = None) -> dict[str, Any]:
         "reply": None,
     }
     if live["status"] != "ok":
+        for key in ("money", "model_label", "usage_usd", "remaining_usd", "purchased_usd", "remaining_is_key_limit", "billing_error"):
+            result[key] = live.get(key)
         return result
     auth = (cfg["username"], cfg["password"]) if cfg["password"] else None
     session_id: str | None = None
@@ -462,32 +631,34 @@ def ping_opencode(prompt: str | None = None) -> dict[str, Any]:
                 result["status"] = "credits" if _looks_like_credits(raw_body) else "error"
                 result["title"] = "Нет баланса Zen" if result["status"] == "credits" else "Модель вернула ошибку"
                 result["detail"] = text
-                return result
+                return _with_billing(result)
             raw_text = _assistant_text(reply.json()) or raw_body
             if _looks_like_credits(raw_text):
                 result["status"] = "credits"
                 result["title"] = "Нет баланса Zen"
                 result["detail"] = humanize_message(raw_text)
                 result["reply"] = raw_text[:800]
-                return result
+                return _with_billing(result)
             result["status"] = "ok"
             result["title"] = "Модель ответила"
             result["detail"] = (raw_text or "пустой ответ")[:300]
             result["reply"] = (raw_text or "")[:800]
-            return result
+            billed = _with_billing(result)
+            billed["reply"] = result["reply"]
+            return billed
     except httpx.HTTPStatusError as exc:
         body = (exc.response.text or str(exc))[:800]
         result["status"] = "credits" if _looks_like_credits(body) else "error"
         result["title"] = "Нет баланса Zen" if result["status"] == "credits" else "Модель вернула ошибку"
         result["detail"] = humanize_message(body)
         result["reply"] = body
-        return result
+        return _with_billing(result)
     except Exception as exc:
         result["status"] = "error"
         result["title"] = "Модель вернула ошибку"
         result["detail"] = humanize_exception(exc)
         result["reply"] = str(exc)[:400]
-        return result
+        return _with_billing(result)
     finally:
         if session_id:
             try:
@@ -1051,10 +1222,15 @@ def review_with_opencode(
         "totals": None,
         "items": [],
         "context": snapshot.get("context") or {"excel": [], "pdfs": []},
+        "model_label": _model_label(model_name),
+        "review_cost_usd": None,
+        "usage_usd": None,
+        "remaining_usd": None,
     }
     if not cfg["enabled"]:
         result["error"] = "OpenCode отключён (OPENCODE_ENABLED=0)"
         return result
+    before_billing = fetch_openrouter_billing() if cfg["provider_id"] == "openrouter" else _empty_billing()
 
     prompt = build_user_prompt(snapshot)
     parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
@@ -1106,6 +1282,19 @@ def review_with_opencode(
             result["raw_text"] = result["error"]
         return result
     finally:
+        if cfg["provider_id"] == "openrouter":
+            after = fetch_openrouter_billing()
+            cost = _usage_delta(before_billing, after)
+            if result.get("status") == "ok" and cost == 0:
+                time_mod.sleep(0.8)
+                after = fetch_openrouter_billing()
+                cost = _usage_delta(before_billing, after)
+            result["usage_usd"] = after.get("usage_usd")
+            result["remaining_usd"] = after.get("remaining_usd")
+            result["purchased_usd"] = after.get("purchased_usd")
+            result["remaining_is_key_limit"] = after.get("remaining_is_key_limit")
+            result["review_cost_usd"] = cost
+            result["model_label"] = _model_label(model_name)
         if session_id:
             try:
                 with httpx.Client(base_url=cfg["url"], auth=auth, timeout=8.0) as client:

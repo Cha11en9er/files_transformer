@@ -116,6 +116,11 @@ class ScanItemOut(BaseModel):
 class ModelReviewOut(BaseModel):
     status: str = "skipped"
     model: str = ""
+    model_label: str = ""
+    review_cost_usd: float | None = None
+    usage_usd: float | None = None
+    remaining_usd: float | None = None
+    remaining_is_key_limit: bool = False
     raw_text: str = ""
     payload: dict[str, Any] | list[Any] | None = None
     error: str | None = None

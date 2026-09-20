@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=32" />
+  <link rel="stylesheet" href="/assets/styles.css?v=33" />
 </head>
 <body>
   <div class="app">
@@ -16,9 +16,12 @@
         <p class="brand">Таможенные документы</p>
         <h1>Рабочее место</h1>
       </div>
-      <span id="opencode-status" class="model-status unknown" title="Проверка связи с моделью">
+      <span id="opencode-status" class="model-status unknown" title="Обновить модель и баланс">
         <span class="dot"></span>
-        <span id="opencode-status-label">Модель…</span>
+        <span class="model-status-text">
+          <span id="opencode-status-label">Модель…</span>
+          <span id="opencode-status-money" class="model-status-money"></span>
+        </span>
       </span>
     </header>
 
@@ -208,6 +211,6 @@
     <div id="review-dialog-body" class="review-dialog-body"></div>
   </dialog>
 
-  <script src="/assets/app.js?v=40"></script>
+  <script src="/assets/app.js?v=41"></script>
 </body>
 </html>
