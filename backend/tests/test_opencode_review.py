@@ -131,6 +131,8 @@ def test_compact_snapshot_keeps_qty_and_excel_context() -> None:
     assert "Later pages" in prompt
     assert "NO Excel" in prompt
     assert "SERIES / ART." in prompt
+    assert "parser_json.items is empty" in prompt
+    assert "goods row is structural" in prompt
     assert snap["languages"]["ids"]
     assert "en" in snap["languages"]["ids"]
     assert snap["source_files"][0]["scripts"]
@@ -424,6 +426,29 @@ def test_apply_excel_attached_appends_missing_article() -> None:
     added = next(row for row in items if row.article == "767B")
     assert added.commercial_data["qty"] == 3000
     assert any(err.error_type == ErrorType.MODEL_CORRECTION for err in added.validation_errors)
+
+
+def test_apply_scan_review_keeps_extra_without_sku():
+    items: list[ItemOut] = []
+    apply_scan_review(
+        items,
+        {
+            "status": "ok",
+            "excel_attached": False,
+            "items": [
+                {
+                    "article": "-",
+                    "description": "BALLOONS / ВОЗДУШНЫЙ ШАР",
+                    "qty": 2800,
+                    "amount": 1972.04,
+                    "verdict": "extra",
+                }
+            ],
+        },
+    )
+    assert len(items) == 1
+    assert "BALLOON" in (items[0].article or "").upper() or "ШАР" in (items[0].customs_data.get("description") or "").upper()
+    assert items[0].commercial_data["qty"] == 2800
 
 
 def test_coerce_brutto_alias_and_extra_lot_of_same_article() -> None:

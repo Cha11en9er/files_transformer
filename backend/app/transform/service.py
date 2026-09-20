@@ -480,9 +480,10 @@ def canonical_to_rows(items: list[CanonicalItem]) -> list[dict[str, Any]]:
                 "details": details,
                 "message": fl.get("message", ""),
             })
+        article = "-" if f.get("sku_missing") else it.article
         rows.append({
-            "article": it.article,
-            "model": it.article,
+            "article": article,
+            "model": article,
             "normalized_article": it.key,
             "commercial_data": commercial,
             "packing_data": packing,

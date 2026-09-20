@@ -236,3 +236,4 @@ __marimo__/
 .streamlit/secrets.toml
 
 .cursor/
+backend/scan_examples/local/

@@ -280,6 +280,19 @@ def test_classify_stacked_weight_and_series_art_headers():
     assert mapping.get(6) == "net_weight" or mapping.get(7) == "net_weight"
 
 
+def test_broken_and_stacked_headers_still_map():
+    cols = [
+        ColumnStat(0, "PACKAG E", ["21", "39"]),
+        ColumnStat(1, "QTY", ["2800", "15500"]),
+        ColumnStat(2, "WEIGHT NETTO, kg", ["300.90", "588.80"]),
+        ColumnStat(3, "n/a", ["-", "-"]),
+    ]
+    mapping = classify_columns(cols)
+    assert mapping[0] == "rolls"
+    assert mapping[1] == "qty"
+    assert mapping[2] == "net_weight"
+
+
 def test_tsd_export_headers_are_bilingual():
     from app.services.export_tsd import invoice_headers, packing_headers, spec_headers
 
@@ -301,6 +314,48 @@ def test_tsd_export_headers_are_bilingual():
     )
     assert bilingual[3] == "article"
     assert bilingual[4] == "qty"
+
+
+def test_placeholder_article_keeps_two_description_lots():
+    """Blank / n/a / dash in MODEL is not a SKU: two own qty/amount rows stay two goods lines."""
+    from app.transform.extract import extract_sheet
+    from app.transform.merge import merge_documents
+    from app.transform.reader import Sheet
+
+    inv = Sheet(
+        name="inv",
+        source="INV.pdf",
+        grid=[
+            ["№", "CODE", "DESCRIPTION", "COUNTRY OF ORIGIN", "MODEL / SERIES / ART.", "QTY", "PRICE PER USD", "AMOUNT, USD"],
+            ["1", "9505900000", "BALLOONS / ВОЗДУШНЫЙ ШАР", "CN", "n/a", "2800", "0.7043", "1972.04"],
+            ["2", "9505900000", "BALLOONS / ВОЗДУШНЫЙ ШАР", "CN", "-", "15500", "0.2490", "3859.50"],
+            ["TOTAL", None, None, None, None, "18300", None, "5831.54"],
+        ],
+    )
+    pl = Sheet(
+        name="pl",
+        source="PL.pdf",
+        grid=[
+            ["№", "CODE", "DESCRIPTION", "MODEL / SERIES / ART.", "PACKAGE", "QTY", "WEIGHT NETTO, kg", "WEIGHT BRUTTO, kg"],
+            ["1", "9505900000", "BALLOONS / ВОЗДУШНЫЙ ШАР", "-", "21", "2800", "300.90", "338.00"],
+            ["2", "9505900000", "BALLOONS / ВОЗДУШНЫЙ ШАР", "-", "39", "15500", "588.80", "661.55"],
+            ["TOTAL", None, None, None, "60", "18300", "889.70", "999.55"],
+        ],
+    )
+    inv_ex = extract_sheet(inv)
+    pl_ex = extract_sheet(pl)
+    assert inv_ex is not None and pl_ex is not None
+    items = merge_documents([inv_ex, pl_ex])
+    assert len(items) == 2
+    qtys = sorted(float(it.fields["qty"]) for it in items)
+    assert qtys == [2800.0, 15500.0]
+    assert all(it.fields.get("description") for it in items)
+    assert items[0].fields.get("net_weight") or items[1].fields.get("net_weight")
+    from app.transform.service import canonical_to_rows
+
+    rows = canonical_to_rows(items)
+    assert {r["article"] for r in rows} == {"-"}
+    assert {r["commercial_data"]["qty"] for r in rows} == {2800.0, 15500.0}
 
 
 def test_pdf_continuation_keeps_all_rows_and_skips_header_label():
@@ -650,4 +705,28 @@ def test_matrac_pdf_kit_is_tsd_not_goldluck(tmp_path: Path):
     )
     assert "PACKAGE" in pak_headers
     assert "Места" in pak_headers
+
+
+@requires_docs
+def test_shary_pdf_kit_two_balloon_lots():
+    kit = DOCS / "4_pravka" / "для тест" / "шары"
+    pdfs = sorted(kit.glob("*.pdf"))
+    if len(pdfs) < 3:
+        pytest.skip("шары PDFs not available")
+    from app.transform.service import canonical_to_rows, transform_paths
+
+    result = transform_paths([(str(p), p.name) for p in pdfs])
+    assert all("нашлось" in (f.message or "") for f in result.files if f.filename.lower().endswith(".pdf"))
+    assert len(result.items) == 2
+    rows = canonical_to_rows(result.items)
+    qtys = sorted(float(r["commercial_data"]["qty"]) for r in rows)
+    assert qtys == [2800.0, 15500.0]
+    assert all(r["article"] == "-" for r in rows)
+    assert all("ШАР" in str(r["customs_data"].get("description_ru") or r["customs_data"].get("description") or "").upper()
+               or "BALLOON" in str(r["customs_data"].get("description_en") or r["customs_data"].get("description") or "").upper()
+               for r in rows)
+    assert rows[0]["customs_data"].get("hs_code") == "9505900000" or rows[0]["customs_data"].get("tnved_code") == "9505900000"
+    nets = sorted(float(r["packing_data"].get("net_weight") or 0) for r in rows)
+    assert nets == [300.9, 588.8]
+
 

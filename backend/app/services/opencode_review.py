@@ -22,7 +22,7 @@ from app.parsing.languages import (
 )
 from app.parsing.user_messages import humanize_exception, humanize_message
 from app.services.field_map import is_factory_note, parse_number
-from app.services.scan_examples import DOCUMENT_SHAPES
+from app.services.scan_examples import document_shapes
 
 JSON_DECODER = json.JSONDecoder()
 PREVIEW_LIMIT = 4000
@@ -145,6 +145,9 @@ SYSTEM_PROMPT = (
     "If Excel workbooks are attached they are the source of truth for numbers. "
     "If the upload is PDF/scan only, the page images and PDF text are the source of truth: "
     "copy every goods row from every page. A table may continue on later pages without a header. "
+    "A goods row is any table body line with qty/price/amount/weight/packages, even when Art No. "
+    "is blank, '-', 'n/a', or a description instead of a SKU. If parser_json.items is empty, "
+    "still extract those rows. "
     "Return one JSON object and nothing else. No markdown, no code fences, no reasoning, "
     "no preface, no trailing commentary. Unknown values are null. Do not invent HS/TN VED codes, "
     "prices or quantities that are not visible in the attached Excel, images or parser_json."
@@ -157,7 +160,7 @@ parser_json is a DRAFT built by column synonyms. It can be wrong: TOTAL M2 / are
 excel_attachments lists the original workbooks attached as binary files. Read those workbooks. They are the source of truth for EVERY numeric column, not only amount: qty, unit, price, amount, rolls/packages/cartons/boxes, meters, area, net_weight, gross_weight (WEIGHT BRUTTO / BRUTTO / G.W. / GROSS WEIGHT), volume, measurement, pcs_per_carton. If draft and workbook disagree, items[] must carry the workbook number and verdict "question" with notes starting with "excel:". If packing printed a brutto/gross and the draft left gross_weight null or 0, copy the printed number. If PACKAGE/CARTONS is a separate column from QUANTITY, do not put packages into qty.
 
 If excel_attachments is not empty, those workbooks are the source of truth for numbers. PDF/scan pages only confirm them and never override a workbook.
-If there is NO Excel workbook (PDF/scan only), the attached page images and the PDF text ARE the source of truth. Copy every numbered goods row from every page.
+If there is NO Excel workbook (PDF/scan only), the attached page images and the PDF text ARE the source of truth. Copy every numbered goods row from every page. If parser_json.items is empty or much shorter than the printed table, the draft failed: fill items[] from the pages. Do not return an empty items list. A goods row still counts when MODEL/ART is "-", "n/a", blank, or the same description on every line; identity is then description (or HS + №). Two own Quantity/Amount (or two own packing qty) are two lots.
 
 A numbered DESIGN/Art No. row is a goods line. The next unnumbered row "SOFA FABRIC / family" or "ARTIFICIAL LEATHER / family" is a group total: copy unit price from there onto each child, amount = child meters × price (not the family TOTAL M2).
 PACKAGES / PACKAGE / CARTONS / CTNS is rolls or boxes (places), never commercial Quantity. QUANTITY is pcs/sets/meters. HIDES is leather pieces; Pattern on a DPL sheet is the article.
@@ -265,7 +268,7 @@ Rules:
 - On every screenshot find ALL tables, including borderless ones. Classify each: goods, packing, totals, ignored.
 - On Weavers-style lines the article is the Design Name between slashes (DYER 789), not the whole blob and not HS CODE.
 - On Tosun invoice the article is the fabric name before metres (ZIMMY, SINDRI), even if spaces were lost in OCR (ZIMMY1.740,82 MT).
-- If two goods-like tables exist, pick the one whose articles overlap parser_json.items. Put the other in tables[] with role "ignored" and why.
+- If two goods-like tables exist and parser_json.items is not empty, pick the one whose articles overlap parser_json.items. Put the other in tables[] with role "ignored" and why. If parser_json.items is empty, take the goods table from the pages/workbook as-is.
 - Always copy the printed document TOTAL into totals, including gross_weight / brutto and cartons when printed. Never drop TOTAL. Do not put the TOTAL row into items[].
 - items[] follow parser_json.items when articles match, but numbers come from attached Excel when they differ. verdict: ok if they match the workbook, question if you corrected the draft, extra if in the file but not in parser_json, missing if in parser_json but not in Excel.
 - Put every goods row from Excel into items[]. Continuation rows inside a merged Art No. stay lots[] of that item, not extra items[]. lots[] is a list of {{qty, price, amount, color}} or null when the item is a single commercial line. If the draft dropped a line whose Art No. is written again as its own cell, emit extra rows. Do not invent bilingual descriptions that are not in Excel or the catalog. Catalog names often use EN//RU - copy both sides, do not leave a leading slash.
@@ -825,7 +828,7 @@ def build_user_prompt(snapshot: dict[str, Any]) -> str:
         _snapshot_language_blob(snapshot)
     )
     return USER_PROMPT_TEMPLATE.format(
-        document_shapes=DOCUMENT_SHAPES,
+        document_shapes=document_shapes(),
         language_notes=notes,
         parser_json=json.dumps(snapshot, ensure_ascii=False, indent=2, default=str),
     )
