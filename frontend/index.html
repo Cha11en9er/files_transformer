@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=30" />
+  <link rel="stylesheet" href="/assets/styles.css?v=32" />
 </head>
 <body>
   <div class="app">
@@ -86,7 +86,7 @@
 
       <div class="files-badges" id="files-badges"></div>
       <div class="review-launch hidden" id="review-launch">
-        <button type="button" class="btn" id="btn-review">Что распозналось в PDF</button>
+        <button type="button" class="btn" id="btn-review">Что распозналось</button>
         <span id="model-review-meta" class="hint"></span>
       </div>
 
@@ -159,7 +159,7 @@
         </table>
       </div>
       <footer class="table-foot" id="table-foot" aria-label="Подсказка по работе с таблицей">
-        <p class="table-foot-main">Нажмите на строку, чтобы изменить позицию. Исходные файлы не меняются. Реквизиты документа - в блоке выше.</p>
+        <p class="table-foot-main">Нажмите «Изменить» или ячейку строки, чтобы править позицию. Исходные файлы не меняются. Реквизиты документа - в блоке выше.</p>
         <p class="table-foot-export">Проверьте таблицу и реквизиты, затем сформируйте Excel. Профиль 18233 даёт три книги, BEIJING - одну. PDF сервис не формирует.</p>
       </footer>
 
@@ -173,15 +173,21 @@
       <div id="edit-flags" class="edit-flags"></div>
       <p id="edit-sources" class="hint edit-sources"></p>
       <div id="edit-lots" class="edit-lots"></div>
-      <label>Артикул <input name="article" id="edit-article" /></label>
-      <label>Метры / кол-во <input name="qty" id="edit-qty" inputmode="decimal" /></label>
-      <label>Цена <input name="price" id="edit-price" inputmode="decimal" /></label>
-      <label>Сумма <input name="amount" id="edit-amount" inputmode="decimal" /></label>
-      <label>Нетто, кг <input name="net_weight" id="edit-net-weight" inputmode="decimal" /></label>
-      <label>Брутто, кг <input name="gross_weight" id="edit-gross-weight" inputmode="decimal" /></label>
-      <label>ТН ВЭД <input name="tnved_code" id="edit-tnved" /></label>
-      <label>Описание <input name="description_en" id="edit-desc-en" /></label>
-      <label>Описание (RU) <input name="description_ru" id="edit-desc-ru" /></label>
+      <div class="edit-grid">
+        <label>Артикул <input name="article" id="edit-article" /></label>
+        <label>Рулоны / места <input name="rolls" id="edit-rolls" inputmode="decimal" /></label>
+        <label>Метры / кол-во <input name="qty" id="edit-qty" inputmode="decimal" /></label>
+        <label>Ширина <input name="width" id="edit-width" inputmode="decimal" /></label>
+        <label>м² <input name="area" id="edit-area" inputmode="decimal" /></label>
+        <label>Нетто, кг <input name="net_weight" id="edit-net-weight" inputmode="decimal" /></label>
+        <label>Брутто, кг <input name="gross_weight" id="edit-gross-weight" inputmode="decimal" /></label>
+        <label>Цена <input name="price" id="edit-price" inputmode="decimal" /></label>
+        <label>Сумма <input name="amount" id="edit-amount" inputmode="decimal" /></label>
+        <label>HS <input name="hs_code" id="edit-hs" /></label>
+        <label>ТН ВЭД <input name="tnved_code" id="edit-tnved" /></label>
+        <label>Описание <input name="description_en" id="edit-desc-en" /></label>
+        <label>Описание (RU) <input name="description_ru" id="edit-desc-ru" /></label>
+      </div>
       <p id="edit-status" class="status" aria-live="polite"></p>
       <div class="actions">
         <button type="button" id="edit-cancel" class="btn">Отмена</button>
@@ -193,7 +199,7 @@
   <dialog id="review-dialog" class="review-dialog">
     <div class="review-dialog-head">
       <div>
-        <h3>Распознавание PDF</h3>
+        <h3 id="review-dialog-title">Распознавание файла</h3>
         <p id="review-dialog-meta" class="hint"></p>
       </div>
       <button type="button" class="btn" id="review-dialog-close">Закрыть</button>
@@ -202,6 +208,6 @@
     <div id="review-dialog-body" class="review-dialog-body"></div>
   </dialog>
 
-  <script src="/assets/app.js?v=38"></script>
+  <script src="/assets/app.js?v=40"></script>
 </body>
 </html>

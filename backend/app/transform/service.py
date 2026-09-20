@@ -202,9 +202,10 @@ def _read_sheets(path: str, display: str) -> tuple[list[ExtractedSheet], list[st
             texts.append(result.text)
         inherited_mapping: dict[int, str] | None = None
         inherited_role: str | None = None
+        stop_inherit = False
         for sheet in result.sheets:
             ex = extract_sheet(sheet)
-            if ex is None and inherited_mapping and mapping_fits_sheet(sheet, inherited_mapping):
+            if ex is None and inherited_mapping and not stop_inherit and mapping_fits_sheet(sheet, inherited_mapping):
                 ex = extract_sheet(
                     sheet,
                     inherited_mapping=inherited_mapping,
@@ -212,8 +213,14 @@ def _read_sheets(path: str, display: str) -> tuple[list[ExtractedSheet], list[st
                 )
             if ex:
                 sheets.append(ex)
-                inherited_mapping = ex.mapping
-                inherited_role = ex.role
+                if ex.stopped_at_total:
+                    stop_inherit = True
+                    inherited_mapping = None
+                    inherited_role = None
+                else:
+                    inherited_mapping = ex.mapping
+                    inherited_role = ex.role
+                    stop_inherit = False
         scanned = result.scanned
     elif suffix in IMAGE_SUFFIXES:
         scanned = True  # images are handled by the vision model, not here
@@ -321,24 +328,16 @@ def transform_paths(
                 input_sheets.append(ex)
             roles.append(ex.role)
         n = sum(len(ex.rows) for ex in sheets)
-        if is_scan_file:
-            result.files.append(FileOutcome(
-                filename=display,
-                status="ok" if n else "review",
-                message=(
-                    f"{n} позиций. Нажми файл, чтобы открыть таблицу."
-                    if n
-                    else "Таблица не собралась. Нажми файл, чтобы проверить распознавание."
-                ),
-                role_summary=", ".join(sorted(set(roles))),
-            ))
-        else:
-            result.files.append(FileOutcome(
-                filename=display,
-                status="ok",
-                message=None,
-                role_summary=", ".join(sorted(set(roles))),
-            ))
+        result.files.append(FileOutcome(
+            filename=display,
+            status="ok" if n else "review",
+            message=(
+                f"файл {display} обработан кодом, нашлось {n} позиций"
+                if n
+                else "Таблица не собралась."
+            ),
+            role_summary=", ".join(sorted(set(roles))),
+        ))
 
     if not input_sheets and scan_sheets:
         input_sheets = scan_sheets
@@ -452,6 +451,10 @@ def canonical_to_rows(items: list[CanonicalItem]) -> list[dict[str, Any]]:
             customs["hs_code"] = f["hs_code"]
         if f.get("customs_code"):
             customs["tnved_code"] = f["customs_code"]
+        if customs.get("tnved_code") and not customs.get("hs_code"):
+            customs["hs_code"] = customs["tnved_code"]
+        if customs.get("hs_code") and not customs.get("tnved_code"):
+            customs["tnved_code"] = customs["hs_code"]
         if desc_en:
             customs["description_en"] = desc_en
         if desc_ru:

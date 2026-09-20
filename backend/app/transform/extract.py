@@ -17,6 +17,7 @@ from typing import Any
 
 from app.parsing.header_extract import is_catalog_filename
 from app.parsing.normalize import normalize_article, normalize_text
+from app.parsing.product_row import is_plausible_article
 from app.transform.canonical import (
     NUMERIC_FIELDS,
     ColumnStat,
@@ -33,8 +34,28 @@ _TOTAL_RE = re.compile(r"^\s*(total|grand\s*total|итого|всего|genel\s*
 _DETAIL_SECTION_RE = re.compile(r"detail\s*packing|подробн", re.IGNORECASE)
 _NAKED_SECTION_RE = re.compile(r"^\s*(packing\s*list|invoice|specification|инвойс|упаковочн|спецификац)\s*$", re.IGNORECASE)
 _JUNK_RE = re.compile(
-    r"(terms of (?:delivery|payment)|bank name|swift|director|sold to|consignee|"
-    r"beneficiary|account\s*no|tel\s*:|fax\s*:|e-?mail|инн\b|огрн|б\/сч)",
+    r"(terms of (?:delivery|payment)|условия поставки|условия оплаты|"
+    r"bank name|bank address|current account|corr\.?\s*account|"
+    r"swift|director|sold to|consignee|recipient|"
+    r"beneficiary|account\s*no|tel\s*:|fax\s*:|e-?mail|"
+    r"инн\b|кпп\b|огрн|б\/сч|генеральн|покупатель оплач)",
+    re.IGNORECASE,
+)
+_GOODS_NUM_FIELDS = (
+    "qty",
+    "meters",
+    "area",
+    "price",
+    "amount",
+    "net_weight",
+    "gross_weight",
+    "rolls",
+    "boxes",
+)
+_HEADER_ARTICLE_TOKEN = re.compile(
+    r"^(?:model|series|art\.?|article|артикул|арт\.?|item|design|code|"
+    r"description|qty|quantity|netto|brutto|weight|origin|brand|"
+    r"manufacturer|серия|модель|наименован|фирма)$",
     re.IGNORECASE,
 )
 _PACKING_FIELDS = frozenset(
@@ -70,9 +91,11 @@ _LINE_FIELDS = (
 _SKU_NOTE_RE = re.compile(r"^[A-Za-z0-9]{1,12}(?:[._/-][A-Za-z0-9]{1,12}){1,4}$")
 _COMPONENT_HEADER_RE = re.compile(r"pallet|qty\s*/\s*ctn|qty/ctn", re.IGNORECASE)
 _HEADER_LABEL_ARTICLE = re.compile(
-    r"^(?:model|series|art\.?|article|артикул|item|design|code|description|"
-    r"qty|quantity|netto|brutto|weight|origin|brand|manufacturer)"
-    r"(?:\s*/\s*[\w./]+)*\.?$",
+    r"^(?:model|series|art\.?|article|артикул|арт\.?|item|design|code|description|"
+    r"qty|quantity|netto|brutto|weight|origin|brand|manufacturer|"
+    r"серия|модель|наименован|фирма)"
+    r"(?:[\s,/]+(?:model|series|art\.?|article|артикул|арт\.?|item|design|"
+    r"code|brand|серия|модель))*\.?$",
     re.IGNORECASE,
 )
 
@@ -101,6 +124,7 @@ class ExtractedSheet:
     component_rows: list[Row] = field(default_factory=list)  # post-TOTAL detail packing, not goods
     detail: bool = False             # per-roll detail sheet (aggregate by sum on merge)
     letterhead: list[list[str]] = field(default_factory=list)  # cells above the table header
+    stopped_at_total: bool = False
 
 
 def _cell(v: Any) -> str:
@@ -312,10 +336,25 @@ def _item_no(sheet: Sheet, r: int, mapping: dict[int, str]) -> int | None:
 
 
 def _is_header_label_article(article: str) -> bool:
-    text = (article or "").strip()
+    text = (article or "").strip().rstrip(".")
     if not text:
         return False
-    return bool(_HEADER_LABEL_ARTICLE.match(text))
+    if _HEADER_LABEL_ARTICLE.match(text):
+        return True
+    tokens = [tok for tok in re.split(r"[\s,/]+", text) if tok]
+    return bool(tokens) and all(_HEADER_ARTICLE_TOKEN.match(tok) for tok in tokens)
+
+
+def _has_goods_numbers(fields: dict[str, Any]) -> bool:
+    return any(isinstance(fields.get(key), (int, float)) for key in _GOODS_NUM_FIELDS)
+
+
+def _sheet_currency(header_text: str) -> str | None:
+    low = (header_text or "").lower()
+    for token, code in (("usd", "USD"), ("eur", "EUR"), ("cny", "CNY"), ("rmb", "CNY"), ("руб", "RUB")):
+        if token in low:
+            return code
+    return None
 
 
 def _continuation_start(sheet: Sheet, mapping: dict[int, str]) -> int:
@@ -340,6 +379,8 @@ def mapping_fits_sheet(sheet: Sheet, mapping: dict[int, str]) -> bool:
     hits = 0
     for r in range(sheet.nrows):
         fields, _inherited = _row_fields(sheet, r, mapping)
+        if not _has_goods_numbers(fields):
+            continue
         article = ""
         for c, name in mapping.items():
             if name == "article" and c < len(sheet.grid[r]):
@@ -347,8 +388,7 @@ def mapping_fits_sheet(sheet: Sheet, mapping: dict[int, str]) -> bool:
                 break
         if _is_header_label_article(article):
             continue
-        if article or any(fields.get(k) not in (None, "") for k in ("qty", "amount", "net_weight", "meters")):
-            hits += 1
+        hits += 1
         if hits >= 2:
             return True
     return False
@@ -372,6 +412,7 @@ def extract_sheet(
     role = inherited_role if used_inherited and inherited_role else classify_role(
         text, set(mapping.values()), source=sheet.source
     )
+    currency = _sheet_currency(text)
     article_col = next((c for c, f in mapping.items() if f == "article"), None)
     desc_col = next((c for c, f in mapping.items() if f == "description"), None)
     key_col = article_col if article_col is not None else desc_col
@@ -410,6 +451,7 @@ def extract_sheet(
             pending_children = []
             if _TOTAL_RE.match(first_cells) or _TOTAL_RE.match(joined):
                 after_total = True
+                ex.stopped_at_total = True
                 component_mode = False
                 continue
             if _DETAIL_SECTION_RE.search(joined):
@@ -472,6 +514,13 @@ def extract_sheet(
             continue
         if _is_header_label_article(article):
             continue
+        if role != "catalog" and not _has_goods_numbers(fields):
+            continue
+        if role != "catalog" and not is_plausible_article(article):
+            continue
+
+        if currency and fields.get("currency") in (None, ""):
+            fields["currency"] = currency
 
         pack_group = _pack_group_id(sheet, r, active_mapping)
         if pack_group:

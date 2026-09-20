@@ -78,7 +78,8 @@ SYNONYMS: dict[str, tuple[tuple[str, float], ...]] = {
         ("design", 4), ("дизайн", 4), ("model", 4), ("модель", 4), ("style", 4),
         ("sku", 6), ("art", 3), ("арт", 3), ("item", 3), ("desing", 4),
         ("series / art", 9), ("series/art", 9), ("model / series", 8),
-        ("model./series", 8),
+        ("model./series", 8), ("серия, арт", 9), ("модель, серия", 8),
+        ("модель,", 6),
     ),
     "color": (
         ("color/цвет", 9), ("colour", 8), ("цвет", 8), ("color", 8), ("renk", 8), ("colore", 8),
@@ -111,6 +112,7 @@ SYNONYMS: dict[str, tuple[tuple[str, float], ...]] = {
     "unit": (
         ("unit/единица", 10), ("единица измерения", 9), ("ед. измер", 8), ("ед.измер", 8),
         ("uom", 7), ("unit", 4), ("birim", 6), ("unità", 6),
+        ("ед.изм", 9), ("ед. изм", 9), ("pcs, pcg, set", 8),
     ),
     "price": (
         ("price per meter", 10), ("price per square meter", 10), ("price per 1 meter", 10),
@@ -119,10 +121,11 @@ SYNONYMS: dict[str, tuple[tuple[str, float], ...]] = {
         ("$/m", 8), ("单价", 8), ("unit price(rmb)", 10), ("price (cny)", 9),
         ("price per", 8), ("price", 4),
         ("цена", 4), ("fiyat", 5),
+        ("стоимость, usd", 9), ("стоимость ед", 8),
     ),
     "amount": (
         ("total price", 9), ("amount (cny)", 10), ("amount(rmb)", 10), ("amount / cтоимость", 10),
-        ("amount/ cтоимость", 10), ("стоимость", 8), ("сумма", 7), ("amount", 6),
+        ("amount/ cтоимость", 10), ("ст-сть", 10), ("стоимость", 8), ("сумма", 7), ("amount", 6),
         ("金额", 8), ("tutar", 7), ("line total", 7), ("цена, юан", 9), ("цена, долл", 9),
     ),
     "currency": (("currency", 8), ("валюта", 8), ("ccy", 6)),
@@ -169,7 +172,7 @@ SYNONYMS: dict[str, tuple[tuple[str, float], ...]] = {
     "gm": (("g/m", 8), ("g.m", 7), ("gsm", 8), ("г/м", 7), ("плотность", 6)),
     "manufacturer": (
         ("manufacturer", 9), ("производитель", 9), ("изготовитель", 9), ("maker", 7),
-        ("üretici", 8),
+        ("üretici", 8), ("фирма произв", 8),
     ),
     "country": (("country", 8), ("страна", 8), ("origin", 7), ("страна происх", 9)),
 }

@@ -22,6 +22,7 @@ const state = { shipmentId: null, workspace: null, selectedItemId: null, pending
 const extraFiles = new WeakSet();
 
 const $ = (sel) => document.querySelector(sel);
+const editField = (id) => document.getElementById(id);
 
 const ACCEPT_RE = /\.(xlsx|xls|xlsm|pdf|png|jpe?g|tif{1,2}|bmp|webp)$/i;
 const SKIP_PATH_PARTS = /(^|\/)(дс|ds|__macosx)(\/|$)/i;
@@ -489,9 +490,9 @@ async function processShipment() {
         const message = extra?.message;
         const stage = extra?.stage;
         if (message) {
-          label.textContent = message;
+          label.textContent = extra?.stage === "model" ? "идет вердикт" : message;
         } else if (stage === "model") {
-          label.textContent = filename ? `Модель читает: ${filename}` : "Модель анализирует файлы";
+          label.textContent = "идет вердикт";
         } else if (stage === "reconcile") {
           label.textContent = "Сверка позиций";
         } else {
@@ -500,13 +501,13 @@ async function processShipment() {
             : `Файл ${current} из ${total}`;
         }
         $("#upload-status").textContent = label.textContent;
-        if (stage === "model" && filename && !message?.includes("ожидание")) {
-          const exists = [...log.querySelectorAll("li")].some((li) => li.dataset.modelFile === filename);
+        if (stage === "model") {
+          const exists = [...log.querySelectorAll("li")].some((li) => li.dataset.verdict === "1");
           if (!exists) {
             const li = document.createElement("li");
             li.className = "model";
-            li.dataset.modelFile = filename;
-            li.textContent = `Модель: ${filename}`;
+            li.dataset.verdict = "1";
+            li.textContent = "идет вердикт";
             log.appendChild(li);
           }
         }
@@ -519,7 +520,7 @@ async function processShipment() {
         } else if (status === "review") {
           li.textContent = message ? `${filename}: ${message}` : `Нужна проверка: ${filename}`;
         } else {
-          li.textContent = message ? `${filename}: ${message}` : `Обработан: ${filename}`;
+          li.textContent = message || `файл ${filename} обработан кодом`;
         }
         log.appendChild(li);
       },
@@ -533,7 +534,20 @@ async function processShipment() {
       (skipped ? `, пропущено: ${skipped}` : "") +
       `, замечаний: ${created.warning_count}. Чтобы обработать другой комплект, обновите страницу.`;
     fill.style.width = "100%";
-    label.textContent = created.model_review?.status === "ok" ? "Модель ответила" : "Сверка завершена";
+    const reviewOk = created.model_review?.status === "ok";
+    label.textContent = reviewOk ? "идет вердикт" : "Сверка завершена";
+    if (reviewOk) {
+      (created.files || [])
+        .filter((f) => f.parse_status === "ok" && f.filename && f.filename !== "сверка")
+        .forEach((f) => {
+          const n = String(f.parse_message || "").match(/нашлось\s+(\d+)/i)?.[1]
+            || String(created.item_count || "");
+          const li = document.createElement("li");
+          li.className = "model";
+          li.textContent = `файл ${f.filename} обработан моделью, нашлось ${n} позиций`;
+          log.appendChild(li);
+        });
+    }
     setSessionLocked(true, { busy: false, buttonLabel: "Обработано" });
     renderWorkspace();
   } catch (err) {
@@ -617,7 +631,7 @@ const CELL_LIMIT = 50;
 function renderLongHtml(value) {
   const raw = value == null || value === "" ? "-" : String(value);
   if (raw === "-" || raw.length <= CELL_LIMIT) return escapeHtml(raw);
-  return `<span class="cell-clip">${escapeHtml(raw.slice(0, CELL_LIMIT))}…</span>`;
+  return `<span class="cell-short">${escapeHtml(raw.slice(0, CELL_LIMIT))}…</span><span class="cell-full">${escapeHtml(raw)}</span><button type="button" class="cell-hide" hidden>свернуть</button>`;
 }
 
 function longCellClass(value, extra) {
@@ -625,6 +639,18 @@ function longCellClass(value, extra) {
   const bits = [extra || ""];
   if (raw.length > CELL_LIMIT) bits.push("cell-long");
   return bits.join(" ").trim();
+}
+
+function longCell(value, extra) {
+  const raw = value == null || value === "" ? "-" : String(value);
+  const edit = extra === "article" ? "edit-article" : extra === "desc" ? "edit-desc-en" : "";
+  const editAttr = edit ? ` data-edit="${edit}"` : "";
+  return `<td class="${longCellClass(raw, extra)}" data-full="${escapeHtml(raw)}"${editAttr}>${renderLongHtml(raw)}</td>`;
+}
+
+function setModalScrollLock() {
+  const open = [...document.querySelectorAll("dialog")].some((dialog) => dialog.open);
+  document.documentElement.classList.toggle("modal-open", open);
 }
 
 function severityClass(errors) {
@@ -780,9 +806,22 @@ function contextCell(value) {
 }
 
 function recognizedRows(file) {
-  return (file?.table || []).filter(
-    (row) => row && (row.article || row.qty != null || row.amount != null || row.net_weight != null)
-  );
+  return (file?.table || []).filter((row) => {
+    if (!row) return false;
+    if (row.article || row.description || row.hs_code || row.customs_code) return true;
+    if (
+      row.qty != null ||
+      row.amount != null ||
+      row.net_weight != null ||
+      row.gross_weight != null ||
+      row.price != null ||
+      row.rolls != null ||
+      row.meters != null
+    ) {
+      return true;
+    }
+    return Object.keys(row.raw || {}).length > 0;
+  });
 }
 
 function renderRecognizedTable(rows) {
@@ -805,7 +844,7 @@ function renderRecognizedTable(rows) {
         <td class="num">${contextCell(row.net_weight)}</td>
         <td class="num">${contextCell(row.gross_weight)}</td>
         <td class="code">${escapeHtml(code || "-")}</td>
-        <td class="${longCellClass(desc)}">${renderLongHtml(desc)}</td>
+        ${longCell(desc)}
       </tr>`;
     })
     .join("");
@@ -909,7 +948,7 @@ function renderReviewMeta(ws, review) {
   if (launch) launch.classList.toggle("hidden", !files.length);
   if (!reviewMeta) return;
   if (!review) {
-    reviewMeta.textContent = files.length ? "Нажми файл или кнопку, чтобы открыть таблицу." : "";
+    reviewMeta.textContent = "";
     return;
   }
   const bits = [];
@@ -919,16 +958,40 @@ function renderReviewMeta(ws, review) {
   reviewMeta.textContent = bits.join(" · ");
 }
 
+function sourceKind(file) {
+  const name = String(file?.filename || "").toLowerCase();
+  if (file?.kind === "pdf" || name.endsWith(".pdf")) return "PDF";
+  if (/\.(xlsx|xls|xlsm)$/.test(name) || file?.kind === "excel") return "Excel";
+  return "Файл";
+}
+
+function findReviewFile(files, filename) {
+  if (!filename) return files[0] || null;
+  const wanted = String(filename).toLowerCase();
+  return (
+    files.find((file) => String(file.filename || "").toLowerCase() === wanted) ||
+    files.find((file) => wanted.endsWith(String(file.filename || "").toLowerCase())) ||
+    files.find((file) => String(file.filename || "").toLowerCase().endsWith(wanted)) ||
+    null
+  );
+}
+
 function renderFilePane(file) {
   const pages = (file.pages || []).length ? `стр. ${(file.pages || []).join(", ")}` : "";
+  const sheets = (file.sheets || []).length ? `листы: ${(file.sheets || []).join(", ")}` : "";
   const n = recognizedRows(file).length;
-  const kind = file.kind === "pdf" || String(file.filename || "").toLowerCase().endsWith(".pdf") ? "PDF" : "Excel";
+  const kind = sourceKind(file);
+  const preview =
+    !n && file.text
+      ? `<pre class="review-text">${escapeHtml(String(file.text).slice(0, 6000))}</pre>`
+      : "";
   return `
     <div class="review-file-meta">
       <strong>${escapeHtml(kind)} ${escapeHtml(file.filename || "")}</strong>
-      <span class="hint">${escapeHtml([pages, `${n} строк`].filter(Boolean).join(" · "))}</span>
+      <span class="hint">${escapeHtml([pages || sheets, file.meaning, `${n} строк`].filter(Boolean).join(" · "))}</span>
     </div>
     ${renderRecognizedTable(file.table)}
+    ${preview}
   `;
 }
 
@@ -939,9 +1002,9 @@ function fillReviewDialog(ws, filename) {
   if (!tabs || !body) return;
   const review = ws.model_review;
   const { files } = reviewSources(ws);
-  const wanted = filename
-    ? files.find((file) => String(file.filename || "").toLowerCase() === String(filename).toLowerCase())
-    : files[0];
+  const wanted = findReviewFile(files, filename);
+  const title = $("#review-dialog-title");
+  if (title) title.textContent = wanted ? `Распознавание ${sourceKind(wanted)}` : "Распознавание файла";
   tabs.innerHTML = files
     .map((file) => {
       const n = recognizedRows(file).length;
@@ -978,6 +1041,7 @@ function openReviewPanel(filename) {
   if (!dialog) return;
   fillReviewDialog(ws, filename);
   if (typeof dialog.showModal === "function") dialog.showModal();
+  setModalScrollLock();
 }
 
 function applyScanToItem(hit) {
@@ -1058,7 +1122,7 @@ function renderExportPreview(data) {
             const cells = (row || [])
               .map((cell) => {
                 const text = cell == null || cell === "" ? "-" : String(cell);
-                return `<td class="${longCellClass(text)}" data-full="${escapeHtml(text)}">${renderLongHtml(text)}</td>`;
+                return longCell(text);
               })
               .join("");
             return `<tr>${cells}</tr>`;
@@ -1142,24 +1206,27 @@ function renderWorkspace() {
   badges.innerHTML = "";
   (ws.files || []).forEach((f) => {
     const parseStatus = f.parse_status || "ok";
-    const isPdf = String(f.filename || "").toLowerCase().endsWith(".pdf");
-    const clickable = parseStatus === "review" || isPdf;
+    const name = String(f.filename || "").toLowerCase();
+    const isPdf = name.endsWith(".pdf");
+    const isExcel = /\.(xlsx|xls|xlsm)$/.test(name);
+    const clickable = parseStatus !== "skipped" && (isPdf || isExcel || parseStatus === "review");
     const span = document.createElement(clickable ? "button" : "span");
     span.type = clickable ? "button" : undefined;
     span.className = `badge ${f.doc_type ? "" : "unknown"} ${parseStatus === "ok" ? "" : parseStatus} ${clickable ? "clickable" : ""}`.trim();
-    const typeRu = DOC_TYPE_RU[f.doc_type] || (isPdf ? "PDF" : "Не определен");
+    const typeRu = DOC_TYPE_RU[f.doc_type] || (isPdf ? "PDF" : isExcel ? "Excel" : "Не определен");
     const ocrHint =
       f.ocr_confidence != null ? ` · распознавание ${Math.round(Number(f.ocr_confidence) * 100)}%` : "";
     let statusHint = "";
     if (parseStatus === "skipped") statusHint = " · пропущен";
     else if (parseStatus === "review") statusHint = " · требуется проверка";
-    span.title = f.parse_message || (clickable ? "Открыть таблицу распознавания" : "");
+    else if (clickable) statusHint = " · таблица";
+    span.title = f.parse_message || (clickable ? "Открыть, как распознался файл" : "");
     span.setAttribute("aria-controls", "review-dialog");
     span.textContent = `${f.filename} - ${typeRu}${ocrHint}${statusHint}`;
     if (clickable) {
       span.addEventListener("click", (event) => {
         event.preventDefault();
-        openReviewPanel(isPdf ? f.filename : null);
+        openReviewPanel(f.filename);
       });
     }
     badges.appendChild(span);
@@ -1200,34 +1267,45 @@ function renderWorkspace() {
     const errs = item.validation_errors || [];
     tr.className = `item-row ${severityClass(errs)}`.trim();
     tr.dataset.id = item.id;
-    tr.title = "Нажмите, чтобы изменить позицию";
+    tr.title = "Нажмите ячейку или «Изменить», чтобы править позицию";
     const desc = u.description || u.description_ru || u.description_en || "-";
     tr.innerHTML = `
       <td class="row-no">${idx + 1}</td>
-      <td class="${longCellClass(item.article, "article")}" data-full="${escapeHtml(item.article || "-")}">${renderLongHtml(item.article || "-")}</td>
-      <td class="num ${fieldSeverity(errs, "rolls")}">${formatNum(p.rolls ?? p.boxes, 0)}</td>
-      <td class="num ${fieldSeverity(errs, "meters")}">${formatNum(p.meters ?? c.qty)}</td>
-      <td class="num ${fieldSeverity(errs, "width")}">${formatNum(p.width, 3)}</td>
-      <td class="num ${fieldSeverity(errs, "area")}">${formatNum(p.area, 3)}</td>
-      <td class="num ${fieldSeverity(errs, "net_weight")}">${formatNum(p.net_weight)}</td>
-      <td class="num ${fieldSeverity(errs, "gross_weight")}">${formatNum(p.gross_weight)}</td>
-      <td class="money ${fieldSeverity(errs, "price")}">${formatMoney(c.price)}</td>
-      <td class="money ${fieldSeverity(errs, "amount")}">${formatMoney(c.amount)}</td>
-      <td class="code ${fieldSeverity(errs, "hs_code")}">${escapeHtml(u.hs_code || "-")}</td>
-      <td class="code ${fieldSeverity(errs, "tnved_code")}">${escapeHtml(u.tnved_code || "-")}</td>
-      <td class="${longCellClass(desc, "desc")}" data-full="${escapeHtml(desc)}">${renderLongHtml(desc)}</td>
-      <td class="flags-cell">${renderFlags(errs)}</td>
+      ${longCell(item.article || "-", "article")}
+      <td class="num ${fieldSeverity(errs, "rolls")}" data-edit="edit-rolls">${formatNum(p.rolls ?? p.boxes, 0)}</td>
+      <td class="num ${fieldSeverity(errs, "meters")}" data-edit="edit-qty">${formatNum(p.meters ?? c.qty)}</td>
+      <td class="num ${fieldSeverity(errs, "width")}" data-edit="edit-width">${formatNum(p.width, 3)}</td>
+      <td class="num ${fieldSeverity(errs, "area")}" data-edit="edit-area">${formatNum(p.area, 3)}</td>
+      <td class="num ${fieldSeverity(errs, "net_weight")}" data-edit="edit-net-weight">${formatNum(p.net_weight)}</td>
+      <td class="num ${fieldSeverity(errs, "gross_weight")}" data-edit="edit-gross-weight">${formatNum(p.gross_weight)}</td>
+      <td class="money ${fieldSeverity(errs, "price")}" data-edit="edit-price">${formatMoney(c.price)}</td>
+      <td class="money ${fieldSeverity(errs, "amount")}" data-edit="edit-amount">${formatMoney(c.amount)}</td>
+      <td class="code ${fieldSeverity(errs, "hs_code")}" data-edit="edit-hs">${escapeHtml(u.hs_code || "-")}</td>
+      <td class="code ${fieldSeverity(errs, "tnved_code")}" data-edit="edit-tnved">${escapeHtml(u.tnved_code || "-")}</td>
+      ${longCell(desc, "desc")}
+      <td class="flags-cell">
+        <button type="button" class="btn compact-btn item-edit-btn" data-edit-item="${escapeHtml(item.id)}">Изменить</button>
+        ${renderFlags(errs)}
+      </td>
     `;
     tbody.appendChild(tr);
   });
   fillExcelTotals(ws.items || []);
 }
 
-$("#items-table").addEventListener("click", (e) => {
-  if (e.target.closest(".cell-clip, .cell-hide, td.cell-long.is-open")) return;
+function toggleLongCell(td, open) {
+  if (!td?.classList.contains("cell-long")) return;
+  td.classList.toggle("is-open", open);
+  const hide = td.querySelector(".cell-hide");
+  if (hide) hide.hidden = !td.classList.contains("is-open");
+}
+
+$("#items-table")?.addEventListener("click", (e) => {
+  if (e.target.closest(".cell-short, .cell-hide")) return;
   const row = e.target.closest("tbody tr.item-row");
   if (!row?.dataset.id) return;
-  openEdit(row.dataset.id);
+  const focusId = e.target.closest("[data-edit]")?.dataset.edit || "";
+  openEdit(row.dataset.id, focusId);
 });
 
 document.addEventListener("click", (e) => {
@@ -1235,22 +1313,14 @@ document.addEventListener("click", (e) => {
   if (hide) {
     e.preventDefault();
     e.stopPropagation();
-    const td = hide.closest("td");
-    if (!td) return;
-    const full = td.dataset.full || "";
-    td.classList.remove("is-open");
-    td.innerHTML = renderLongHtml(full);
+    toggleLongCell(hide.closest("td.cell-long"), false);
     return;
   }
-  const clip = e.target.closest(".cell-clip");
-  if (!clip) return;
+  const short = e.target.closest(".cell-short");
+  if (!short) return;
   e.preventDefault();
   e.stopPropagation();
-  const td = clip.closest("td");
-  if (!td) return;
-  const full = td.dataset.full || clip.textContent || "";
-  td.classList.add("is-open");
-  td.innerHTML = `<span class="cell-full">${escapeHtml(full)}</span><button type="button" class="cell-hide">скрыть</button>`;
+  toggleLongCell(short.closest("td.cell-long"), true);
 });
 
 $("#review-dialog")?.addEventListener("click", (e) => {
@@ -1272,6 +1342,18 @@ $("#review-dialog")?.addEventListener("click", (e) => {
 
 $("#btn-review")?.addEventListener("click", () => openReviewPanel());
 $("#review-dialog-close")?.addEventListener("click", () => $("#review-dialog")?.close());
+document.querySelectorAll("dialog").forEach((dialog) => {
+  dialog.addEventListener("close", setModalScrollLock);
+});
+document.addEventListener(
+  "wheel",
+  (event) => {
+    if (!document.documentElement.classList.contains("modal-open")) return;
+    if (event.target.closest("dialog")) return;
+    event.preventDefault();
+  },
+  { passive: false }
+);
 
 function editFlagHtml(errors) {
   const active = (errors || []).filter((e) => !e.resolved);
@@ -1325,7 +1407,7 @@ function editLotsHtml(item) {
     <table><thead><tr><th>№</th><th class="num">Кол-во</th><th>Сумма</th><th class="num">Нетто</th><th class="num">Брутто</th><th>Упаковка</th></tr></thead><tbody>${body.join("")}</tbody></table>`;
 }
 
-function openEdit(itemId) {
+function openEdit(itemId, focusId) {
   if (!state.workspace?.items) {
     alert("Сначала загрузите и обработайте документы.");
     return;
@@ -1338,11 +1420,15 @@ function openEdit(itemId) {
   state.selectedItemId = itemId;
   editField("edit-item-id").value = itemId;
   editField("edit-article").value = item.article || "";
+  editField("edit-rolls").value = item.packing_data?.rolls ?? item.packing_data?.boxes ?? "";
   editField("edit-qty").value = item.packing_data?.meters ?? item.commercial_data?.qty ?? "";
+  editField("edit-width").value = item.packing_data?.width ?? "";
+  editField("edit-area").value = item.packing_data?.area ?? "";
   editField("edit-price").value = item.commercial_data?.price ?? "";
   editField("edit-amount").value = item.commercial_data?.amount ?? "";
   editField("edit-net-weight").value = item.packing_data?.net_weight ?? "";
   editField("edit-gross-weight").value = item.packing_data?.gross_weight ?? "";
+  editField("edit-hs").value = item.customs_data?.hs_code ?? "";
   editField("edit-tnved").value = item.customs_data?.tnved_code ?? "";
   editField("edit-desc-en").value =
     item.customs_data?.description ?? item.customs_data?.description_en ?? "";
@@ -1361,6 +1447,14 @@ function openEdit(itemId) {
   const lotsEl = $("#edit-lots");
   if (lotsEl) lotsEl.innerHTML = editLotsHtml(item);
   $("#edit-dialog").showModal();
+  setModalScrollLock();
+  const focusEl = focusId ? editField(focusId) : editField("edit-article");
+  if (focusEl && typeof focusEl.focus === "function") {
+    requestAnimationFrame(() => {
+      focusEl.focus();
+      if (typeof focusEl.select === "function") focusEl.select();
+    });
+  }
 }
 
 async function saveEditedItem() {
@@ -1384,11 +1478,16 @@ async function saveEditedItem() {
       amount: numOrNull(editField("edit-amount").value),
     },
     packing_data: {
+      rolls: numOrNull(editField("edit-rolls").value),
+      boxes: numOrNull(editField("edit-rolls").value),
       meters: numOrNull(editField("edit-qty").value),
+      width: numOrNull(editField("edit-width").value),
+      area: numOrNull(editField("edit-area").value),
       net_weight: numOrNull(editField("edit-net-weight").value),
       gross_weight: numOrNull(editField("edit-gross-weight").value),
     },
     customs_data: {
+      hs_code: editField("edit-hs").value || null,
       tnved_code: editField("edit-tnved").value || null,
       description: editField("edit-desc-en").value || null,
       description_en: editField("edit-desc-en").value || null,

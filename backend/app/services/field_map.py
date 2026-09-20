@@ -40,6 +40,8 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "series / art",
         "series/art",
         "model / series",
+        "серия, арт",
+        "модель, серия",
         "pattern",
         "desen adı",
         "desen adi",
@@ -294,7 +296,7 @@ def classify_header(header: str) -> str | None:
         return "article"
     if "art no" in h or re.search(r"(^|[^a-z])art\.?\s*no", h):
         return "article"
-    if "series / art" in h or "series/art" in h or "model / series" in h:
+    if "series / art" in h or "series/art" in h or "model / series" in h or "серия, арт" in h:
         return "article"
     if any(
         tok in h

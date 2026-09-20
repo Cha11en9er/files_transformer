@@ -82,6 +82,8 @@ def is_plausible_article(value: str | None) -> bool:
         "rolls",
         "series / art.",
         "series / art",
+        "серия, арт.",
+        "серия, арт",
         "model / series / art.",
         "model./series / art.",
         "brand",
@@ -91,9 +93,9 @@ def is_plausible_article(value: str | None) -> bool:
     }:
         return False
     if re.fullmatch(
-        r"(?:model|series|art\.?|article|артикул|item|design|code|description|"
-        r"qty|quantity|netto|brutto|weight|origin|brand)"
-        r"(?:\s*/\s*[\w./]+)*\.?",
+        r"(?:model|series|art\.?|article|артикул|арт\.?|item|design|code|description|"
+        r"qty|quantity|netto|brutto|weight|origin|brand|серия|модель)"
+        r"(?:[\s,/]+(?:model|series|art\.?|article|артикул|арт\.?|item|design|code|brand|серия|модель))*\.?",
         low,
     ):
         return False

@@ -13,6 +13,15 @@ from typing import Any
 
 from app.parsing.normalize import normalize_text
 
+_LOOKALIKE = str.maketrans(
+    "АВЕКМНОРСТХавекмнорстх",
+    "ABEKMHOPCTXabekmhopctx",
+)
+
+
+def _fold_lookalikes(text: str) -> str:
+    return (text or "").translate(_LOOKALIKE)
+
 HEADER_KEYS = (
     "buyer",
     "seller",
@@ -33,17 +42,18 @@ HEADER_KEYS = (
 _CATALOG_NAME = re.compile(r"сводн|справоч|catalog|\bописание\b", re.I)
 
 _INVOICE_NO = re.compile(
-    r"(?:inv\.?\s*no\.?|invoice\s*(?:no\.?|nr\.?|number)|инвойс\s*№|发票(?:号|号码)?)"
-    r"[\s|:：.]*([A-Z0-9][A-Z0-9._/-]{2,})",
+    r"(?:inv\.?\s*no\.?|invoice\s*(?:no\.?|nr\.?|number)|invoice\s*:|to\s+invoice|"
+    r"инвойс\s*№|发票(?:号|号码)?)"
+    r"[\s|:：.]*([A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9._/-]{2,})",
     re.I,
 )
 _CONTRACT_NO = re.compile(
-    r"(?:contract(?:/контракт)?|контракт)\s*(?:no\.?|№|#)?"
-    r"[\s|:：.]*([A-Z0-9][A-Z0-9._/-]{1,})",
+    r"(?:contract(?:/контракт)?|контракт(?:у|а|е)?)\s*(?:no\.?|№|#|:)"
+    r"[\s|:：.]*([A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9._/-]{1,})",
     re.I,
 )
 _CONTRACT_DATED = re.compile(
-    r"(?:dd|dated|от|date)[\s|:：.]*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})",
+    r"(?:dd|dated|(?<![A-Za-zА-Яа-яЁё])от)[\s|:：.]*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})",
     re.I,
 )
 _DATE_VALUE = (
@@ -56,26 +66,29 @@ _DATE_LABEL = re.compile(
 )
 _DATE_STEAL = re.compile(r"(?:delivery|b/?l|bill of|etd|eta)\s*$", re.I)
 _BUYER = re.compile(
-    r"(?:buyer|покупатель|\bto\b)[\s|:：./]*([^\n|]{3,400})",
+    r"(?:(?:the\s+)?buyer|покупатель|to)\s*[:：]\s*([^\n|]{0,400})",
     re.I,
 )
 _SELLER = re.compile(
-    r"(?:seller|продавец|exporter|\bshipper\b)[\s|:：./]*([^\n|]{3,400})",
+    r"(?:(?:the\s+)?seller|продавец|exporter|shipper)\s*[:：]\s*([^\n|]{0,400})",
     re.I,
 )
 _PARTY_LABEL_CELL = re.compile(
-    r"^(buyer|seller|покупатель|продавец|to)(?:\s*/\s*(?:покупатель|продавец))?\s*[:.：]?\s*(.*)$",
+    r"^(?:the\s+)?(buyer|seller|покупатель|продавец|to)(?:\s*/\s*(?:покупатель|продавец))?\s*[:.：]?\s*(.*)$",
     re.I | re.S,
 )
 _GRID_VALUE_LABELS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"^(?:inv\.?\s*no\.?|invoice\s*(?:no\.?|nr\.?|number)|инв(?:ойс)?\s*(?:номер|№)|инв\s*номер)\s*:?$", re.I), "invoice_no"),
+    (re.compile(r"^(?:inv\.?\s*no\.?|invoice\s*(?:no\.?|nr\.?|number)|инв(?:ойс)?\s*(?:номер|№)|инв\s*номер|invoice)\s*:?$", re.I), "invoice_no"),
     (re.compile(r"^(?:invoice\s*date|дата(?:\s*инв(?:ойса)?)?)\s*:?$", re.I), "invoice_date"),
     (re.compile(r"^date\s*:?$", re.I), "invoice_date"),
     (re.compile(r"^дата\s*:?$", re.I), "invoice_date"),
     (re.compile(r"^(?:container\s*(?:no\.?|number)?|контейнер)\s*:?$", re.I), "container_no"),
+    (re.compile(r"^(?:contract(?:\s*(?:no\.?|№|#))?|контракт(?:\s*№)?)\s*:?$", re.I), "contract_no"),
 )
 _ADDRESS_HINT = re.compile(
-    r"(?:\d{5,6}|OGRN|ОГРН|TIN|INN|ИНН|KPP|КПП|street|avenue|road|district|region|city|province|china)",
+    r"(?:\d{5,6}|OGRN|ОГРН|TIN|INN|ИНН|KPP|КПП|street|\bst\.|str\.|avenue|road|"
+    r"district|region|city|province|china|hong\s*kong|hongkong|address\s*:|"
+    r"bldg|building|apt\.?|office|room|ул\.|д\.)",
     re.I,
 )
 _MANUFACTURER = re.compile(
@@ -100,15 +113,34 @@ _CONTAINER = re.compile(
     re.I,
 )
 _INCOTERMS = re.compile(
-    r"\b(EX-WORKS?|EXW|FCA|FOB|CIF|CFR)\b(?:\s+[A-Za-zА-Яа-яЁё/,-]{2,40})?",
+    r"\b(EX-WORKS?|EXW|FCA|FAS|FOB|CFR|CIF|CPT|CIP|DAP|DPU|DDP|DAT|DDU)\b"
+    r"(?:\s+[A-Za-zА-Яа-яЁё/,-]{2,40})?"
+    r"(?:\s*\(\s*Incoterms?\s*[^)]{2,24}\))?",
+    re.I,
+)
+_INCOTERM_CODE = re.compile(
+    r"^(EX-WORKS?|EXW|FCA|FAS|FOB|CFR|CIF|CPT|CIP|DAP|DPU|DDP|DAT|DDU)\b",
     re.I,
 )
 _COMPANY = re.compile(
-    r"([A-Z][A-Z0-9 .,&'’/-]{6,}(?:CO\.,?\s*LTD\.?|LLC|A\.?\s*Ş\.?|A\.S\.|SRL|GMBH|SANAYI[^\n|]{0,40}))",
+    r"("
+    r"(?:LLC|ООО)\s+[A-ZА-ЯЁ0-9\"«][A-ZА-ЯЁ0-9\"«»'’.-]{0,40}"
+    r"|"
+    r"[A-Z][A-Z0-9 .,&'’/-]{3,80}?(?:COMPANY\s+LIMITED|CO\.,?\s*LTD\.?|LIMITED|GMBH|SANAYI[^\n|]{0,20}|A\.?\s*Ş\.?|A\.S\.|SRL|LLC)\b"
+    r")",
     re.I,
 )
 _SKIP_VALUE = re.compile(
     r"^(buyer|seller|date|invoice|contract|add|address|tel|fax|:|-)?$",
+    re.I,
+)
+_ROLE_ONLY = re.compile(
+    r"^(?:the\s+)?(?:buyer|seller|recipient|consignee|shipper|exporter|manufacturer|"
+    r"delivery(?:\s+basis)?|address|add|покупатель|продавец|получатель)$",
+    re.I,
+)
+_HEADERISH = re.compile(
+    r"\b(?:weight|price|amount|qty|quantity|description|brand|netto|brutto|origin)\b",
     re.I,
 )
 
@@ -155,12 +187,19 @@ def _clean_party(raw: str | None) -> str | None:
     text = re.sub(r"\s+", " ", normalize_text(text)).strip()
     text = re.split(r"\s*/\s*\d{3,}", text, maxsplit=1)[0]
     text = re.split(
-        r"\s+(?:\d{5,}|OGRN|ОГРН|TIN|INN|ИНН|KPP|КПП|Address|Add:|Russian Federation|Российск|Italy|Italia|Turkey|T[uü]rkiye|China)",
+        r"\s+(?:\d{5,}|OGRN|ОГРН|TIN|INN|ИНН|KPP|КПП|Address|Add:|Russian Federation|Российск|Italy|Italia|Turkey|T[uü]rkiye|China|"
+        r"THE\s+DELIVERY|THE\s+BUYER|THE\s+SELLER|RECIPIENT|CONTRACT|SPECIFICATIONS)\b",
         text,
         maxsplit=1,
         flags=re.I,
     )[0]
-    return text[:160] if text else None
+    if not text:
+        return None
+    parts = text.split()
+    half = len(parts) // 2
+    if half >= 2 and len(parts) == half * 2 and parts[:half] == parts[half:]:
+        text = " ".join(parts[:half])
+    return text[:160] if text and not _is_role_only(text) else None
 
 
 def _split_party_block(raw: str | None) -> tuple[str | None, str | None]:
@@ -194,15 +233,61 @@ def _split_party_block(raw: str | None) -> tuple[str | None, str | None]:
     return name, address or None
 
 
+_GLUED_ADDRESS_LABEL = re.compile(
+    r"\b(?:CONTRACT|THE BUYER|THE SELLER|INVOICE|SPECIFICATIONS|BANK:|SWIFT:)\b",
+    re.I,
+)
+
+
 def _clean_address(raw: str | None) -> str | None:
     if not raw:
         return None
     text = str(raw).replace("\\n", "\n")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" *\n *", "\n", text).strip(" :：|/")
+    text = re.sub(r"^(?:address\s*:?\s*)+", "", text, flags=re.I)
+    text = _GLUED_ADDRESS_LABEL.split(text, maxsplit=1)[0]
+    text = text.strip(" :：|/,")
     if len(text) < 6:
         return None
     return text
+
+
+def split_party_address(text: str | None, *, seller: bool) -> str | None:
+    """Pick seller vs buyer chunk when PDF glued both Address: blocks into one line."""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    raw = re.sub(r"^(?:address\s*:?\s*)+", "", raw, flags=re.I)
+    chunks = [c.strip(" :") for c in re.split(r"\baddress\s*:", raw, flags=re.I) if c.strip()]
+    if not chunks:
+        chunks = [raw]
+
+    def _score(chunk: str) -> int:
+        low = chunk.lower()
+        ru = 1 if re.search(r"\b(?:inn|kpp|moscow|моск|подольск|podolsk)\b", low) else 0
+        overseas = 1 if re.search(r"\b(?:hong\s*kong|hongkong|china|trend ctr)\b", low) else 0
+        bank = 1 if re.search(r"\b(?:bank|swift|account)\b", low) else 0
+        if seller:
+            return overseas * 3 - ru * 2 - bank
+        return ru * 3 - overseas * 2 - bank
+
+    chunks.sort(key=lambda chunk: (_score(chunk), len(chunk)), reverse=True)
+    chosen = chunks[0]
+    chosen = re.split(r"\b(?:bank|swift|inn\b|kpp\b)\b", chosen, maxsplit=1, flags=re.I)[0]
+    chosen = chosen.strip(" ,;")
+    if "\n" in chosen:
+        first, rest = chosen.split("\n", 1)
+        first = first.strip()
+        rest = rest.strip()
+        leftover = bool(rest) and len(rest) <= 24 and not re.search(
+            r"\b(?:ogrn|огрн|tin|inn|инн|kpp|кпп|\d{5,6}|street|road|region|st\.|bldg|apt)\b",
+            rest,
+            re.I,
+        )
+        if leftover and first and _ADDRESS_HINT.search(first) and len(first) >= 12:
+            chosen = first
+    return chosen[:240] or None
 
 
 def _address_followup(blob: str, end: int) -> str | None:
@@ -214,11 +299,33 @@ def _address_followup(blob: str, end: int) -> str | None:
             if lines:
                 break
             continue
-        if re.match(r"^(buyer|seller|inv\.?|invoice|contract|date|packing|ex-work|no\.|specification)\b", line, re.I):
+        if re.match(r"^address\s*:", line, re.I):
+            cut = _GLUED_ADDRESS_LABEL.split(line, maxsplit=1)[0].strip(" :，,")
+            if cut:
+                lines.append(cut)
+            if len(lines) >= 3:
+                break
+            continue
+        if re.match(
+            r"^(buyer|seller|inv\.?|invoice|contract|date|packing|ex-work|"
+            r"specification|recipient|the\s+buyer|the\s+seller|terms of|"
+            r"bank|inn\b|swift|account|kpp\b|bic\b)\b",
+            line,
+            re.I,
+        ):
             break
-        if _ADDRESS_HINT.search(line) or lines:
-            lines.append(line)
-        else:
+        if _is_role_only(line):
+            continue
+        if _COMPANY.search(line):
+            continue
+        cut = _GLUED_ADDRESS_LABEL.split(line, maxsplit=1)[0].strip(" :，,")
+        if _ADDRESS_HINT.search(cut or line):
+            if cut:
+                lines.append(cut)
+            if len(lines) >= 3:
+                break
+            continue
+        if lines:
             break
     return "\n".join(lines).strip() or None
 
@@ -227,10 +334,10 @@ def _clean_invoice_no(raw: str | None) -> str | None:
     text = _clean_value(raw)
     if not text:
         return None
-    match = re.search(r"([A-Z0-9][A-Z0-9._/-]{2,})", text, re.I)
+    match = re.search(r"([A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9._/-]{2,})", text, re.I)
     if not match:
         return None
-    value = match.group(1).strip(" .")
+    value = _fold_lookalikes(match.group(1)).strip(" .")
     if value.upper() in {"NO", "NR", "DATE", "INV"}:
         return None
     return value
@@ -245,14 +352,72 @@ def _clean_contract_no(raw: str | None) -> str | None:
     text = text.strip(" :：/")
     if len(text) < 2 or text.upper() in {"NO", "№"}:
         return None
-    return text[:80]
+    if not re.search(r"\d", text):
+        return None
+    if re.fullmatch(r"(?:in|of|the|and|to|for|this|case|no|nr)", text, re.I):
+        return None
+    return _fold_lookalikes(text)[:80]
+
+
+def _is_role_only(text: str | None) -> bool:
+    cleaned = re.sub(r"[:：].*$", "", text or "").strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return bool(cleaned) and bool(_ROLE_ONLY.match(cleaned))
+
+
+def _companies_on_line(line: str) -> list[str]:
+    found: list[str] = []
+    for match in _COMPANY.finditer(line or ""):
+        name = _clean_party(match.group(1))
+        if name and name not in found:
+            found.append(name)
+    return found
+
+
+def _party_from_match(blob: str, match: re.Match[str], *, role: str) -> tuple[str | None, str | None]:
+    name, addr = _split_party_block(match.group(1))
+    if name and not _is_role_only(name):
+        return _prefer_party_name(name, match.group(1), role), addr
+    rest = blob[match.end() :]
+    for line in rest.splitlines():
+        line = line.strip(" |")
+        if not line:
+            continue
+        name, addr = _split_party_block(line)
+        picked = _prefer_party_name(name, line, role)
+        if picked and not _is_role_only(picked):
+            return picked, addr
+        break
+    return None, None
+
+
+def _prefer_party_name(name: str | None, line: str, role: str) -> str | None:
+    companies = _companies_on_line(line)
+    if role == "buyer":
+        llcs = [item for item in companies if re.search(r"\b(?:LLC|ООО)\b", item, re.I)]
+        if llcs:
+            return llcs[0]
+    if role == "seller":
+        corps = [
+            item
+            for item in companies
+            if re.search(r"\b(?:LIMITED|LTD|CO\.|GMBH|SANAYI)\b", item, re.I)
+            and not re.search(r"\b(?:LLC|ООО)\b", item, re.I)
+        ]
+        if corps:
+            return corps[0]
+    return name
 
 
 def _hits_from_text(blob: str) -> dict[str, list[str]]:
     hits: dict[str, list[str]] = defaultdict(list)
 
     def add(key: str, value: str | None) -> None:
-        if key in {"buyer_address", "seller_address", "warehouse_address"}:
+        if key == "seller_address":
+            cleaned = split_party_address(value, seller=True) or _clean_address(value)
+        elif key == "buyer_address":
+            cleaned = split_party_address(value, seller=False) or _clean_address(value)
+        elif key in {"buyer_address", "seller_address", "warehouse_address"}:
             cleaned = _clean_address(value)
         else:
             cleaned = _clean_value(value)
@@ -271,15 +436,18 @@ def _hits_from_text(blob: str) -> dict[str, list[str]]:
             continue
         add("invoice_date", match.group(1))
     for match in _BUYER.finditer(blob):
-        name, addr = _split_party_block(match.group(1))
+        name, addr = _party_from_match(blob, match, role="buyer")
         add("buyer", name)
         add("buyer_address", addr or _address_followup(blob, match.end()))
     for match in _SELLER.finditer(blob):
-        name, addr = _split_party_block(match.group(1))
+        name, addr = _party_from_match(blob, match, role="seller")
         add("seller", name)
         add("seller_address", addr or _address_followup(blob, match.end()))
     for match in _MANUFACTURER.finditer(blob):
-        add("manufacturer", _clean_party(match.group(1)))
+        mfr = _clean_party(match.group(1))
+        if mfr and _HEADERISH.search(mfr) and not re.search(r"\b(?:ltd|llc|corp|co\.)\b", mfr, re.I):
+            continue
+        add("manufacturer", mfr)
     for match in _PAYMENT.finditer(blob):
         add("payment_terms", match.group(1)[:220])
     for match in _DELIVERY_DATE.finditer(blob):
@@ -321,6 +489,12 @@ def _hits_from_grid(rows: list[list[str]]) -> dict[str, list[str]]:
             cleaned = _clean_party(value)
         elif key == "invoice_no":
             cleaned = _clean_invoice_no(value)
+        elif key == "contract_no":
+            cleaned = _clean_contract_no(value)
+        elif key == "seller_address":
+            cleaned = split_party_address(value, seller=True) or _clean_address(value)
+        elif key == "buyer_address":
+            cleaned = split_party_address(value, seller=False) or _clean_address(value)
         elif key in {"buyer_address", "seller_address", "warehouse_address"}:
             cleaned = _clean_address(value)
         else:
@@ -368,7 +542,12 @@ def _collapse_hits(
 ) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key in HEADER_KEYS:
-        picked = _pick_agreed(by_field.get(key) or [])
+        if key == "delivery_terms":
+            picked = _pick_incoterm(by_field.get(key) or [])
+        elif key in {"buyer_address", "seller_address", "warehouse_address"}:
+            picked = _pick_address(by_field.get(key) or [])
+        else:
+            picked = _pick_agreed(by_field.get(key) or [])
         if picked:
             result[key] = picked
     if "seller" not in result and letterheads:
@@ -429,6 +608,52 @@ def extract_header_fields(parsed_docs: list[Any] | None) -> dict[str, Any]:
 
 def _norm_key(value: str) -> str:
     return re.sub(r"[\s\"“”'.,]", "", normalize_text(value)).lower()
+
+
+def _compact_address(value: str) -> str:
+    return re.sub(r"[\s,.;:\"'“”«»-]+", "", normalize_text(value)).lower()
+
+
+def _pick_address(pairs: list[tuple[str, str]]) -> str | None:
+    values = [value for _source, value in pairs if value]
+    if not values:
+        return None
+    ranked = sorted(values, key=lambda value: len(_compact_address(value)), reverse=True)
+    top = _compact_address(ranked[0])
+    if top and all(
+        top.startswith(_compact_address(value)) or _compact_address(value).startswith(top)
+        for value in ranked
+    ):
+        return ranked[0]
+    return _pick_agreed(pairs)
+
+
+def _latin_ratio(text: str) -> float:
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(c.isascii() for c in letters) / len(letters)
+
+
+def _pick_incoterm(pairs: list[tuple[str, str]]) -> str | None:
+    if not pairs:
+        return None
+    buckets: dict[str, list[str]] = defaultdict(list)
+    leftover: list[str] = []
+    for _source, value in pairs:
+        if not value:
+            continue
+        match = _INCOTERM_CODE.match(value.strip())
+        if match:
+            buckets[match.group(1).upper()].append(value)
+        else:
+            leftover.append(value)
+    if buckets:
+        code = max(buckets, key=lambda key: (len(buckets[key]), max(_latin_ratio(v) for v in buckets[key])))
+        return max(buckets[code], key=_latin_ratio)
+    if leftover:
+        return _pick_agreed([("", value) for value in leftover])
+    return None
 
 
 def _pick_agreed(pairs: list[tuple[str, str]]) -> str | None:
