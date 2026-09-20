@@ -15,7 +15,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from app.parsing.header_extract import extract_header_fields, extract_header_from_letterheads, is_catalog_filename, merge_header_fields
+from app.parsing.header_extract import (
+    extract_header_fields,
+    extract_header_from_letterheads,
+    enrich_header_from_goods,
+    is_catalog_filename,
+    merge_header_fields,
+)
 from app.parsing.normalize import normalize_text
 from app.transform.errors import FileReadError, humanize_for_file
 from app.transform.extract import ExtractedSheet, extract_sheet, mapping_fits_sheet
@@ -353,6 +359,7 @@ def transform_paths(
     result.profile = detect_profile(result.items, input_sheets)
     result.header = _extract_header(input_sheets)
     result.header = merge_header_fields(result.header, extract_header_fields(result.sources))
+    result.header = enrich_header_from_goods(result.header, result.items)
 
     # Beijing-style goods get bilingual names from the reference catalog (ТЗ §5.2).
     # Without it the commercial numbers are fine, but Description stays empty - tell the user.

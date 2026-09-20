@@ -11,6 +11,12 @@ from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Font
 
+from app.parsing.header_extract import (
+    currency_from_sources,
+    export_currency_label,
+    export_header_fields,
+    manufacturer_from_sources,
+)
 from app.parsing.normalize import normalize_article
 from app.services.export_style import safe_export_stem, unfreeze_workbook
 from app.services.field_map import classify_header, is_factory_note, parse_number
@@ -19,33 +25,51 @@ from app.services.profile_18233 import GROUP_PREFIXES, _design_family
 
 _KIT_RE = re.compile(r"(?<![0-9])(\d{2,4}-\d)(?![0-9])")
 _INVOICE_TOKEN_RE = re.compile(r"ZFRMB[\w.-]+", re.I)
+_PRICE_CCY_RE = re.compile(r"(UNIT PRICE|AMOUNT)\s*\(\s*[A-Z]{3}\s*\)", re.I)
 
 NUM_FMT_INT = "0"
 NUM_FMT_2 = "0.00"
 NUM_FMT_3 = "0.000"
 
-FABRIC_INVOICE_HEADERS = [
-    "NO.",
-    "DESIGN",
-    "H.S. CODE",
-    "ROLLS",
-    "WIDTH M",
-    "TOTAL M2",
-    "METERS",
-    "UNIT MT/PIECE",
-    "UNIT PRICE(RMB)",
-    "AMOUNT(RMB)",
-]
-ELEMENT_INVOICE_HEADERS = [
-    "NO.",
-    "DESIGN",
-    "H.S. CODE",
-    "PACKAGES",
-    "QUANTITY",
-    "UNIT M/PC",
-    "UNIT PRICE(RMB)",
-    "AMOUNT(RMB)",
-]
+
+def _price_headers(ccy: str) -> tuple[str, str]:
+    label = export_currency_label(ccy, hangzhou_style=True)
+    return f"UNIT PRICE({label})", f"AMOUNT({label})"
+
+
+def fabric_invoice_headers(ccy: str = "CNY") -> list[str]:
+    price, amount = _price_headers(ccy)
+    return [
+        "NO.",
+        "DESIGN",
+        "H.S. CODE",
+        "ROLLS",
+        "WIDTH M",
+        "TOTAL M2",
+        "METERS",
+        "UNIT MT/PIECE",
+        price,
+        amount,
+    ]
+
+
+def element_invoice_headers(ccy: str = "CNY") -> list[str]:
+    price, amount = _price_headers(ccy)
+    return [
+        "NO.",
+        "DESIGN",
+        "H.S. CODE",
+        "PACKAGES",
+        "QUANTITY",
+        "UNIT M/PC",
+        price,
+        amount,
+    ]
+
+
+# Backward-compatible aliases for Hangzhou RMB etalon.
+FABRIC_INVOICE_HEADERS = fabric_invoice_headers("CNY")
+ELEMENT_INVOICE_HEADERS = element_invoice_headers("CNY")
 FABRIC_PACKING_HEADERS = [
     "No.",
     "DESIGN",
@@ -568,10 +592,15 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
     return rows
 
 
-def preview_headers(layout: str | None, items: list[dict[str, Any]] | None = None) -> dict[str, list[str]]:
+def preview_headers(
+    layout: str | None,
+    items: list[dict[str, Any]] | None = None,
+    header: dict[str, Any] | None = None,
+) -> dict[str, list[str]]:
     fabric = is_fabric_layout(layout, items)
+    ccy = currency_from_sources(items, header) or "CNY"
     return {
-        "invoice": FABRIC_INVOICE_HEADERS if fabric else ELEMENT_INVOICE_HEADERS,
+        "invoice": fabric_invoice_headers(ccy) if fabric else element_invoice_headers(ccy),
         "packing": FABRIC_PACKING_HEADERS if fabric else ELEMENT_PACKING_HEADERS,
         "specification": FABRIC_SPEC_HEADERS if fabric else ELEMENT_SPEC_HEADERS,
     }
@@ -725,6 +754,7 @@ def _apply_letterhead(ws, header: dict[str, Any] | None, kit: str, header_row: i
     payment = _header_value(header, "payment_terms")
     delivery_date = _header_value(header, "delivery_date")
     manufacturer = _header_value(header, "manufacturer")
+    ccy_label = export_currency_label(_header_value(header, "currency") or "CNY", hangzhou_style=True)
     for r in range(1, max(header_row, 22)):
         for c in range(1, 16):
             val = ws.cell(r, c).value
@@ -771,6 +801,12 @@ def _apply_letterhead(ws, header: dict[str, Any] | None, kit: str, header_row: i
                 ws.cell(r, c).value = re.sub(r"(?i)delivery date\s*:?\s*.*", f"Delivery date: {delivery_date}", text)
             if manufacturer and text.lower().startswith("manufacturer"):
                 ws.cell(r, c).value = f"Manufacturer: {manufacturer}"
+            # Rewrite hardcoded etalon currency labels to the shipment currency.
+            if _PRICE_CCY_RE.search(stripped):
+                ws.cell(r, c).value = _PRICE_CCY_RE.sub(
+                    lambda m: f"{m.group(1).upper()}({ccy_label})",
+                    stripped,
+                )
 
 
 def fill_specification_template(
@@ -818,7 +854,7 @@ def fill_specification_template(
             "country": (header or {}).get("country") or ((products[offset].get("customs_data") if offset < len(products) else {}) or {}).get("country") or "КИТАЙ",
             "manufacturer": ((products[offset].get("customs_data") if offset < len(products) else {}) or {}).get("manufacturer")
             or (header or {}).get("manufacturer")
-            or "HANGZHOU ZHONGFANG TEXTILE IMP/EXP.CO.,LTD",
+            or "",
         }
         if offset < len(products):
             _write_mapped_row(ws, data_start + offset, colmap, extra)
@@ -954,6 +990,7 @@ def export_18233_from_templates(
     if not materials_available():
         raise FileNotFoundError("MVP_18233 materials not found; cannot use эталон templates")
 
+    header = export_header_fields(header or {}, items)
     kit = _detect_kit(items, header)
     layout = _layout_kit(kit, items, header)
     templates = kit_templates(layout)

@@ -149,6 +149,7 @@ def test_header_from_invoice_colon_and_company_limited() -> None:
     header = extract_header_fields([invoice])
     assert header["invoice_no"] == "NH-331005"
     assert "HMK" in header["seller"].upper()
+    assert header.get("manufacturer") in (None, "")
     assert "NECARGO" in header["buyer"].upper()
     assert header["contract_no"].replace("С", "C").startswith("NEC-01")
     assert "15.03.2026" in header["invoice_date"]
@@ -158,6 +159,39 @@ def test_header_from_invoice_colon_and_company_limited() -> None:
     assert "TREND" in (header.get("seller_address") or "").upper() or "HONGKONG" in (header.get("seller_address") or "").upper()
     assert "PODOLSK" in (header.get("buyer_address") or "").upper() or "142116" in (header.get("buyer_address") or "")
     assert "SORU4033371" in header["container_no"]
+
+
+def test_enrich_header_keeps_seller_and_maker_apart() -> None:
+    from app.parsing.header_extract import enrich_header_from_goods, currency_from_sources, export_header_fields
+
+    header = {
+        "seller": "HMK TRADING COMPANY LIMITED",
+        "manufacturer": "HMK TRADING COMPANY LIMITED",
+        "delivery_terms": (
+            "Payments are made by simple bank transfer in RUR, and can be made "
+            "in Chinese yuan, US dollars."
+        ),
+    }
+    items = [
+        {
+            "commercial_data": {"currency": "USD"},
+            "customs_data": {"manufacturer": "Bestway (Nantong) Recreation Corp. / Bestway"},
+        }
+        for _ in range(5)
+    ]
+    enriched = enrich_header_from_goods(header, items)
+    assert "BESTWAY" in enriched["manufacturer"].upper()
+    assert "HMK" not in enriched["manufacturer"].upper()
+    assert enriched["currency"] == "USD"
+    assert currency_from_sources([], header) is None
+
+    # Operator edit must survive export packaging.
+    edited = export_header_fields(
+        {**enriched, "manufacturer": "Intex Industries (Fujian) Co., Ltd / INTEX", "payment_terms": "Net 90"},
+        items,
+    )
+    assert "INTEX" in edited["manufacturer"].upper()
+    assert edited["payment_terms"] == "Net 90"
 
 
 def test_payment_prose_does_not_steal_contract_no() -> None:

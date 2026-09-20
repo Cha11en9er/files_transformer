@@ -784,6 +784,9 @@ def test_besway2_pdf_kit_is_fourteen_items(tmp_path: Path):
     assert "310210" in arts or "31021" in arts
     assert result.header.get("invoice_no") == "NH-331005"
     assert "HMK" in str(result.header.get("seller") or "").upper()
+    assert "BESTWAY" in str(result.header.get("manufacturer") or "").upper()
+    assert "HMK" not in str(result.header.get("manufacturer") or "").upper()
+    assert str(result.header.get("currency") or "").upper() == "USD"
     assert "NECARGO" in str(result.header.get("buyer") or "").upper()
     contract = str(result.header.get("contract_no") or "")
     assert "NEC-01" in contract.upper().replace("С", "C") or "01/10" in contract
@@ -804,6 +807,18 @@ def test_besway2_pdf_kit_is_fourteen_items(tmp_path: Path):
     blob = " ".join(str(inv.cell(r, 1).value or "") for r in range(1, 16))
     assert "HMK" in blob.upper() or "INVOICE" in blob.upper()
     assert "BEIJING GOLDLUCK" not in blob.upper()
+    inv_headers = " ".join(
+        str(inv.cell(r, c).value or "")
+        for r in range(1, 30)
+        for c in range(1, 13)
+    )
+    assert "USD" in inv_headers
+    assert "CNY" not in inv_headers and "RMB" not in inv_headers
+    mfr_cells = [
+        str(inv.cell(r, 6).value or "")
+        for r in range(1, min(40, inv.max_row + 1))
+    ]
+    assert any("BESTWAY" in cell.upper() for cell in mfr_cells)
 
 
 @requires_docs
@@ -814,7 +829,7 @@ def test_matrac_pdf_kit_is_tsd_not_goldluck(tmp_path: Path):
     )
     if len(pdfs) < 2:
         pytest.skip("Матрац PDFs not available")
-    from app.services.export import export_beijing
+    from app.services.export import export_18233, export_beijing
     from app.transform.service import canonical_to_rows, transform_paths
 
     result = transform_paths([(str(p), p.name) for p in pdfs])
@@ -824,12 +839,21 @@ def test_matrac_pdf_kit_is_tsd_not_goldluck(tmp_path: Path):
     assert "58671EU" in arts
     assert result.header.get("invoice_no") == "IDV3040C"
     assert "HMK" in str(result.header.get("seller") or "").upper()
+    assert "INTEX" in str(result.header.get("manufacturer") or "").upper()
+    assert "HMK" not in str(result.header.get("manufacturer") or "").upper()
+    assert str(result.header.get("currency") or "").upper() == "USD"
     assert "NECARGO" in str(result.header.get("buyer") or "").upper()
     assert "DAP" in str(result.header.get("delivery_terms") or "").upper()
     assert "CHERTANOVSKAYA" in str(result.header.get("buyer_address") or "").upper() or "117534" in str(result.header.get("buyer_address") or "")
     rows = canonical_to_rows(result.items)
     assert rows[0]["customs_data"].get("hs_code") or rows[0]["customs_data"].get("tnved_code")
-    path = export_beijing(rows, tmp_path / "export.xlsx", result.header)
+    # Poisoned seller-copy is still repaired; a real operator edit must win.
+    poisoned = {
+        **result.header,
+        "manufacturer": result.header.get("seller"),
+        "currency": None,
+    }
+    path = export_beijing(rows, tmp_path / "export.xlsx", poisoned)
     assert "ТСД" in path.name or path.suffix == ".xlsx"
     from openpyxl import load_workbook
 
@@ -846,6 +870,12 @@ def test_matrac_pdf_kit_is_tsd_not_goldluck(tmp_path: Path):
         for r in range(1, 30)
         for c in range(1, 13)
     )
+    assert "USD" in inv_headers
+    assert "RMB" not in inv_headers and "CNY" not in inv_headers
+    assert any(
+        "INTEX" in str(wb["INV"].cell(r, 6).value or "").upper()
+        for r in range(1, min(40, wb["INV"].max_row + 1))
+    )
     assert "DESCRIPTION" in inv_headers
     assert "Описание" in inv_headers
     pak_headers = " ".join(
@@ -855,6 +885,40 @@ def test_matrac_pdf_kit_is_tsd_not_goldluck(tmp_path: Path):
     )
     assert "PACKAGE" in pak_headers
     assert "Места" in pak_headers
+
+    edited = {
+        **result.header,
+        "manufacturer": "CUSTOM MAKER LLC / TESTBRAND",
+        "payment_terms": "Net 90 days after clearance",
+    }
+    edited_path = export_beijing(rows, tmp_path / "edited.xlsx", edited)
+    wb_edit = load_workbook(edited_path)
+    inv_blob = " ".join(
+        str(wb_edit["INV"].cell(r, c).value or "")
+        for r in range(1, min(40, wb_edit["INV"].max_row + 1))
+        for c in range(1, 13)
+    )
+    assert "CUSTOM MAKER" in inv_blob.upper()
+    assert "NET 90" in inv_blob.upper()
+    assert any(
+        "CUSTOM MAKER" in str(wb_edit["INV"].cell(r, 6).value or "").upper()
+        for r in range(1, min(40, wb_edit["INV"].max_row + 1))
+    )
+
+    # Same goods under the three-Excel profile must keep USD / Intex, not hardcoded RMB / seller.
+    paths_18233 = export_18233(rows, tmp_path / "18233", poisoned, shipment_title="matrac")
+    inv_18233 = next(p for p in paths_18233 if "ИНВОЙС" in p.name.upper() or "INVOICE" in p.name.upper() or "инвойс" in p.name.lower())
+    wb2 = load_workbook(inv_18233)
+    ws2 = wb2.active
+    hdr_blob = " ".join(
+        str(ws2.cell(r, c).value or "")
+        for r in range(1, 40)
+        for c in range(1, 14)
+    )
+    assert "USD" in hdr_blob.upper()
+    assert "UNIT PRICE(RMB)" not in hdr_blob.upper()
+    assert "AMOUNT(RMB)" not in hdr_blob.upper()
+    assert "INTEX" in hdr_blob.upper()
 
 
 @requires_docs

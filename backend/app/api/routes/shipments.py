@@ -25,7 +25,7 @@ from app.models.enums import (
     ProfileType,
     ShipmentStatus,
 )
-from app.parsing.header_extract import extract_header_fields, merge_header_fields
+from app.parsing.header_extract import enrich_header_from_goods, export_header_fields, extract_header_fields, merge_header_fields
 from app.parsing.pdf_extractor import sniff_kind
 from app.parsing.pipeline import parse_upload
 from app.parsing.schemas import ParsedDocument
@@ -448,6 +448,7 @@ def _iter_create_events(
         items = _items_from_rows(reconciled)
         excel_totals = compute_excel_totals(items)
         header_fields = merge_header_fields(result.header or {}, header_fields)
+        header_fields = enrich_header_from_goods(header_fields, items)
 
         model_names: list[str] = []
         pdf_names: list[str] = []
@@ -555,6 +556,7 @@ def _iter_create_events(
         if review_dict.get("status") == "ok":
             review_dict = apply_scan_review(items, review_dict)
             header_fields = merge_header_fields(header_fields, review_dict.get("header") or {})
+            header_fields = enrich_header_from_goods(header_fields, items)
         review_dict["context"] = snapshot.get("context") or {"excel": [], "pdfs": []}
         model_review = ModelReviewOut.model_validate(review_dict)
 
@@ -669,7 +671,7 @@ def search_permits() -> PermitSearchOut:
 @router.post("/export")
 def export_workspace(payload: ExportRequest) -> Response:
     items = [item.model_dump(mode="json") for item in payload.items]
-    header = payload.header_fields or {}
+    header = export_header_fields(payload.header_fields or {}, items)
     title = resolve_shipment_title(payload.title, header)
     safe_title = safe_export_stem(title)
     with tempfile.TemporaryDirectory(prefix="export_") as tmp:
@@ -721,7 +723,7 @@ def export_workspace(payload: ExportRequest) -> Response:
 @router.post("/export/preview")
 def export_preview(payload: ExportRequest) -> dict[str, Any]:
     items = [item.model_dump(mode="json") for item in payload.items]
-    header = payload.header_fields or {}
+    header = export_header_fields(payload.header_fields or {}, items)
     return build_export_preview(
         items,
         profile_type=payload.profile_type.value,

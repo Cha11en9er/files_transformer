@@ -183,6 +183,9 @@ Letterhead / header (flexible — titles differ by supplier):
 - invoice_no: value next to Inv No / Invoice No / INV.NO / инв номер / similar — not a date in parentheses.
 - invoice_date: labeled Invoice date / дата, OR a date embedded in the document title (shipment of …, dated …, dd.mm.yyyy / Jul.18,2026 near Invoice/Packing/Specification). Ignore B/L Date, ETD, ETA, sailing.
 - contract_no / container: same idea — label or adjacent cell, any language.
+- seller: THE SELLER / Seller / Shipper / trading company on the invoice — not the goods maker.
+- manufacturer: MANUFACTURER / BRAND / Производитель column on goods rows, or an explicit Manufacturer label. Often differs from seller (trader vs factory/brand). Never copy seller into manufacturer.
+- currency: from PRICE PER / Amount column titles (USD, CNY/RMB, EUR). Payment text that lists several allowed currencies ("yuan, US dollars") is NOT the invoice currency.
 If parser_json.header missed a field that is visible in the workbook letterhead, fill header[] and mention "excel:header" in notes on any related item or in meaning.
 
 languages_in_this_shipment (detected scripts + encodings; a new language is still valid):
@@ -206,6 +209,8 @@ Reply with this exact JSON shape:
   "header": {{
     "buyer": null,
     "seller": null,
+    "manufacturer": null,
+    "currency": null,
     "invoice_no": null,
     "invoice_date": null,
     "contract_no": null,
@@ -277,6 +282,8 @@ Rules:
 - description is customs Product name from Excel or catalog, or null. Never copy (15+30), (A), 0605 Special Order, and never invent text because an etalon once had it.
 - net_weight / gross_weight / volume / boxes / rolls: prefer packing-list commercial numbers; if draft used sender-spec rolls and packing disagrees beyond ~0.2 kg, correct to packing and verdict "question" with notes like "excel:weight packing vs spec". If WEIGHT BRUTTO / GROSS WEIGHT is a printed column, gross_weight must not stay null.
 - header.invoice_date and header.invoice_no: fill from letterhead even when the draft left them empty; do not put a shipment date into invoice_no.
+- header.seller is the trading party; header.manufacturer is the goods maker/brand from the Manufacturer column. Keep them separate when the document shows both.
+- header.currency is the invoice price currency from PRICE/AMOUNT column titles (USD/CNY/EUR). Do not set CNY just because payment terms mention yuan among other options.
 - Numeric fields are numbers, not strings. notes is a short fact, or null. Prefix notes with "excel:" when you corrected the draft from a workbook.
 - If the scan is a different document than parser_json (no article overlap), say so in meaning, put scan lines as extra, do not force-match.
 """
@@ -1070,6 +1077,8 @@ def coerce_scan_item(raw: Any) -> dict[str, Any]:
         "boxes": boxes,
         "price": _as_float(data.get("price")),
         "amount": _as_float(data.get("amount")),
+        "currency": data.get("currency"),
+        "manufacturer": data.get("manufacturer"),
         "net_weight": net,
         "gross_weight": gross,
         "area": _as_float(data.get("area")),

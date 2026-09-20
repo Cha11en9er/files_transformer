@@ -7,6 +7,7 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
+from app.parsing.header_extract import currency_from_sources
 from app.services.export_style import (
     merge_column,
     style_data_table,
@@ -116,7 +117,7 @@ def _visual_lines(item: dict[str, Any], *, mode: str) -> list[dict[str, Any]]:
     return lines
 
 
-def invoice_headers() -> list[str]:
+def invoice_headers(ccy: str = "CNY") -> list[str]:
     return [
         "No",
         "Customs Code",
@@ -125,8 +126,8 @@ def invoice_headers() -> list[str]:
         "Color",
         "Quantity",
         "Unit",
-        "Price (CNY)",
-        "Amount (CNY)",
+        f"Price ({ccy})",
+        f"Amount ({ccy})",
     ]
 
 
@@ -332,7 +333,8 @@ def spec_rows(items: list[dict[str, Any]]) -> list[list[Any]]:
 
 
 def description_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> list[list[Any]]:
-    manufacturer = (header or {}).get("manufacturer") or (header or {}).get("seller") or "BEIJING GOLDLUCK CO., LTD"
+    # Operator header overrides row manufacturer when set.
+    manufacturer = (header or {}).get("manufacturer") or "BEIJING GOLDLUCK CO., LTD"
     country = (header or {}).get("country") or "CN"
     rows: list[list[Any]] = []
     for item in items:
@@ -341,7 +343,7 @@ def description_rows(items: list[dict[str, Any]], header: dict[str, Any] | None)
             [
                 item.get("article") or "",
                 _desc(item),
-                customs.get("manufacturer") or manufacturer,
+                (header or {}).get("manufacturer") or customs.get("manufacturer") or manufacturer,
                 customs.get("country") or country,
             ]
         )
@@ -456,12 +458,14 @@ def _append_table(
 
 
 def export_beijing_book(items: list[dict[str, Any]], output_path, header: dict[str, Any] | None = None):
+    ccy = currency_from_sources(items, header) or "CNY"
+    inv_h = invoice_headers(ccy)
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
     inv_rows, inv_spans, inv_pack = _invoice_table(items)
-    _write_letterhead(ws, "invoice", header, len(invoice_headers()))
-    _append_table(ws, invoice_headers(), inv_rows, item_spans=inv_spans, identity_cols=(1, 2, 3, 4))
+    _write_letterhead(ws, "invoice", header, len(inv_h))
+    _append_table(ws, inv_h, inv_rows, item_spans=inv_spans, identity_cols=(1, 2, 3, 4))
 
     ws_pl = wb.create_sheet("Packing list")
     pl_rows, pl_spans, pl_pack = _packing_table(items)

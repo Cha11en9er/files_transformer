@@ -32,6 +32,7 @@ HEADER_KEYS = (
     "delivery_terms",
     "payment_terms",
     "manufacturer",
+    "currency",
     "delivery_date",
     "warehouse_address",
     "container_no",
@@ -556,8 +557,8 @@ def _collapse_hits(
             result["seller"] = agreed_seller
         elif len({normalize_text(n).lower() for n in letterheads}) == 1:
             result["seller"] = letterheads[0]
-    if "manufacturer" not in result and result.get("seller"):
-        result["manufacturer"] = result["seller"]
+    # Seller is the trading party; manufacturer is the goods maker/brand.
+    # Never copy seller into manufacturer — fill from Manufacturer column or goods rows.
     if result.get("container_no") and "container" not in result:
         result["container"] = result["container_no"]
     return result
@@ -695,3 +696,191 @@ def merge_header_fields(base: dict[str, Any] | None, incoming: dict[str, Any] | 
         if _norm_key(str(current)) != _norm_key(str(value)):
             continue
     return out
+
+
+def _item_field(item: Any, *keys: str) -> Any:
+    if item is None:
+        return None
+    if isinstance(item, dict):
+        for key in keys:
+            if item.get(key) not in (None, ""):
+                return item.get(key)
+        commercial = item.get("commercial_data") or {}
+        customs = item.get("customs_data") or {}
+        fields = item.get("fields") or {}
+        for bag in (commercial, customs, fields):
+            for key in keys:
+                if bag.get(key) not in (None, ""):
+                    return bag.get(key)
+        return None
+    fields = getattr(item, "fields", None) or {}
+    for key in keys:
+        if fields.get(key) not in (None, ""):
+            return fields.get(key)
+    return None
+
+
+def _majority_text(values: list[str]) -> str | None:
+    buckets: dict[str, list[str]] = defaultdict(list)
+    for value in values:
+        text = normalize_text(value)
+        if text:
+            buckets[_norm_key(text)].append(text)
+    if not buckets:
+        return None
+    ranked = sorted(buckets.values(), key=len, reverse=True)
+    if len(ranked[0]) < max(1, (len(values) + 1) // 2):
+        return None
+    return ranked[0][0]
+
+
+_CURRENCY_CODE = re.compile(r"\b(USD|EUR|CNY|RMB|RUB|GBP)\b", re.I)
+
+
+def normalize_currency_code(value: Any) -> str | None:
+    text = normalize_text(str(value or ""))
+    if not text:
+        return None
+    match = _CURRENCY_CODE.search(text)
+    if match:
+        code = match.group(1).upper()
+        return "CNY" if code == "RMB" else code
+    low = text.lower()
+    if "usd" in low or "dollar" in low or "доллар" in low:
+        return "USD"
+    if "eur" in low or "euro" in low or "евро" in low:
+        return "EUR"
+    if "cny" in low or "rmb" in low or "yuan" in low or "юан" in low:
+        return "CNY"
+    if "руб" in low or "rub" in low:
+        return "RUB"
+    return None
+
+
+def currency_from_sources(
+    items: list[Any] | None = None,
+    header: dict[str, Any] | None = None,
+) -> str | None:
+    """Invoice currency from goods / header.currency — not from payment-prose lists."""
+    codes: list[str] = []
+    for item in items or []:
+        code = normalize_currency_code(_item_field(item, "currency"))
+        if code:
+            codes.append(code)
+    if codes:
+        return _majority_text(codes) or codes[0]
+    header = header or {}
+    direct = normalize_currency_code(header.get("currency"))
+    if direct:
+        return direct
+    # Payment clauses often list several allowed currencies ("yuan, US dollars").
+    # Those are not the invoice price currency — ignore mixed blobs.
+    blob = " ".join(str(v) for v in header.values() if v not in (None, ""))
+    low = blob.lower()
+    has_usd = bool(re.search(r"\busd\b|dollar|доллар", low))
+    has_cny = bool(re.search(r"\bcny\b|\brmb\b|yuan|юан", low))
+    has_eur = bool(re.search(r"\beur\b|euro|евро", low))
+    mentioned = sum(bool(flag) for flag in (has_usd, has_cny, has_eur))
+    if mentioned >= 2:
+        return None
+    if has_usd:
+        return "USD"
+    if has_eur:
+        return "EUR"
+    if has_cny:
+        return "CNY"
+    return None
+
+
+def export_currency_label(code: str | None, *, hangzhou_style: bool = False) -> str:
+    """Label for price/amount column headers.
+
+    Hangzhou templates historically say RMB for CNY; other profiles keep ISO codes.
+    """
+    normalized = normalize_currency_code(code) or ("CNY" if hangzhou_style else None)
+    if not normalized:
+        return "USD"
+    if hangzhou_style and normalized in {"CNY", "RMB"}:
+        return "RMB"
+    if normalized == "RMB":
+        return "CNY"
+    return normalized
+
+
+def enrich_header_from_goods(
+    header: dict[str, Any] | None,
+    items: list[Any] | None,
+) -> dict[str, Any]:
+    """Fill gaps from goods after parsing. Does not belong on export of operator edits.
+
+    - manufacturer: only when empty, or when it was a silent copy of seller
+    - currency: from goods / price columns when missing
+    """
+    out = {k: v for k, v in (header or {}).items() if v not in (None, "", [])}
+    mfrs = [
+        str(value).strip()
+        for value in (_item_field(item, "manufacturer") for item in (items or []))
+        if value not in (None, "")
+    ]
+    goods_mfr = _majority_text(mfrs)
+    seller = str(out.get("seller") or "").strip()
+    current_mfr = str(out.get("manufacturer") or "").strip()
+    if goods_mfr:
+        if not current_mfr:
+            out["manufacturer"] = goods_mfr
+        elif seller and _norm_key(current_mfr) == _norm_key(seller) and _norm_key(goods_mfr) != _norm_key(seller):
+            out["manufacturer"] = goods_mfr
+    elif current_mfr and seller and _norm_key(current_mfr) == _norm_key(seller):
+        # Explicit seller-copy is worse than empty — operator / model should fill maker.
+        out.pop("manufacturer", None)
+
+    if not out.get("currency"):
+        ccy = currency_from_sources(items, out)
+        if ccy:
+            out["currency"] = ccy
+    return out
+
+
+def export_header_fields(
+    header: dict[str, Any] | None,
+    items: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Header for Excel export: operator values win; fill only empty gaps from goods."""
+    out = {k: v for k, v in (header or {}).items() if v not in (None, "")}
+    # Fill manufacturer/currency only when the operator left them blank
+    # (or left a stale seller-copy that was never corrected).
+    if not out.get("manufacturer") or (
+        out.get("seller")
+        and _norm_key(str(out.get("manufacturer"))) == _norm_key(str(out.get("seller")))
+    ):
+        goods_mfr = _majority_text(
+            [
+                str(value).strip()
+                for value in (_item_field(item, "manufacturer") for item in (items or []))
+                if value not in (None, "")
+            ]
+        )
+        if goods_mfr and (
+            not out.get("manufacturer")
+            or (
+                out.get("seller")
+                and _norm_key(str(out.get("manufacturer"))) == _norm_key(str(out.get("seller")))
+                and _norm_key(goods_mfr) != _norm_key(str(out.get("seller")))
+            )
+        ):
+            out["manufacturer"] = goods_mfr
+    if not out.get("currency"):
+        ccy = currency_from_sources(items, out)
+        if ccy:
+            out["currency"] = ccy
+    return out
+
+
+def manufacturer_from_sources(
+    items: list[Any] | None = None,
+    header: dict[str, Any] | None = None,
+) -> str | None:
+    """Goods maker/brand — never silently reuse seller."""
+    enriched = export_header_fields(header or {}, items or [])
+    value = enriched.get("manufacturer")
+    return str(value).strip() if value not in (None, "") else None

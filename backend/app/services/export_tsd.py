@@ -12,7 +12,7 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
-from app.parsing.header_extract import split_party_address
+from app.parsing.header_extract import currency_from_sources, export_header_fields, split_party_address
 from app.services.export_style import (
     style_data_table,
     style_letterhead_row,
@@ -92,17 +92,7 @@ def _packages(item: dict[str, Any]) -> Any:
 
 
 def _currency(items: list[dict[str, Any]], header: dict[str, Any] | None) -> str:
-    for item in items:
-        code = str((item.get("commercial_data") or {}).get("currency") or "").upper()
-        if code:
-            return code
-    blob = " ".join(str(v) for v in (header or {}).values())
-    low = blob.lower()
-    if "cny" in low or "rmb" in low or "юан" in low:
-        return "CNY"
-    if "eur" in low:
-        return "EUR"
-    return "USD"
+    return currency_from_sources(items, header) or "USD"
 
 
 def _hs(item: dict[str, Any]) -> str:
@@ -135,8 +125,12 @@ def _ru_desc(item: dict[str, Any]) -> str:
 
 
 def _mfr(item: dict[str, Any], header: dict[str, Any] | None) -> str:
+    # Operator header is the shipment-level override; then per-row customs.
+    header_mfr = str((header or {}).get("manufacturer") or "").strip()
+    if header_mfr:
+        return header_mfr
     customs = item.get("customs_data") or {}
-    return str(customs.get("manufacturer") or (header or {}).get("manufacturer") or "")
+    return str(customs.get("manufacturer") or "")
 
 
 def _country(item: dict[str, Any]) -> str:
@@ -246,6 +240,10 @@ def _write_invoice_letterhead(ws, header: dict[str, Any], cols: int) -> None:
     if delivery:
         ws.append([f"Terms of delivery: {delivery}"])
         style_letterhead_row(ws, ws.max_row, cols)
+    payment = header.get("payment_terms") or ""
+    if payment:
+        ws.append([f"Terms of payment: {payment}"])
+        style_letterhead_row(ws, ws.max_row, cols)
     ws.append([])
 
 
@@ -294,6 +292,10 @@ def _write_packing_letterhead(ws, header: dict[str, Any], cols: int) -> None:
         style_letterhead_row(ws, ws.max_row, cols)
     if delivery:
         ws.append([f"Terms of delivery: {delivery}"])
+        style_letterhead_row(ws, ws.max_row, cols)
+    payment = header.get("payment_terms") or ""
+    if payment:
+        ws.append([f"Terms of payment: {payment}"])
         style_letterhead_row(ws, ws.max_row, cols)
     ws.append([])
 
@@ -564,7 +566,7 @@ def dt_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> list[
 
 
 def export_tsd_book(items: list[dict[str, Any]], output_path, header: dict[str, Any] | None = None):
-    header = header or {}
+    header = export_header_fields(header or {}, items)
     ccy = _currency(items, header)
     wb = Workbook()
     ws = wb.active
@@ -596,6 +598,7 @@ def export_tsd_book(items: list[dict[str, Any]], output_path, header: dict[str, 
 
 
 def tsd_preview(items: list[dict[str, Any]], header: dict[str, Any] | None, filename: str) -> dict[str, Any]:
+    header = export_header_fields(header or {}, items)
     ccy = _currency(items, header)
     return {
         "filename": filename,
