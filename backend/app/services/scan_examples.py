@@ -18,6 +18,18 @@ Languages mix freely (RU/EN/ZH/TR/IT and later others). Same field, different ti
   article on Zhongfang spec = PRODUCT NAME (Melange 928), even though the words look like a name
 Decimals: EU 1.740,82 = 1740.82; US/TR 3,85 or 3.85. RMB/CNY/USD/EUR are currencies, not qty.
 
+A goods row is structural, not a named product. Keep it when the line has numbers
+(qty and/or price/amount and/or net/gross and/or packages) PLUS any identity:
+Art No., OR description, OR HS/TNVED, OR a running No.
+The article cell may be blank, "-", "n/a", "б/н", "." or a repeated description.
+That is still a goods line. Match INV+PL+SPEC by description (or HS+No) when SKU is missing.
+Two own Quantity/Amount (or two own packing qty) with the same description are TWO lots.
+Merged Art No. covering extra Quantity/Amount cells is ONE item with lots[].
+Headers may be two stacked rows (WEIGHT over NETTO/BRUTTO) or split mid-word (PACKAG E).
+PACKAGE / PACKAGES / CARTONS = places (rolls/boxes). QUANTITY = pcs/sets/meters. Never swap them.
+parser_json.items may be EMPTY even when the table is visible. Then fill items[] from the
+pages/workbook. Do not return items:[]. Overlap-with-draft applies only when the draft has rows.
+
 Read EVERY sheet. Empty Foglio2/Foglio3, date-only Sheet2, and catalog card sheets named like 1601057 are not goods.
 Merged cells: a family name in column A may cover several colour rows — keep colours separate if numbers differ.
 Do not invent HS / TN VED. Catalog (справочник, сводная, Item/Артикул + ТНВЭД) fills codes only on exact article match.
@@ -108,3 +120,24 @@ header[]: invoice_no, invoice_date (including title-embedded dates), contract_no
 totals[]: printed TOTAL / Genel Toplam / Sub Total, not a sum you invent.
 Ignored: letterhead noise (bank, stamps), signatures, addresses, date-only sheets, catalog cards, old INV inside справочник.
 """
+
+from pathlib import Path
+
+EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "scan_examples"
+
+
+def document_shapes() -> str:
+    """Built-in atlas plus optional operator .txt notes in backend/scan_examples/."""
+    chunks = [DOCUMENT_SHAPES.strip()]
+    folders = [EXAMPLES_DIR, EXAMPLES_DIR / "local"]
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.glob("*.txt")):
+            if path.name.lower().startswith("readme"):
+                continue
+            text = path.read_text(encoding="utf-8").strip()
+            if text:
+                chunks.append(f"--- operator example {path.name} ---\n{text}")
+    return "\n\n".join(chunks)
+

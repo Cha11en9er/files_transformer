@@ -62,6 +62,12 @@ _PACKING_FIELDS = frozenset(
     {"net_weight", "gross_weight", "volume", "boxes", "rolls", "measurement", "pcs_per_carton"}
 )
 _COMMERCIAL_FIELDS = frozenset({"qty", "price", "amount", "unit", "meters", "currency"})
+# Structural blanks in the article column, not product names.
+_BLANK_SKU = re.compile(
+    r"^(?:[-–—−.…]|n/?a|n\.\s*a\.?|none|null|nil|нет|б/?н|б\.?\s*н\.?|"
+    r"без\s*арт.*|no\s*art.*|w/?o|tbd|xxx+)$",
+    re.IGNORECASE,
+)
 
 ROLE_KEYWORDS = {
     "invoice": ("commercial invoice", "invoice", "инвойс", "商业发票", "发票", "фактура"),
@@ -320,6 +326,16 @@ def _own(fields: dict[str, Any], inherited: set[str], key: str) -> bool:
     return key in fields and fields.get(key) not in (None, "") and key not in inherited
 
 
+def _qty_token(fields: dict[str, Any] | None) -> str:
+    data = fields or {}
+    qty = data.get("qty")
+    if qty is None:
+        qty = data.get("meters")
+    if isinstance(qty, (int, float)):
+        return f"{round(float(qty), 6):g}"
+    return ""
+
+
 def _item_no(sheet: Sheet, r: int, mapping: dict[int, str]) -> int | None:
     # column 0 is usually the running number; take the left-most non-mapped numeric cell
     mapped = set(mapping)
@@ -333,6 +349,17 @@ def _item_no(sheet: Sheet, r: int, mapping: dict[int, str]) -> int | None:
         if n is not None and float(n).is_integer() and 0 < n < 100000:
             return int(n)
     return None
+
+
+def _sku_cell(raw: str) -> str:
+    """Keep only a cell that can be an Art No. Empty, punctuation, n/a, or
+    a header leftover is not a SKU. The row may still be goods via description."""
+    text = (raw or "").strip()
+    if not text or _BLANK_SKU.match(text) or _is_header_label_article(text):
+        return ""
+    if is_plausible_article(text):
+        return text
+    return ""
 
 
 def _is_header_label_article(article: str) -> bool:
@@ -477,15 +504,17 @@ def extract_sheet(
             continue
         fields, inherited = _row_fields(sheet, r, active_mapping)
         _drop_note_description(fields)
-        article_raw = (
+        article_cell = (
             _cell(row[active_key_col]) if active_key_col is not None and active_key_col < len(row) else ""
         )
+        article_raw = _sku_cell(article_cell)
         article_inherited = bool(
             active_key_col is not None and (r, active_key_col) in sheet.inherited
         )
         own_article = bool(article_raw) and not article_inherited
         item_no = _item_no(sheet, r, active_mapping)
         own_qty = _own(fields, inherited, "qty") or _own(fields, inherited, "meters")
+        own_commercial = _own(fields, inherited, "price") or _own(fields, inherited, "amount")
 
         if not article_raw and not any(k in fields for k in ("qty", "meters", "amount", "net_weight", "area")):
             continue
@@ -501,22 +530,45 @@ def extract_sheet(
             _append_continuation(prev, packing_only)
             continue
 
+        # Merged Art No. + extra qty/amount stays one item (lots). A blank SKU
+        # with its own qty is another lot, except when the numbers repeat the same lot.
         if prev is not None and not own_article and own_qty and not component_mode:
-            fields = _strip_inherited(fields, inherited, _PACKING_FIELDS)
-            _append_continuation(prev, fields)
-            continue
+            if article_inherited:
+                fields = _strip_inherited(fields, inherited, _PACKING_FIELDS)
+                _append_continuation(prev, fields)
+                continue
+            same_lot = not _qty_token(fields) or _qty_token(fields) == _qty_token(prev.fields)
+            same_no = item_no is None or item_no == prev.item_no
+            if not own_commercial and same_lot and same_no:
+                fields = _strip_inherited(fields, inherited, _PACKING_FIELDS)
+                _append_continuation(prev, fields)
+                continue
 
         if own_article and own_qty:
             fields = _strip_inherited(fields, inherited, _PACKING_FIELDS)
 
         article = article_raw
         if not article:
+            desc = str(fields.get("description") or "").strip()
+            if desc and not _is_header_label_article(desc):
+                article = desc
+            elif (
+                article_cell
+                and not _BLANK_SKU.match(article_cell.strip())
+                and not _is_header_label_article(article_cell)
+            ):
+                article = article_cell.strip()
+            elif item_no is not None:
+                article = f"#{item_no}"
+            if article:
+                fields["sku_missing"] = True
+        if not article:
             continue
         if _is_header_label_article(article):
             continue
         if role != "catalog" and not _has_goods_numbers(fields):
             continue
-        if role != "catalog" and not is_plausible_article(article):
+        if role != "catalog" and not fields.get("sku_missing") and not is_plausible_article(article):
             continue
 
         if currency and fields.get("currency") in (None, ""):

@@ -375,10 +375,12 @@ def classify_header(header: str) -> str | None:
     if "наименование" in h and "артикул" not in h:
         return "description"
 
+    compact = h.replace(" ", "")
     best: tuple[int, str] | None = None
     for canonical, aliases in COLUMN_ALIASES.items():
         for alias in aliases:
-            if alias not in h:
+            alias_c = alias.replace(" ", "")
+            if alias not in h and not (alias_c and alias_c in compact):
                 continue
             if canonical == "amount" and alias in {"total", "amount"} and _AMOUNT_TOTAL_BLOCK_RE.search(h):
                 if alias == "total" or "m2" in h or "m²" in h:

@@ -208,8 +208,8 @@ def _apply_excel_sourced_numbers(items: list[ItemOut], hits: list[ScanItemOut]) 
             item.commercial_data["amount"] = probe["amount"]
 
 
-def _item_from_scan_hit(hit: ScanItemOut) -> ItemOut:
-    article = (hit.article or hit.matched_article or "").strip()
+def _item_from_scan_hit(hit: ScanItemOut, article: str | None = None) -> ItemOut:
+    article = (article or hit.article or hit.matched_article or hit.description or "").strip()
     commercial: dict[str, Any] = {}
     packing: dict[str, Any] = {}
     if hit.qty is not None:
@@ -273,10 +273,14 @@ def _append_excel_sourced_items(items: list[ItemOut], hits: list[ScanItemOut]) -
         if hit.verdict != "extra":
             continue
         article = (hit.article or hit.matched_article or "").strip()
+        desc = (hit.description or "").strip()
+        if not is_plausible_article(article):
+            article = desc or article
         key = normalize_article(article)
         if not key:
-            continue
-        if not is_plausible_article(article):
+            key = normalize_article(desc)
+            article = desc or article
+        if not key:
             continue
         if hit.qty is None and hit.amount is None and hit.price is None and hit.net_weight is None:
             continue
@@ -286,7 +290,7 @@ def _append_excel_sourced_items(items: list[ItemOut], hits: list[ScanItemOut]) -
             continue
         if key in known and qty is None:
             continue
-        items.append(_item_from_scan_hit(hit))
+        items.append(_item_from_scan_hit(hit, article))
         known.add(key)
         if lot_id:
             known_lots.add(lot_id)

@@ -290,11 +290,13 @@ def _norm_header(text: str) -> str:
 def _header_score(field_key: str, header: str) -> float:
     if not header:
         return 0.0
+    compact = header.replace(" ", "")
     best = 0.0
     for token, weight in SYNONYMS[field_key]:
-        if token in header:
+        token_c = token.replace(" ", "")
+        if token in header or (token_c and token_c in compact):
             # a bit of a bonus for exact-ish match
-            score = weight + (2 if header.strip() == token else 0)
+            score = weight + (2 if header.strip() == token or compact == token_c else 0)
             best = max(best, score)
     return best
 

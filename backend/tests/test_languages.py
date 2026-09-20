@@ -80,6 +80,7 @@ def test_header_synonyms_pattern_hides_ceki_fields() -> None:
     assert classify_header("MODEL / SERIES / ART.") == "article"
     assert classify_header("WEIGHT NETTO WITH PRIMARY PACKAGING, kg") == "net_weight"
     assert classify_header("PACKAGE") == "rolls"
+    assert classify_header("PACKAG E") == "rolls"
     assert classify_header("PRICE PER USD") == "price"
 
 
