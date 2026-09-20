@@ -23,7 +23,8 @@ MAX_PAGES = 25
 _HEADER_HINT = re.compile(
     r"description|qty|quantity|article|art\.|weight|amount|origin|"
     r"manufacturer|package|model|series|netto|brutto|price|code|"
-    r"наименован|артикул|количество|нетто|брутто|цена|сумма|страна",
+    r"наименован|артикул|арт\.?|количество|кол-во|нетто|брутто|цена|сумма|"
+    r"страна|серия|модель|стоимость|ст-сть|происх|фирма|ед\.?\s*изм",
     re.IGNORECASE,
 )
 _TABLE_SETTINGS = (
@@ -76,7 +77,15 @@ def flatten_header_rows(grid: list[list[object]]) -> list[list[object]]:
         return cleaned
     header_count = 0
     for row in cleaned[:4]:
-        if row_header_score(row) >= 2:
+        score = row_header_score(row)
+        if score >= 2:
+            header_count += 1
+            continue
+        if (
+            header_count
+            and score >= 1
+            and not any(is_number_like(cell) for cell in row if _cell_text(cell))
+        ):
             header_count += 1
             continue
         break

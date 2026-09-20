@@ -223,6 +223,11 @@ def merge_documents(
         for row in sheet.rows:
             if row.is_group or not match_key(row.article):
                 continue
+            if not any(
+                isinstance(row.fields.get(key), (int, float))
+                for key in ("qty", "meters", "area", "price", "amount", "net_weight", "gross_weight", "rolls", "boxes")
+            ):
+                continue
             it = item_for_lot(row.article, row.fields)
             if not it.fields.get("article_display"):
                 it.article = row.article

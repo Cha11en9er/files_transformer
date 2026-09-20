@@ -13,6 +13,12 @@
 }
 
 * { box-sizing: border-box; }
+html.modal-open,
+html.modal-open body {
+  overflow: hidden;
+  overscroll-behavior: none;
+  height: 100%;
+}
 body {
   margin: 0;
   font-family: "IBM Plex Sans", sans-serif;
@@ -464,15 +470,24 @@ button.badge {
   background: #dbeef0 !important;
 }
 
-.cell-clip {
+.cell-short {
   cursor: pointer;
   border-bottom: 1px dotted var(--accent);
+}
+.cell-long .cell-full {
+  display: none;
 }
 .cell-long.is-open {
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
   max-width: 360px;
+}
+.cell-long.is-open .cell-short {
+  display: none;
+}
+.cell-long.is-open .cell-full {
+  display: inline;
 }
 .cell-hide {
   margin-left: 8px;
@@ -483,6 +498,7 @@ button.badge {
   background: white;
   cursor: pointer;
   color: var(--accent);
+  vertical-align: middle;
 }
 
 .table-foot {
@@ -763,6 +779,34 @@ dialog.review-dialog {
   margin: 16px 0 8px;
   font-size: 14px;
 }
+.item-edit-btn {
+  margin: 0 0 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .edit-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.flags-cell {
+  min-width: 110px;
+}
+.edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+.edit-grid label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.review-text {
+  max-height: 280px;
+  white-space: pre-wrap;
+}
 .dialog-form { display: grid; gap: 10px; padding: 18px; }
 .edit-flags { display: grid; gap: 6px; }
 .edit-flag {
@@ -853,7 +897,7 @@ pre {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
-  margin: 0 0 12px;
+  margin: 20px 0 12px;
 }
 .scan-total {
   border: 1px solid var(--line);
@@ -874,8 +918,8 @@ pre {
 #items-table tfoot th,
 #items-table tfoot td {
   font-weight: 600;
-  border-top: 1px solid var(--line);
-  padding-top: 8px;
+  border-top: 2px solid var(--line);
+  padding-top: 16px;
 }
 #items-table tfoot .num,
 #items-table tfoot .money {

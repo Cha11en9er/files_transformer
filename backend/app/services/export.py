@@ -33,6 +33,7 @@ from app.services.export_beijing import (
     spec_headers,
     spec_rows,
 )
+from app.services.export_tsd import export_tsd_book, is_tsd_layout, tsd_preview
 from app.services.export_style import (
     merge_row,
     safe_export_stem,
@@ -221,6 +222,11 @@ def build_export_preview(
     if str(profile_type).upper() in {"BEIJING", "PROFILETYPE.BEIJING"}:
         products = _product_items(items)
         stem = safe_export_stem(shipment_title)
+        if is_tsd_layout(products, header):
+            return {
+                "profile_type": "BEIJING",
+                "files": [tsd_preview(products, header, f"ТСД {stem}.xlsx")],
+            }
         return {
             "profile_type": "BEIJING",
             "files": [
@@ -433,6 +439,11 @@ def _save_simple_book(path: Path, title: str, headers: list[str], rows: list[lis
 
 def export_beijing(items: list[dict[str, Any]], output_path: Path, header: dict[str, Any] | None = None) -> Path:
     products = _product_items(items)
+    if is_tsd_layout(products, header):
+        stem = output_path.stem
+        if "для ЭД" in stem:
+            output_path = output_path.with_name(f"ТСД {stem.replace(' для ЭД', '')}.xlsx")
+        return export_tsd_book(products, output_path, header)
     return export_beijing_book(products, output_path, header)
 
 

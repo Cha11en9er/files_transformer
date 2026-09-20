@@ -280,6 +280,29 @@ def test_classify_stacked_weight_and_series_art_headers():
     assert mapping.get(6) == "net_weight" or mapping.get(7) == "net_weight"
 
 
+def test_tsd_export_headers_are_bilingual():
+    from app.services.export_tsd import invoice_headers, packing_headers, spec_headers
+
+    inv = invoice_headers("USD")
+    pak = packing_headers()
+    spec = spec_headers("USD")
+    assert any("DESCRIPTION" in h and "Описание" in h for h in inv)
+    assert any("COUNTRY OF ORIGIN" in h and "Страна" in h for h in inv)
+    assert any("PACKAGE" in h and "Места" in h for h in pak)
+    assert any("НАИМЕНОВАНИЕ" in h and "Description" in h for h in spec)
+    bilingual = classify_columns(
+        [
+            ColumnStat(0, "№", ["1"]),
+            ColumnStat(1, "CODE / Код ТН ВЭД", ["9506620000"]),
+            ColumnStat(2, "DESCRIPTION / Описание", ["Water ball"]),
+            ColumnStat(3, "MODEL / SERIES / ART. / Модель, серия, арт.", ["31021"]),
+            ColumnStat(4, "QTY / Кол-во", ["360"]),
+        ]
+    )
+    assert bilingual[3] == "article"
+    assert bilingual[4] == "qty"
+
+
 def test_pdf_continuation_keeps_all_rows_and_skips_header_label():
     from app.transform.extract import extract_sheet
     from app.transform.merge import merge_documents
@@ -499,4 +522,132 @@ def test_beijing_goldluck_merged_article_is_one_item(tmp_path: Path):
     assert a519_row[7].value not in (None, "")
     merged_coords = {str(rng) for rng in packing.merged_cells.ranges}
     assert any("H" in coord or coord.startswith("H") for coord in merged_coords)
+
+
+def test_spec_stacked_header_and_letterhead_page_are_not_goods():
+    from app.transform.extract import extract_sheet, mapping_fits_sheet
+    from app.transform.merge import merge_documents
+    from app.transform.pdf import flatten_header_rows
+    from app.transform.reader import Sheet
+
+    header = [
+        ["НАИМЕНОВАНИЕ ТОВАРА", "МОДЕЛЬ,", "ФИРМА ПРОИЗВ-ЛЬ", "СТРАНА ПРОИСХ.", "КОЛ-ВО", "ЕД.ИЗМ.", "ВЕС БРУТТО, КГ", "ВЕС НЕТТО, КГ", "СТОИМОСТЬ,", None, "СТ-СТЬ"],
+        [None, "СЕРИЯ, АРТ.", None, None, None, None, None, None, "USD", "ЕД.ИЗМ.", "USD"],
+    ]
+    goods = [
+        ["Water ball / Водный мяч", "310210", "Bestway / Bestway", "CN", "360", "ШТ", "39.10", "36.40", "0.1362", "ШТ", "49.03"],
+        ["Repair kit / Набор", "62091", "Bestway / Bestway", "CN", "828", "ШТ", "23.46", "20.70", "0.0277", "ШТ", "22.94"],
+        ["ИТОГО:", None, None, None, "1188", None, "62.56", "57.10", None, None, "71.97"],
+    ]
+    flat = flatten_header_rows(header + goods)
+    assert "СЕРИЯ" in str(flat[0][1]).upper() or "АРТ" in str(flat[0][1]).upper()
+    sheet = Sheet(name="p1", grid=flat, source="SPEC.pdf")
+    ex = extract_sheet(sheet)
+    assert ex is not None
+    arts = [row.article for row in ex.rows]
+    assert arts == ["310210", "62091"]
+    assert ex.stopped_at_total
+
+    footer = Sheet(
+        name="p3",
+        grid=[
+            ["Условия поставки: F", "CA Шанхай (Инкотермс 2020)"],
+            ["INN: 9726095048", "KPP: 507401001"],
+            ["Current account in", "rubles: No.40702810310001872"],
+            ["Генеральный дир", "ектор"],
+        ],
+        source="SPEC.pdf",
+    )
+    assert not mapping_fits_sheet(footer, ex.mapping)
+    items = merge_documents([ex])
+    assert [it.article for it in items] == ["310210", "62091"]
+
+
+@requires_docs
+def test_besway2_pdf_kit_is_fourteen_items(tmp_path: Path):
+    kit = DOCS / "4_pravka" / "для тест" / "besway 2"
+    pdfs = sorted(kit.glob("*.pdf"))
+    if len(pdfs) < 3:
+        pytest.skip("besway 2 PDFs not available")
+    from app.services.export import export_beijing
+    from app.transform.service import canonical_to_rows, transform_paths
+
+    result = transform_paths([(str(p), p.name) for p in pdfs])
+    assert len(result.items) == 14
+    arts = [it.article for it in result.items]
+    assert "СЕРИЯ, АРТ." not in arts
+    assert "310210" in arts or "31021" in arts
+    assert result.header.get("invoice_no") == "NH-331005"
+    assert "HMK" in str(result.header.get("seller") or "").upper()
+    assert "NECARGO" in str(result.header.get("buyer") or "").upper()
+    contract = str(result.header.get("contract_no") or "")
+    assert "NEC-01" in contract.upper().replace("С", "C") or "01/10" in contract
+    assert "SHANGHAI" in str(result.header.get("delivery_terms") or "").upper()
+    assert "HONGKONG" in str(result.header.get("seller_address") or "").upper()
+    assert "PODOLSK" in str(result.header.get("buyer_address") or "").upper() or "142116" in str(result.header.get("buyer_address") or "")
+    assert all("обработан кодом, нашлось" in (f.message or "") for f in result.files if f.status == "ok")
+    assert all("14" in (f.message or "") for f in result.files if f.status == "ok")
+    rows = canonical_to_rows(result.items)
+    path = export_beijing(rows, tmp_path / "export.xlsx", result.header)
+    assert "ТСД" in path.name or path.suffix == ".xlsx"
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path)
+    assert "INV" in wb.sheetnames
+    assert "PAK" in wb.sheetnames
+    inv = wb["INV"]
+    blob = " ".join(str(inv.cell(r, 1).value or "") for r in range(1, 16))
+    assert "HMK" in blob.upper() or "INVOICE" in blob.upper()
+    assert "BEIJING GOLDLUCK" not in blob.upper()
+
+
+@requires_docs
+def test_matrac_pdf_kit_is_tsd_not_goldluck(tmp_path: Path):
+    kit = DOCS / "4_pravka" / "для тест" / "Матрац"
+    pdfs = sorted(
+        p for p in kit.glob("*.pdf") if p.name.upper().startswith(("INV", "PAK"))
+    )
+    if len(pdfs) < 2:
+        pytest.skip("Матрац PDFs not available")
+    from app.services.export import export_beijing
+    from app.transform.service import canonical_to_rows, transform_paths
+
+    result = transform_paths([(str(p), p.name) for p in pdfs])
+    assert len(result.items) == 27
+    arts = [it.article for it in result.items]
+    assert "64756" in arts
+    assert "58671EU" in arts
+    assert result.header.get("invoice_no") == "IDV3040C"
+    assert "HMK" in str(result.header.get("seller") or "").upper()
+    assert "NECARGO" in str(result.header.get("buyer") or "").upper()
+    assert "DAP" in str(result.header.get("delivery_terms") or "").upper()
+    assert "CHERTANOVSKAYA" in str(result.header.get("buyer_address") or "").upper() or "117534" in str(result.header.get("buyer_address") or "")
+    rows = canonical_to_rows(result.items)
+    assert rows[0]["customs_data"].get("hs_code") or rows[0]["customs_data"].get("tnved_code")
+    path = export_beijing(rows, tmp_path / "export.xlsx", result.header)
+    assert "ТСД" in path.name or path.suffix == ".xlsx"
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path)
+    assert "INV" in wb.sheetnames
+    blob = " ".join(str(wb["INV"].cell(r, 1).value or "") for r in range(1, 18))
+    assert "HMK" in blob.upper()
+    assert "DAP" in blob.upper() or "DAP" in str(wb["INV"].cell(14, 1).value or "").upper() or any(
+        "DAP" in str(wb["INV"].cell(r, 1).value or "").upper() for r in range(1, 18)
+    )
+    assert "BEIJING GOLDLUCK" not in blob.upper()
+    inv_headers = " ".join(
+        str(wb["INV"].cell(r, c).value or "")
+        for r in range(1, 30)
+        for c in range(1, 13)
+    )
+    assert "DESCRIPTION" in inv_headers
+    assert "Описание" in inv_headers
+    pak_headers = " ".join(
+        str(wb["PAK"].cell(r, c).value or "")
+        for r in range(1, 30)
+        for c in range(1, 12)
+    )
+    assert "PACKAGE" in pak_headers
+    assert "Места" in pak_headers
 

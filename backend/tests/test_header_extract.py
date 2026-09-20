@@ -124,3 +124,79 @@ def test_letterhead_grid_splits_buyer_and_date() -> None:
     assert header["invoice_no"] == "ZFRMB26148-626-1"
     assert "Aug.19" in header["invoice_date"]
     assert header["contract_no"] == "SM-LU2"
+
+
+def test_header_from_invoice_colon_and_company_limited() -> None:
+    invoice = ParsedDocument(
+        filename="INV_WAY05_1.pdf",
+        file_path="INV_WAY05_1.pdf",
+        mime_hint="pdf",
+        text_preview=(
+            "HMK TRADING COMPANY LIMITED\n"
+            "INVOICE: NH-331005\n"
+            "DATE: 15.03.2026\n"
+            "THE SELLER:\n"
+            "HMK TRADING COMPANY LIMITED\n"
+            "Address: RM1607 TREND CTR 29-31 CHEUNG LEE ST CHAIWAN HONGKONG\n"
+            "CONTRACT: NEC-01/10 dd 01.10.2025\n"
+            "THE BUYER:\n"
+            "LLC NECARGO\n"
+            "Address: 142116, Moscow region, g.o. Podolsk\n"
+            "Terms of delivery: FCA Shanghai (Incoterms 2020)\n"
+            "CONTAINER: SORU4033371\n"
+        ),
+    )
+    header = extract_header_fields([invoice])
+    assert header["invoice_no"] == "NH-331005"
+    assert "HMK" in header["seller"].upper()
+    assert "NECARGO" in header["buyer"].upper()
+    assert header["contract_no"].replace("С", "C").startswith("NEC-01")
+    assert "15.03.2026" in header["invoice_date"]
+    assert "01.10.2025" in (header.get("contract_date") or "")
+    assert "SHANGHAI" in header["delivery_terms"].upper()
+    assert "INCOTERM" in header["delivery_terms"].upper()
+    assert "TREND" in (header.get("seller_address") or "").upper() or "HONGKONG" in (header.get("seller_address") or "").upper()
+    assert "PODOLSK" in (header.get("buyer_address") or "").upper() or "142116" in (header.get("buyer_address") or "")
+    assert "SORU4033371" in header["container_no"]
+
+
+def test_payment_prose_does_not_steal_contract_no() -> None:
+    invoice = ParsedDocument(
+        filename="INV.pdf",
+        file_path="INV.pdf",
+        mime_hint="pdf",
+        text_preview=(
+            "CONTRACT: NEC-01/10 dd 01.10.2025\n"
+            "The Buyer pays for the Goods within 90 days after customs clearance.\n"
+            "Conversion into the currency of the contract in this case is made at the exchange rate.\n"
+        ),
+    )
+    header = extract_header_fields([invoice])
+    assert header["contract_no"].replace("С", "C").startswith("NEC-01")
+    assert "01.10.2025" in (header.get("contract_date") or "")
+
+
+def test_dap_incoterm_and_street_continuation() -> None:
+    invoice = ParsedDocument(
+        filename="INV.pdf",
+        file_path="INV.pdf",
+        mime_hint="pdf",
+        text_preview=(
+            "INVOICE: IDV3040C\n"
+            "THE SELLER:\n"
+            "HMK TRADING COMPANY LIMITED\n"
+            "Address: RM1607 TREND CTR 29-31 CHEUNG LEE ST CHAIWAN HONGKONG\n"
+            "THE BUYER:\n"
+            "LLC NECARGO\n"
+            "Address: 117534, Russia, Moscow, internal territorial city municipal district Yuzhnoye Chertanovo,\n"
+            "Chertanovskaya St., 66, bldg. 2, apt. 142\n"
+            "Terms of delivery: DAP Moscow (Incoterms 2020)\n"
+        ),
+    )
+    header = extract_header_fields([invoice])
+    assert header["invoice_no"] == "IDV3040C"
+    assert "DAP" in header["delivery_terms"].upper()
+    assert "MOSCOW" in header["delivery_terms"].upper()
+    assert "117534" in (header.get("buyer_address") or "")
+    assert "CHERTANOVSKAYA" in (header.get("buyer_address") or "").upper()
+    assert "HONGKONG" in (header.get("seller_address") or "").upper()
