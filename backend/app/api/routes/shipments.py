@@ -440,10 +440,8 @@ def _iter_create_events(
 
         reconciled: list[dict[str, Any]] = canonical_to_rows(result.items)
         parsed_docs = result.sources
-        if result.profile == "18233":
-            active_profile = ProfileType.PROFILE_18233
-        elif result.profile == "beijing":
-            active_profile = ProfileType.BEIJING
+        # Export layout is the profile the operator picked. Auto-detect only
+        # fills result.profile for diagnostics; it must not switch 18233 <-> Beijing.
 
         items = _items_from_rows(reconciled)
         excel_totals = compute_excel_totals(items)

@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from app.parsing.normalize import normalize_text
-from app.transform.extract import ExtractedSheet, Row
+from app.transform.extract import ExtractedSheet, Row, split_design
 
 _NON_ALNUM = re.compile(r"[^0-9A-Za-zА-Яа-яЁё]+")
 _GROUP_PREFIX = re.compile(r"^(sofa\s*fabric|artificial\s*leather|genuine\s*leather|pu\s*leather)\s*", re.IGNORECASE)
@@ -236,8 +236,12 @@ def merge_documents(
                 it.lines = [dict(line) for line in row.lines]
             elif row.lines and it.lines:
                 _merge_lines(it, row.lines)
+            if row.item_no is not None:
+                _prefer(it, "_no", row.item_no)
+            if row.fields.get("_group"):
+                _prefer(it, "_group", row.fields.get("_group"))
             for k, v in row.fields.items():
-                if k.startswith("_") and k != "_pack_group":
+                if k.startswith("_") and k not in {"_pack_group", "_group", "_no"}:
                     continue
                 _prefer(it, k, v)
 
@@ -256,7 +260,7 @@ def merge_documents(
             apply_weights = len(cands) == 1
             for it in cands:
                 it.sources.append(sheet.source + " (spec)")
-                for k in ("meters", "area", "rolls", "width"):
+                for k in ("meters", "area", "width"):
                     _prefer(it, k, data.get(k))
                 for k in ("hs_code", "customs_code", "description", "price", "color"):
                     _prefer(it, k, data.get(k))
@@ -275,12 +279,25 @@ def merge_documents(
         if sheet.detail:
             continue
         for row in sheet.rows:
-            key = match_key(row.article)
+            article = row.article
+            category, sku = split_design(article)
+            if sku and _by_article(match_key(sku)):
+                article = sku
+            key = match_key(article)
             if not key:
                 continue
-            if _by_article(key) or not _GROUP_PREFIX.match(row.article):
-                it = pick_lot(row.article, row.fields) or item_for_lot(row.article, row.fields)
+            prefix_children = [
+                it
+                for it in items.values()
+                if key and len(key) >= 3 and it.key.startswith(key) and len(it.key) > len(key)
+            ]
+            if _by_article(key):
+                it = pick_lot(article, row.fields) or item_for_lot(article, row.fields)
                 it.sources.append(row.source)
+                if category:
+                    _prefer(it, "_group", category)
+                if row.fields.get("_group"):
+                    _prefer(it, "_group", row.fields.get("_group"))
                 if row.lines:
                     _merge_lines(it, row.lines)
                 else:
@@ -292,8 +309,24 @@ def merge_documents(
                         _prefer(it, k, row.fields.get(k), overwrite=True)
                 if row.fields.get("_pack_group"):
                     _prefer(it, "_pack_group", row.fields.get("_pack_group"))
-            else:
+            elif _GROUP_PREFIX.match(row.article) or prefix_children:
                 family_rows.append(row)
+            else:
+                it = pick_lot(article, row.fields) or item_for_lot(article, row.fields)
+                it.sources.append(row.source)
+                if category:
+                    _prefer(it, "_group", category)
+                if row.lines:
+                    _merge_lines(it, row.lines)
+                else:
+                    _apply_packing_to_item(it, row.fields)
+                for k in _PACKING_FILL:
+                    _prefer(it, k, row.fields.get(k))
+                for k in _PACKING_OVERWRITE:
+                    if not it.lines:
+                        _prefer(it, k, row.fields.get(k), overwrite=True)
+                if row.fields.get("_pack_group"):
+                    _prefer(it, "_pack_group", row.fields.get("_pack_group"))
 
     _distribute_families(family_rows, items)
     _attach_components(sheets, items)

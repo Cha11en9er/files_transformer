@@ -162,13 +162,31 @@ def _item_blob(items: list[dict[str, Any]], header: dict[str, Any] | None = None
     return " ".join(parts).upper()
 
 
-def _looks_element(items: list[dict[str, Any]], header: dict[str, Any] | None = None) -> bool:
-    blob = _item_blob(items, header)
-    if "ELT-LU" in blob or "ELEMENT" in blob:
+def _goods_use_fabric_columns(items: list[dict[str, Any]] | None) -> bool | None:
+    """True when goods carry meters+width (Hangzhou fabric), False when they do not.
+
+    None means there is not enough to decide. Never keys off a shop name or SKU.
+    """
+    products = [item for item in (items or []) if item.get("article")]
+    if len(products) < 2:
+        return None
+    meters = sum(1 for item in products if (item.get("packing_data") or {}).get("meters") not in (None, ""))
+    width = sum(1 for item in products if (item.get("packing_data") or {}).get("width") not in (None, ""))
+    if meters >= max(2, int(len(products) * 0.3)) and width:
         return True
+    return False
+
+
+def _looks_element(items: list[dict[str, Any]], header: dict[str, Any] | None = None) -> bool:
+    shaped = _goods_use_fabric_columns(items)
+    if shaped is False:
+        return True
+    if shaped is True:
+        return False
+    blob = _item_blob(items, header)
     if "SOFA FABRIC" in blob or "ARTIFICIAL LEATHER" in blob:
         return False
-    return bool(re.search(r"ПРОФИЛЬ|ЛЕНТА ЭЛАСТИЧН|MD\d{3}|MO SHO", blob))
+    return bool(re.search(r"PACKAGES|UNIT M/PC", blob))
 
 
 def _layout_kit(kit: str | None, items: list[dict[str, Any]], header: dict[str, Any] | None = None) -> str:
@@ -183,7 +201,10 @@ def _layout_kit(kit: str | None, items: list[dict[str, Any]], header: dict[str, 
     return "626-1"
 
 
-def is_fabric_layout(layout: str | None) -> bool:
+def is_fabric_layout(layout: str | None, items: list[dict[str, Any]] | None = None) -> bool:
+    shaped = _goods_use_fabric_columns(items)
+    if shaped is not None:
+        return shaped
     return (layout or "626-1") != "18312"
 
 
@@ -193,6 +214,8 @@ def _ordered_products(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for i in items
         if (i.get("source_traces") or {}).get("invoice") or (i.get("source_traces") or {}).get("specification")
     ]
+    if not products:
+        products = [i for i in items if i.get("article")]
     products.sort(key=lambda i: int(((i.get("source_traces") or {}).get("invoice") or {}).get("no") or 999))
     return products
 
@@ -231,6 +254,13 @@ def _group_prefix(item: dict[str, Any], fabric: bool) -> str:
     if design:
         formatted = _format_packing_design(design, item.get("article"))
         return formatted.split("\n", 1)[0]
+    group = (
+        (item.get("commercial_data") or {}).get("group")
+        or (item.get("source_traces") or {}).get("group")
+        or ""
+    )
+    if group:
+        return str(group).split("\n", 1)[0]
     article = str(item.get("article") or "")
     if not fabric:
         return ""
@@ -383,7 +413,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                     group_amount,
                 ]
             )
-        else:
+        elif prefix:
             rows.append(
                 [
                     None,
@@ -538,8 +568,8 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
     return rows
 
 
-def preview_headers(layout: str | None) -> dict[str, list[str]]:
-    fabric = is_fabric_layout(layout)
+def preview_headers(layout: str | None, items: list[dict[str, Any]] | None = None) -> dict[str, list[str]]:
+    fabric = is_fabric_layout(layout, items)
     return {
         "invoice": FABRIC_INVOICE_HEADERS if fabric else ELEMENT_INVOICE_HEADERS,
         "packing": FABRIC_PACKING_HEADERS if fabric else ELEMENT_PACKING_HEADERS,
@@ -754,7 +784,7 @@ def fill_specification_template(
     wb = load_workbook(output)
     ws = wb[wb.sheetnames[0]]
     products = _ordered_products(items)
-    fabric = is_fabric_layout(_layout_kit(kit, products, header))
+    fabric = is_fabric_layout(_layout_kit(kit, products, header), products)
     rows = spec_table_rows(products, fabric)
     header_row = _find_header_row(ws, "№", "ART", "PRODUCT") or 22
     data_start = header_row + 1
@@ -858,7 +888,7 @@ def fill_invoice_template(
     wb = load_workbook(output)
     ws = wb.active
     products = _ordered_products(items)
-    fabric = is_fabric_layout(_layout_kit(kit, products, header))
+    fabric = is_fabric_layout(_layout_kit(kit, products, header), products)
     rows = invoice_table_rows(products, fabric)
     header_row = _find_header_row(ws, "NO.", "DESIGN") or 24
     data_start = header_row + 1
@@ -892,7 +922,7 @@ def fill_packing_template(
     wb = load_workbook(output)
     ws = wb.active
     products = _ordered_products(items)
-    fabric = is_fabric_layout(_layout_kit(kit, products, header))
+    fabric = is_fabric_layout(_layout_kit(kit, products, header), products)
     rows = packing_table_rows(products, fabric)
     header_row = _find_header_row(ws, "NO.", "NO", "DESIGN") or 9
     data_start = header_row + 1

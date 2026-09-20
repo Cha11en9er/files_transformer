@@ -245,7 +245,7 @@ def build_export_preview(
     products = _product_items(items)
     kit = _kit_label(products, header)
     layout = _layout_kit(kit, products, header)
-    fabric = is_fabric_layout(layout)
+    fabric = is_fabric_layout(layout, products)
     suffix = f" {kit}" if kit else ""
     stem = safe_export_stem(shipment_title)
     inv_h, inv_r = _aligned_invoice_rows(products, fabric)
@@ -458,7 +458,7 @@ def export_18233(
     products = _product_items(items)
     kit = _kit_label(products, header)
     layout = _layout_kit(kit, products, header)
-    fabric = is_fabric_layout(layout)
+    fabric = is_fabric_layout(layout, products)
     suffix = f" {kit}" if kit else ""
     stem = safe_export_stem(shipment_title)
     writers = {

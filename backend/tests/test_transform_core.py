@@ -31,6 +31,91 @@ def test_match_key_normalizes_names():
     assert match_key("Noble 110") == "NOBLE110"
 
 
+def test_split_design_keeps_category_and_sku():
+    from app.transform.extract import split_design
+
+    assert split_design("Мебельный профиль\nПрофиль О-30 (круглый, 5015)") == (
+        "Мебельный профиль",
+        "Профиль О-30 (круглый, 5015)",
+    )
+    assert split_design("SOFA FABRIC / Noble") == ("SOFA FABRIC", "Noble")
+    assert split_design("MD813") == ("", "MD813")
+
+
+def test_unnumbered_category_row_is_caption_not_a_second_item():
+    from app.transform.extract import extract_sheet
+    from app.transform.reader import Sheet
+
+    grid = [
+        ["NO.", "DESIGN", "H.S. CODE", "PACKAGES", "QUANTITY", "UNIT M/PC", "UNIT PRICE(RMB)", "AMOUNT(RMB)"],
+        [1, "Профиль О-30 (круглый, 5015)", "3926909090", 3, 18000, "M", 0.13, 2340],
+        [None, "Мебельный профиль\nПрофиль О-30 (круглый, 5015)", None, 3, 18000, None, None, 2340],
+        [2, "MD813", "7318230000", 1, 200100, "PC", 0.049, 9804.9],
+        [None, "мебельная фурнитураMD813", None, 1, 200100, None, None, 9804.9],
+        [None, "TOTAL:", None, 4, None, None, None, 12144.9],
+    ]
+    sheet = Sheet(name="Sheet1", grid=grid, source="invoice.xlsx")
+    extracted = extract_sheet(sheet)
+    assert extracted is not None
+    assert len(extracted.rows) == 2
+    profile = extracted.rows[0]
+    rivet = extracted.rows[1]
+    assert "О-30" in profile.article
+    assert "мебельн" not in profile.article.lower() or "профиль о-30" in profile.article.lower()
+    assert profile.fields.get("_group") == "Мебельный профиль"
+    assert profile.fields.get("qty") == 18000
+    assert profile.fields.get("amount") == 2340
+    assert rivet.article == "MD813"
+    assert rivet.fields.get("_group") == "мебельная фурнитура"
+    assert rivet.fields.get("qty") == 200100
+
+
+def test_packing_category_line_matches_invoice_sku():
+    from app.transform.extract import ExtractedSheet, Row
+
+    invoice = ExtractedSheet(
+        name="inv",
+        source="inv.xlsx",
+        role="invoice",
+        mapping={},
+        header_text="invoice",
+        rows=[
+            Row(
+                article="Профиль О-30 (круглый, 5015)",
+                normalized="ПРОФИЛЬО-30(КРУГЛЫЙ,5015)",
+                fields={"qty": 18000.0, "price": 0.13, "amount": 2340.0, "rolls": 3.0, "unit": "M", "_group": "Мебельный профиль"},
+                source="inv",
+                role="invoice",
+                item_no=1,
+            ),
+        ],
+    )
+    packing = ExtractedSheet(
+        name="pl",
+        source="pl.xlsx",
+        role="packing",
+        mapping={},
+        header_text="packing",
+        rows=[
+            Row(
+                article="Мебельный профиль\nПрофиль О-30 (круглый, 5015)",
+                normalized="МЕБЕЛЬНЫЙПРОФИЛЬПРОФИЛЬО-30(КРУГЛЫЙ,5015)",
+                fields={"qty": 18000.0, "rolls": 3.0, "net_weight": 84.0, "gross_weight": 90.0, "unit": "M"},
+                source="pl",
+                role="packing",
+                item_no=1,
+            ),
+        ],
+    )
+    items = merge_documents([invoice, packing])
+    assert len(items) == 1
+    item = items[0]
+    assert "О-30" in item.article
+    assert item.fields.get("net_weight") == 84.0
+    assert item.fields.get("qty") == 18000.0
+    assert item.fields.get("_group") == "Мебельный профиль"
+
+
 def test_parse_number_eu_us():
     assert parse_number("1,234.56") == 1234.56
     assert parse_number("1.234,56") == 1234.56
@@ -91,14 +176,25 @@ def _by_key(items):
 
 @requires_docs
 def test_hangzhou_child_family_and_weight_split():
-    base = "18080 ЛЮ 621 ТМЛ/Исходные"
+    base = "я_тестирую/03_ханчжоу_18080_621-1/вход"
+    if not (DOCS / base).exists():
+        base = "18080 ЛЮ 621 ТМЛ/Исходные"
     if not (DOCS / base).exists():
         base = "3_pravka/18080/Исходные"
-    sheets = (
-        _load(f"{base}/621-1-YS-RMB-EXW-INVOICE.XLSX")
-        + _load(f"{base}/621-1-YS-RMB-EXW-PL.XLSX")
-        + _load(f"{base}/621-1-YS-RMB-EXW-Specification.xls")
-    )
+    if not (DOCS / base).exists():
+        pytest.skip("Hangzhou 621-1 sources not available")
+    if "вход" in base:
+        sheets = (
+            _load(f"{base}/инвойс.xlsx")
+            + _load(f"{base}/пакинг.xlsx")
+            + _load(f"{base}/спецификация.xls")
+        )
+    else:
+        sheets = (
+            _load(f"{base}/621-1-YS-RMB-EXW-INVOICE.XLSX")
+            + _load(f"{base}/621-1-YS-RMB-EXW-PL.XLSX")
+            + _load(f"{base}/621-1-YS-RMB-EXW-Specification.xls")
+        )
     items = _by_key(merge_documents(sheets))
 
     noble110 = items[match_key("Noble 110")]
