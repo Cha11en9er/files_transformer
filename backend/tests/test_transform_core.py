@@ -123,6 +123,60 @@ def test_parse_number_eu_us():
     assert parse_number("2 736.15") == 2736.15
     assert parse_number("5,78 USD") == 5.78
     assert parse_number("abc") is None
+    # Three fractional digits are decimals (kg/meters), not EU thousands.
+    assert parse_number("77.700") == 77.7
+    assert parse_number("3,047.000") == 3047.0
+    # True EU thousands need 2+ groups or a comma decimal.
+    assert parse_number("1.234.567") == 1234567.0
+    assert parse_number("1.234,56") == 1234.56
+
+
+def test_classify_bare_kg_and_pallet_headers():
+    cols = [
+        ColumnStat(0, "PALLET", [1, 1, 2]),
+        ColumnStat(1, "ARTICLE", ["RIO", "RIO", "OLD"]),
+        ColumnStat(2, "COLOUR", ["NATURAL", "DESERT", "CUOIO"]),
+        ColumnStat(3, "HIDES", [74, 75, 48]),
+        ColumnStat(4, "m2", [331.1, 320.52, 200.14]),
+        ColumnStat(5, "kg", [235, 228, 142]),
+        ColumnStat(6, "Euro/m2", [19.9, 19.9, 22.4]),
+    ]
+    mapping = classify_columns(cols)
+    assert mapping[0] == "rolls"
+    assert mapping[1] == "article"
+    assert mapping[2] == "color"
+    assert mapping[3] == "qty"
+    assert mapping[4] == "area"
+    assert mapping[5] == "net_weight"
+    assert mapping[6] == "price"
+
+
+def test_priced_repeating_articles_stay_packing_not_detail():
+    from app.transform.reader import Sheet
+
+    grid = [
+        ["PACKING LIST Invoice n. 69"],
+        ["PALLET", "ARTICLE", "COLOUR", "HIDES", "m2", "kg", "Euro/m2"],
+        [1, "RIO", "NATURAL 1", 74, 331.1, 235.0, 19.9],
+        [1, "RIO", "NATURAL 2", 1, 4.01, 3.0, 19.75],
+        [1, "RIO", "DESERT", 75, 320.52, 228.0, 19.9],
+        [1, "OLD", "CUOIO", 48, 200.14, 142.0, 22.4],
+        [1, "OLD", "BEIGE", 34, 152.87, 108.0, 22.4],
+        [1, "OLD", "TAUPE", 44, 200.67, 142.0, 22.4],
+    ]
+    sheet = Sheet(name="Foglio1", grid=grid, source="пакинг.xls")
+    extracted = extract_sheet(sheet)
+    assert extracted is not None
+    assert extracted.detail is False
+    assert extracted.role == "packing"
+    assert len(extracted.rows) >= 6
+    first = extracted.rows[0]
+    assert first.fields.get("qty") == 74
+    assert first.fields.get("area") == 331.1
+    assert first.fields.get("net_weight") == 235.0
+    assert first.fields.get("price") == 19.9
+    assert first.fields.get("rolls") == 1
+    assert first.fields.get("amount") == round(19.9 * 331.1, 2)
 
 
 def test_classify_columns_multilingual():

@@ -265,11 +265,22 @@ async function addPendingFiles(fileList, { extra = false } = {}) {
   try {
     if (!incoming.length) {
       if (raw.length && hint) {
-        hint.textContent = "В выборе нет Excel, PDF или картинок. Нужны исходники, не папка ДС.";
+        const skipped = raw
+          .filter((file) => file && file.name && !isUsefulUpload(file))
+          .map((file) => file.name);
+        const odd = skipped.filter((name) => /\.(doc|docx|rtf|odt)$/i.test(name));
+        if (odd.length) {
+          hint.textContent =
+            `Формат не поддерживается на этапе 1: ${odd.join(", ")}. Нужны Excel (.xlsx/.xls) или PDF.`;
+        } else {
+          hint.textContent = "В выборе нет Excel, PDF или картинок. Нужны исходники, не папка ДС.";
+        }
         hint.className = "status";
       }
       return;
     }
+    const rejected = raw.filter((file) => file && file.name && !isUsefulUpload(file) && !isSkippedRelPath(file.webkitRelativePath || file.name));
+    const odd = rejected.filter((file) => /\.(doc|docx|rtf|odt)$/i.test(file.name));
     const known = new Map();
     for (const file of state.pendingFiles) {
       known.set(await fpOf(file), file);
@@ -289,6 +300,11 @@ async function addPendingFiles(fileList, { extra = false } = {}) {
     state.pendingFiles = [...known.values()];
     hideOldWorkspace();
     syncFileInput();
+    if (odd.length && hint) {
+      hint.textContent =
+        `Пропущен неподдерживаемый формат: ${odd.map((f) => f.name).join(", ")}. Этап 1: Excel и PDF.`;
+      hint.className = "status";
+    }
   } catch (err) {
     if (hint) {
       hint.textContent = `Не удалось взять файлы: ${err && err.message ? err.message : err}`;

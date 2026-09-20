@@ -77,6 +77,11 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "pkgs",
         "total roll",
         "top adet",
+        "pallet",
+        "pallets",
+        "паллет",
+        "палет",
+        "palet",
     ),
     "boxes": ("boxes", "box", "cartons", "carton", "короб", "мест"),
     "meters": (
@@ -109,6 +114,8 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "weight net",
         "netto with primary",
         "primary packaging",
+        "kg",
+        "кг",
     ),
     "gross_weight": (
         "gross weight",
@@ -366,7 +373,11 @@ def classify_header(header: str) -> str | None:
         return "net_weight"
     if "нетто" in h or "n.w" in h or "net weight" in h or "weight net" in h:
         return "net_weight"
-    if "брутто" in h or "brutto" in h or "g.w" in h or "gross weight" in h:
+    if h.strip() in {"kg", "кг"}:
+        return "net_weight"
+    if h.strip() in {"pallet", "pallets", "паллет", "палет", "palet"}:
+        return "rolls"
+    if "брутто" in h or "brutto" in h or "g.w" in h or "gross weight" in h or "gross weigth" in h:
         return "gross_weight"
     if "таможенный код" in h or "customs code" in h or "тн вэд" in h:
         return "tnved_code"

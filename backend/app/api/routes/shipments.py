@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import queue
 import re
 import shutil
 import tempfile
+import threading
 import uuid
 import zipfile
 from collections.abc import Iterator
@@ -511,11 +513,44 @@ def _iter_create_events(
             pages=vision_pages,
             excel_totals=excel_totals.model_dump(),
         )
-        review_dict = review_with_opencode(
-            snapshot=snapshot,
-            pages=vision_pages,
-            excel_paths=usable_paths,
-        )
+        # Keep the NDJSON stream alive while OpenCode thinks — silent gaps
+        # of 1–3 minutes get killed by proxies/browsers as "network error".
+        review_box: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+        def _call_model() -> None:
+            try:
+                review_box.put(
+                    (
+                        "ok",
+                        review_with_opencode(
+                            snapshot=snapshot,
+                            pages=vision_pages,
+                            excel_paths=usable_paths,
+                        ),
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 — surface to stream consumer
+                review_box.put(("err", exc))
+
+        worker = threading.Thread(target=_call_model, name="opencode-review", daemon=True)
+        worker.start()
+        waited = 0
+        while worker.is_alive():
+            worker.join(timeout=12.0)
+            if worker.is_alive():
+                waited += 12
+                yield {
+                    "event": "progress",
+                    "current": total,
+                    "total": total,
+                    "filename": "модель",
+                    "stage": "model",
+                    "message": f"Модель всё ещё отвечает ({waited} с)",
+                }
+        review_status, review_payload = review_box.get()
+        if review_status == "err":
+            raise review_payload
+        review_dict = review_payload
         review_dict["excel_totals"] = excel_totals.model_dump()
         if review_dict.get("status") == "ok":
             review_dict = apply_scan_review(items, review_dict)
@@ -608,7 +643,14 @@ async def create_shipment(
                 + "\n"
             ).encode("utf-8")
 
-    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+    return StreamingResponse(
+        event_stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/permits", response_model=PermitSearchOut)
