@@ -18,6 +18,11 @@ const STATUS_RU = {
   FAILED: "Ошибка",
 };
 
+const PROFILE_RU = {
+  "18233": "Три Excel: Инвойс + Пакинг + Спецификация",
+  BEIJING: "Одна книга: Invoice + Packing list + Specification + Описание",
+};
+
 const state = { shipmentId: null, workspace: null, selectedItemId: null, pendingFiles: [], lastDupes: [], sessionLocked: false };
 const extraFiles = new WeakSet();
 
@@ -958,27 +963,14 @@ function reviewSources(ws) {
   return { pdfs, excel, files: [...pdfs, ...excel] };
 }
 
-function renderReviewMeta(ws, review) {
+function renderReviewMeta(ws, _review) {
   const reviewMeta = $("#model-review-meta");
   const launch = $("#review-launch");
   const { files } = reviewSources(ws);
   if (launch) launch.classList.toggle("hidden", !files.length);
   if (!reviewMeta) return;
-  if (!review) {
-    reviewMeta.textContent = "";
-    return;
-  }
-  const bits = [];
-  if (review.model_label || review.model) bits.push(review.model_label || review.model);
-  if (review.image_count) bits.push(`${review.image_count} стр.`);
-  if (review.review_cost_usd != null) bits.push(`это распознавание $${Number(review.review_cost_usd).toFixed(2)}`);
-  if (review.usage_usd != null) bits.push(`расход $${Number(review.usage_usd).toFixed(2)}`);
-  if (review.remaining_usd != null) {
-    bits.push(`${review.remaining_is_key_limit ? "лимит ключа" : "остаток"} $${Number(review.remaining_usd).toFixed(2)}`);
-  }
-  if (review.status === "ok") bits.push("модель ответила");
-  else if (review.status === "error") bits.push(humanizeClientError(review.error) || "модель не ответила");
-  reviewMeta.textContent = bits.join(" · ");
+  // End users only need the button; hide model name / cost / balance.
+  reviewMeta.textContent = "";
 }
 
 function sourceKind(file) {
@@ -1169,12 +1161,7 @@ async function refreshExportPreview() {
     const data = await api("/api/v1/shipments/export/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: state.workspace.title,
-        profile_type: state.workspace.profile_type,
-        header_fields: state.workspace.header_fields || {},
-        items: state.workspace.items || [],
-      }),
+      body: JSON.stringify(exportPayload()),
     });
     renderExportPreview(data);
   } catch (err) {
@@ -1223,7 +1210,7 @@ function renderWorkspace() {
   $("#workspace").classList.remove("hidden");
   applyShipmentTitle(ws.title);
   $("#ws-meta").textContent =
-    `${ws.profile_type} · ${STATUS_RU[ws.status] || ws.status} · ${(ws.items || []).length} позиций`;
+    `${PROFILE_RU[ws.profile_type] || ws.profile_type} · ${STATUS_RU[ws.status] || ws.status} · ${(ws.items || []).length} позиций`;
 
   const badges = $("#files-badges");
   badges.innerHTML = "";
@@ -1556,34 +1543,65 @@ function numOrNull(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function readHeaderForm() {
+  const form = $("#header-form");
+  if (!form) return {};
+  return {
+    buyer: form.buyer?.value || "",
+    buyer_address: form.buyer_address?.value || "",
+    seller: form.seller?.value || "",
+    seller_address: form.seller_address?.value || "",
+    contract_no: form.contract_no?.value || "",
+    contract_date: form.contract_date?.value || "",
+    invoice_no: form.invoice_no?.value || "",
+    invoice_date: form.invoice_date?.value || "",
+    delivery_terms: form.delivery_terms?.value || "",
+    payment_terms: form.payment_terms?.value || "",
+    manufacturer: form.manufacturer?.value || "",
+    delivery_date: form.delivery_date?.value || "",
+    warehouse_address: form.warehouse_address?.value || "",
+  };
+}
+
+function applyHeaderFields(payload, { syncItems = false } = {}) {
+  if (!state.workspace) return;
+  const prevInvoice = shipmentTitleFromHeader(state.workspace.header_fields);
+  const nextInvoice = shipmentTitleFromHeader(payload);
+  state.workspace.header_fields = { ...(state.workspace.header_fields || {}), ...payload };
+  if (syncItems && payload.manufacturer) {
+    const maker = String(payload.manufacturer || "").trim();
+    if (maker) {
+      state.workspace.items = (state.workspace.items || []).map((item) => ({
+        ...item,
+        customs_data: { ...(item.customs_data || {}), manufacturer: maker },
+      }));
+    }
+  }
+  const titleNow = (state.workspace.title || "").trim();
+  if (nextInvoice && (isGenericTitle(titleNow) || titleNow === prevInvoice)) {
+    applyShipmentTitle(nextInvoice, { force: true });
+  }
+}
+
+function exportPayload() {
+  // Always take the latest form values so unsaved реквизиты still go into Excel.
+  applyHeaderFields(readHeaderForm(), { syncItems: true });
+  return {
+    title: state.workspace.title,
+    profile_type: state.workspace.profile_type,
+    header_fields: state.workspace.header_fields || {},
+    items: state.workspace.items || [],
+  };
+}
+
 $("#header-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!state.workspace) return;
-  const form = e.target;
-  const payload = {
-    buyer: form.buyer.value,
-    buyer_address: form.buyer_address?.value || "",
-    seller: form.seller.value,
-    seller_address: form.seller_address?.value || "",
-    contract_no: form.contract_no.value,
-    contract_date: form.contract_date.value,
-    invoice_no: form.invoice_no.value,
-    invoice_date: form.invoice_date.value,
-    delivery_terms: form.delivery_terms.value,
-    payment_terms: form.payment_terms.value,
-    manufacturer: form.manufacturer.value,
-    delivery_date: form.delivery_date.value,
-    warehouse_address: form.warehouse_address.value,
-  };
   try {
-    const prevInvoice = shipmentTitleFromHeader(state.workspace.header_fields);
-    const nextInvoice = shipmentTitleFromHeader(payload);
-    state.workspace.header_fields = { ...(state.workspace.header_fields || {}), ...payload };
-    const titleNow = (state.workspace.title || "").trim();
-    if (nextInvoice && (isGenericTitle(titleNow) || titleNow === prevInvoice)) {
-      applyShipmentTitle(nextInvoice, { force: true });
-    }
+    applyHeaderFields(readHeaderForm(), { syncItems: true });
     renderWorkspace();
+    $("#upload-status").textContent =
+      "Реквизиты сохранены в текущем сеансе. При обновлении страницы правки будут потеряны.";
   } catch (err) {
     alert(`Не удалось сохранить шапку: ${err.message}`);
   }
@@ -1604,12 +1622,7 @@ $("#btn-export").addEventListener("click", async () => {
     const res = await fetch("/api/v1/shipments/export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: state.workspace.title,
-        profile_type: state.workspace.profile_type,
-        header_fields: state.workspace.header_fields || {},
-        items: state.workspace.items || [],
-      }),
+      body: JSON.stringify(exportPayload()),
     });
     if (!res.ok) {
       const text = await res.text();
@@ -1644,11 +1657,21 @@ function paintOpenCodeStatus(data) {
   if (!el || !label) return;
   const status = data && data.status ? data.status : "down";
   el.className = `model-status ${status}`;
-  const modelName = (data && (data.title || data.model_label)) || "Модель не отвечает";
-  label.textContent = modelName;
-  if (money) money.textContent = (data && data.money) || "";
-  const detail = (data && data.detail) || "";
-  el.title = detail ? `${modelName}. ${detail}` : "Нажми, чтобы обновить модель и баланс";
+  const labels = {
+    ok: "Система активна",
+    off: "Система выключена",
+    auth: "Система недоступна",
+    credits: "Система недоступна",
+    error: "Система недоступна",
+    down: "Система недоступна",
+    unknown: "Система…",
+  };
+  label.textContent = labels[status] || "Система недоступна";
+  if (money) {
+    money.textContent = "";
+    money.hidden = true;
+  }
+  el.title = "Проверить состояние сервиса";
 }
 
 async function refreshOpenCodeStatus() {
@@ -1675,7 +1698,7 @@ async function refreshOpenCodeStatus() {
 
 async function pingOpenCode() {
   const label = $("#opencode-status-label");
-  if (label) label.textContent = "Обновляю баланс…";
+  if (label) label.textContent = "Проверяю…";
   await refreshOpenCodeStatus();
 }
 

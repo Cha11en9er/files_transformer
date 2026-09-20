@@ -5,9 +5,15 @@ alwaysApply: true
 
 # Деплой на VPS
 
-Боевой каталог: `/opt/files_transformer`. Сайт крутит systemd `excel-transformer` (uvicorn :8010) и `opencode` (:4096). Секреты только в `backend/.env` (не в корне репо и не в git). Корневой `/opt/files_transformer/.env` сервис не читает. Код на сервер идёт `git clone` / `git pull origin main`, не архивом.
+Боевой каталог: `/opt/files_transformer`. Сайт: http://87.251.86.53:8010/  
+Сервисы systemd: `excel-transformer` (uvicorn :8010) и `opencode` (:4096).
 
-Первый раз:
+Секреты только в `backend/.env` (не в корне репо, не в git). Корневой `/opt/files_transformer/.env` сервис не читает.  
+Код на сервер: `git clone` / `git pull origin main`, не архивом и не правкой файлов руками в `/opt`.
+
+Перед выкладкой локально: изменения должны быть в `main` на GitHub (`git push origin main`). Иначе `git pull` на VPS ничего нового не подтянет.
+
+## Первый раз (чистый VPS)
 
 ```
 cd /opt
@@ -24,9 +30,17 @@ systemctl restart opencode excel-transformer
 systemctl status excel-transformer opencode --no-pager
 ```
 
-В `.env` должны быть `OPENCODE_URL=http://127.0.0.1:4096`, `OPENCODE_ENABLED=1`, `OPENCODE_MODEL=opencode/qwen3.5-plus`, логин и пароль OpenCode.
+В `backend/.env` нужны: `OPENCODE_URL=http://127.0.0.1:4096`, `OPENCODE_ENABLED=1`, `OPENCODE_MODEL=opencode/qwen3.5-plus`, логин и пароль OpenCode.
 
-Обновление:
+## Обычное обновление (после push в main)
+
+С локальной машины сначала:
+
+```
+git push origin main
+```
+
+На VPS:
 
 ```
 cd /opt/files_transformer
@@ -37,7 +51,21 @@ cp /opt/files_transformer/deploy/*.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl restart opencode excel-transformer
 systemctl status excel-transformer opencode --no-pager
-test -s backend/.env || echo 'нет backend/.env'
+test -s /opt/files_transformer/backend/.env || echo 'нет backend/.env'
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8010/
 ```
 
-`git pull` не затирает `.env` и `.venv`, они в `.gitignore`. Не править сайт руками в `/opt` вместо локального репо. После выкладки проверить `cat backend/.env` (OPENCODE_URL, пароль, модель) и что `:8010` отвечает.
+`git pull` не затирает `backend/.env` и `backend/.venv` (они в `.gitignore`).
+
+## После выкладки проверить
+
+```
+cd /opt/files_transformer
+git log -1 --oneline
+grep -E 'OPENCODE_URL|OPENCODE_ENABLED|OPENCODE_MODEL' backend/.env
+systemctl is-active excel-transformer opencode
+```
+
+Сайт в браузере: http://87.251.86.53:8010/ с полным сбросом кэша (`Ctrl+F5`), иначе старый `app.js`.
+
+Если агент просят «дай команды деплоя» - отвечать этим блоком обновления + напоминанием запушить `main`, если локальные коммиты ещё не на remote.

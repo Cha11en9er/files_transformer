@@ -445,11 +445,33 @@ def _has_goods_numbers(fields: dict[str, Any]) -> bool:
 
 
 def _sheet_currency(header_text: str) -> str | None:
-    low = (header_text or "").lower()
-    for token, code in (("usd", "USD"), ("eur", "EUR"), ("cny", "CNY"), ("rmb", "CNY"), ("руб", "RUB")):
-        if token in low:
+    """Currency from price/amount column titles, not from payment-prose lists."""
+    from app.parsing.header_extract import normalize_currency_code
+
+    text = header_text or ""
+    low = text.lower()
+    # Prefer markers next to price/amount headers (PRICE PER USD, Amount (CNY), …).
+    for pattern, code in (
+        (r"(?:unit\s*)?price[^A-Za-zА-Яа-я]{0,12}(?:per\s*)?\(?\s*usd\b", "USD"),
+        (r"amount[^A-Za-zА-Яа-я]{0,8}\(?\s*usd\b", "USD"),
+        (r"(?:unit\s*)?price[^A-Za-zА-Яа-я]{0,12}(?:per\s*)?\(?\s*(?:cny|rmb)\b", "CNY"),
+        (r"amount[^A-Za-zА-Яа-я]{0,8}\(?\s*(?:cny|rmb)\b", "CNY"),
+        (r"(?:unit\s*)?price[^A-Za-zА-Яа-я]{0,12}(?:per\s*)?\(?\s*eur\b", "EUR"),
+        (r"amount[^A-Za-zА-Яа-я]{0,8}\(?\s*eur\b", "EUR"),
+        (r"цена[^A-Za-zА-Яа-яЁё]{0,12}(?:usd|долл)", "USD"),
+        (r"сумма[^A-Za-zА-Яа-яЁё]{0,8}(?:usd|долл)", "USD"),
+        (r"цена[^A-Za-zА-Яа-яЁё]{0,12}(?:cny|rmb|юан|yuan)", "CNY"),
+        (r"сумма[^A-Za-zА-Яа-яЁё]{0,8}(?:cny|rmb|юан|yuan)", "CNY"),
+    ):
+        if re.search(pattern, low, re.I):
             return code
-    return None
+    # Lone currency token only when payment text does not list several options.
+    has_usd = bool(re.search(r"\busd\b|dollar|доллар", low))
+    has_cny = bool(re.search(r"\bcny\b|\brmb\b|yuan|юан", low))
+    has_eur = bool(re.search(r"\beur\b|euro|евро", low))
+    if sum(bool(flag) for flag in (has_usd, has_cny, has_eur)) >= 2:
+        return None
+    return normalize_currency_code(text)
 
 
 def _continuation_start(sheet: Sheet, mapping: dict[int, str]) -> int:

@@ -13,6 +13,10 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 
+from app.parsing.header_extract import (
+    currency_from_sources,
+    export_header_fields,
+)
 from app.services.export_18233_templates import (
     _detect_kit,
     _layout_kit,
@@ -196,18 +200,30 @@ def _item_rows(items: list[dict[str, Any]], kind: str) -> list[list[Any]]:
     return rows
 
 
-def _aligned_invoice_rows(items: list[dict[str, Any]], fabric: bool = True) -> tuple[list[str], list[list[Any]]]:
-    headers = preview_headers("626-1" if fabric else "18312")["invoice"]
+def _aligned_invoice_rows(
+    items: list[dict[str, Any]],
+    fabric: bool = True,
+    header: dict[str, Any] | None = None,
+) -> tuple[list[str], list[list[Any]]]:
+    headers = preview_headers("626-1" if fabric else "18312", items, header)["invoice"]
     return headers, invoice_table_rows(items, fabric)
 
 
-def _aligned_packing_rows(items: list[dict[str, Any]], fabric: bool = True) -> tuple[list[str], list[list[Any]]]:
-    headers = preview_headers("626-1" if fabric else "18312")["packing"]
+def _aligned_packing_rows(
+    items: list[dict[str, Any]],
+    fabric: bool = True,
+    header: dict[str, Any] | None = None,
+) -> tuple[list[str], list[list[Any]]]:
+    headers = preview_headers("626-1" if fabric else "18312", items, header)["packing"]
     return headers, packing_table_rows(items, fabric)
 
 
-def _aligned_spec_rows(items: list[dict[str, Any]], fabric: bool = True) -> tuple[list[str], list[list[Any]]]:
-    headers = preview_headers("626-1" if fabric else "18312")["specification"]
+def _aligned_spec_rows(
+    items: list[dict[str, Any]],
+    fabric: bool = True,
+    header: dict[str, Any] | None = None,
+) -> tuple[list[str], list[list[Any]]]:
+    headers = preview_headers("626-1" if fabric else "18312", items, header)["specification"]
     return headers, spec_table_rows(items, fabric)
 
 
@@ -219,8 +235,9 @@ def build_export_preview(
     shipment_title: str = "export",
 ) -> dict[str, Any]:
     """JSON preview of files that export() will write. No PDF/txt."""
+    products = _product_items(items)
+    header = prepare_export_header(products, header)
     if str(profile_type).upper() in {"BEIJING", "PROFILETYPE.BEIJING"}:
-        products = _product_items(items)
         stem = safe_export_stem(shipment_title)
         if is_tsd_layout(products, header):
             return {
@@ -233,7 +250,11 @@ def build_export_preview(
                 {
                     "filename": f"{stem} для ЭД.xlsx",
                     "sheets": [
-                        {"title": "Invoice", "headers": invoice_headers(), "rows": invoice_rows(products)},
+                        {
+                            "title": "Invoice",
+                            "headers": invoice_headers(currency_from_sources(products, header) or "CNY"),
+                            "rows": invoice_rows(products),
+                        },
                         {"title": "Packing list", "headers": packing_headers(), "rows": packing_rows(products)},
                         {"title": "Specification", "headers": spec_headers(), "rows": spec_rows(products)},
                         {"title": "описание", "headers": description_headers(), "rows": description_rows(products, header)},
@@ -242,15 +263,14 @@ def build_export_preview(
             ],
         }
 
-    products = _product_items(items)
     kit = _kit_label(products, header)
     layout = _layout_kit(kit, products, header)
     fabric = is_fabric_layout(layout, products)
     suffix = f" {kit}" if kit else ""
     stem = safe_export_stem(shipment_title)
-    inv_h, inv_r = _aligned_invoice_rows(products, fabric)
-    pl_h, pl_r = _aligned_packing_rows(products, fabric)
-    spec_h, spec_r = _aligned_spec_rows(products, fabric)
+    inv_h, inv_r = _aligned_invoice_rows(products, fabric, header)
+    pl_h, pl_r = _aligned_packing_rows(products, fabric, header)
+    spec_h, spec_r = _aligned_spec_rows(products, fabric, header)
     return {
         "profile_type": "18233",
         "files": [
@@ -301,7 +321,7 @@ def _write_letterhead(ws, kind: str, header: dict[str, Any] | None, cols: int = 
     date = header.get("invoice_date") or header.get("date") or ""
     delivery = header.get("delivery_terms") or ""
     payment = header.get("payment_terms") or ""
-    manufacturer = header.get("manufacturer") or seller
+    manufacturer = header.get("manufacturer") or ""
     buyer_address = header.get("buyer_address") or ""
     seller_address = header.get("seller_address") or ""
     warehouse = header.get("warehouse_address") or ""
@@ -437,8 +457,17 @@ def _save_simple_book(path: Path, title: str, headers: list[str], rows: list[lis
     return path
 
 
+def prepare_export_header(
+    items: list[dict[str, Any]] | None,
+    header: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Operator header wins; only blank manufacturer/currency are filled from goods."""
+    return export_header_fields(header or {}, items or [])
+
+
 def export_beijing(items: list[dict[str, Any]], output_path: Path, header: dict[str, Any] | None = None) -> Path:
     products = _product_items(items)
+    header = prepare_export_header(products, header)
     if is_tsd_layout(products, header):
         stem = output_path.stem
         if "для ЭД" in stem:
@@ -456,15 +485,16 @@ def export_18233(
     """Three Excel files with the same product rows. No txt/PDF stubs."""
     output_dir.mkdir(parents=True, exist_ok=True)
     products = _product_items(items)
+    header = prepare_export_header(products, header)
     kit = _kit_label(products, header)
     layout = _layout_kit(kit, products, header)
     fabric = is_fabric_layout(layout, products)
     suffix = f" {kit}" if kit else ""
     stem = safe_export_stem(shipment_title)
     writers = {
-        "invoice": lambda rows: _aligned_invoice_rows(rows, fabric),
-        "packing": lambda rows: _aligned_packing_rows(rows, fabric),
-        "specification": lambda rows: _aligned_spec_rows(rows, fabric),
+        "invoice": lambda rows: _aligned_invoice_rows(rows, fabric, header),
+        "packing": lambda rows: _aligned_packing_rows(rows, fabric, header),
+        "specification": lambda rows: _aligned_spec_rows(rows, fabric, header),
     }
     paths: list[Path] = []
     names = [

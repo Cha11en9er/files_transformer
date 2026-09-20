@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=33" />
+  <link rel="stylesheet" href="/assets/styles.css?v=34" />
 </head>
 <body>
   <div class="app">
@@ -16,27 +16,28 @@
         <p class="brand">Таможенные документы</p>
         <h1>Рабочее место</h1>
       </div>
-      <span id="opencode-status" class="model-status unknown" title="Обновить модель и баланс">
+      <span id="opencode-status" class="model-status unknown" title="Проверить состояние сервиса">
         <span class="dot"></span>
         <span class="model-status-text">
-          <span id="opencode-status-label">Модель…</span>
-          <span id="opencode-status-money" class="model-status-money"></span>
+          <span id="opencode-status-label">Система…</span>
+          <span id="opencode-status-money" class="model-status-money" hidden></span>
         </span>
       </span>
     </header>
 
     <section class="panel upload-panel" id="upload-panel">
       <h2>Загрузка документов</h2>
-      <p class="hint">Excel и PDF одной поставки. Инвойс, пакинг и спецификация - в файлы или папку. Справочник (сводная) лучше класть в отдельную зону справа, чтобы он не читался как таблица товаров.</p>
+      <p class="hint">Загрузите документы одной поставки: инвойс, пакинг, спецификацию и при необходимости PDF/сканы. Сервис обработает их, сопоставит данные и сформирует готовые Excel-файлы.</p>
+      <p class="hint">Если у вас есть отдельный справочник с кодами ТН ВЭД и описаниями, загрузите его в блок «Справочник».</p>
       <form id="create-form" class="form-grid">
         <label>Название поставки
           <input name="title" placeholder="Если пусто - подставим номер инвойса" autocomplete="off" />
-          <span class="field-note">По умолчанию номер инвойса из документов. Можно ввести своё имя - оно попадёт в выгружаемые файлы.</span>
+          <span class="field-note">Если оставить поле пустым, сервис автоматически подставит номер инвойса. При необходимости можно указать своё название.</span>
         </label>
-        <label>Профиль выгрузки
+        <label>Выберите профиль выгрузки
           <select name="profile_type">
-            <option value="18233" selected>18233 - три Excel: инвойс, пакинг, спецификация</option>
-            <option value="BEIJING">BEIJING - одна книга, четыре листа</option>
+            <option value="18233" selected>Три Excel: Инвойс + Пакинг + Спецификация</option>
+            <option value="BEIJING">Одна книга: Invoice + Packing list + Specification + Описание</option>
           </select>
           <span class="field-note">Формат Excel для таможни. Выберите тот, который нужен по этой поставке.</span>
         </label>
@@ -45,17 +46,17 @@
             <label class="dropzone" id="dropzone">
               <input type="file" name="files" id="files" multiple accept=".xlsx,.xls,.xlsm,.pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp" />
               <span class="dropzone-title">Файлы</span>
-              <span class="dropzone-hint">Excel, PDF или изображение. Можно добавить несколько раз до обработки.</span>
+              <span class="dropzone-hint">Выберите отдельные Excel, PDF или изображения одной поставки.</span>
             </label>
             <label class="dropzone" id="dropzone-folder">
               <input type="file" id="folder" webkitdirectory directory multiple tabindex="-1" />
               <span class="dropzone-title">Папка</span>
-              <span class="dropzone-hint">Исходники одной поставки. Chrome может запросить подтверждение.</span>
+              <span class="dropzone-hint">Загрузите папку со всеми исходными документами одной поставки.</span>
             </label>
             <label class="dropzone dropzone-extra" id="dropzone-extra">
               <input type="file" id="extra-files" multiple accept=".xlsx,.xls,.xlsm,.pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp" />
               <span class="dropzone-title">Справочник</span>
-              <span class="dropzone-hint">Сводная, описание, каталог артикулов. Не инвойс и не пакинг: только коды и наименования к уже загруженным позициям.</span>
+              <span class="dropzone-hint">Загрузите сводную, описание или каталог артикулов с кодами ТН ВЭД и наименованиями.</span>
             </label>
           </div>
           <ul id="file-list"></ul>
@@ -95,7 +96,7 @@
 
       <details class="header-panel">
         <summary>Реквизиты документа</summary>
-        <p class="field-note header-note">Шапка выгрузки: покупатель, продавец, инвойс, контракт. Проверьте перед выгрузкой.</p>
+        <p class="field-note header-note">Шапка выгрузки: покупатель, продавец, инвойс, контракт, оплата, производитель. Правки из этого блока уходят в Excel при выгрузке.</p>
         <form id="header-form" class="header-form">
           <label>Покупатель <input name="buyer" /></label>
           <label>Адрес покупателя <textarea name="buyer_address" rows="2"></textarea></label>
@@ -163,7 +164,7 @@
       </div>
       <footer class="table-foot" id="table-foot" aria-label="Подсказка по работе с таблицей">
         <p class="table-foot-main">Нажмите «Изменить» или ячейку строки, чтобы править позицию. Исходные файлы не меняются. Реквизиты документа - в блоке выше.</p>
-        <p class="table-foot-export">Проверьте таблицу и реквизиты, затем сформируйте Excel. Профиль 18233 даёт три книги, BEIJING - одну. PDF сервис не формирует.</p>
+        <p class="table-foot-export">Проверьте таблицу и реквизиты, затем сформируйте Excel. Первый профиль даёт три книги, второй - одну. PDF сервис не формирует.</p>
       </footer>
 
     </section>
@@ -211,6 +212,6 @@
     <div id="review-dialog-body" class="review-dialog-body"></div>
   </dialog>
 
-  <script src="/assets/app.js?v=42"></script>
+  <script src="/assets/app.js?v=46"></script>
 </body>
 </html>
