@@ -661,6 +661,11 @@ def extract_sheet(
         if currency and fields.get("currency") in (None, ""):
             fields["currency"] = currency
 
+        if fields.get("amount") in (None, "") and isinstance(fields.get("price"), (int, float)):
+            basis = _price_basis(fields)
+            if basis is not None:
+                fields["amount"] = round(float(fields["price"]) * basis, 2)
+
         pack_group = _pack_group_id(sheet, r, active_mapping)
         if pack_group:
             fields["_pack_group"] = pack_group
@@ -713,15 +718,35 @@ def extract_sheet(
     # detail sheet? a per-roll specification lists the same article on many lines.
     # Require both a high repeat AND a low unique/row ratio so that a normal
     # one-line-per-article invoice (Beijing) is never treated as detail.
+    # Color-lot packing (leather HIDES/m2/kg, priced rows) also repeats articles —
+    # those stay packing/goods, not roll-detail.
     counts: dict[str, int] = {}
     for row_obj in ex.rows:
         counts[row_obj.normalized] = counts.get(row_obj.normalized, 0) + 1
     unique = len(counts)
     nrows = len(ex.rows)
     if nrows and unique and max(counts.values()) >= 3 and (nrows / unique) >= 2.0:
-        ex.detail = True
-        if role != "catalog":
-            ex.role = "specification"
+        priced_lots = sum(
+            1
+            for row_obj in ex.rows
+            if isinstance(row_obj.fields.get("price"), (int, float))
+            or isinstance(row_obj.fields.get("amount"), (int, float))
+        )
+        blob = f"{ex.header_text} {sheet.name} {sheet.source}".lower()
+        packing_hint = any(
+            token in blob
+            for token in ("packing list", "packing", "упаковоч", "çeki", "ceki", "seçme listesi")
+        )
+        # Color-lot packing (leather HIDES/m2/kg with unit price): keep packing.
+        # Per-roll sender specifications: high article repeat, usually no price → detail.
+        if packing_hint and priced_lots >= max(2, nrows // 3):
+            ex.detail = False
+            if role != "catalog":
+                ex.role = "packing"
+        else:
+            ex.detail = True
+            if role != "catalog":
+                ex.role = "specification"
     return ex
 
 
@@ -734,7 +759,8 @@ def _accumulate(target: dict[str, Any], extra: dict[str, Any]) -> None:
 
 
 def _price_basis(fields: dict[str, Any]) -> float | None:
-    for key in ("meters", "qty", "area"):
+    # meters (fabric), then area (leather €/m² with HIDES alongside), then piece qty.
+    for key in ("meters", "area", "qty"):
         v = fields.get(key)
         if isinstance(v, (int, float)) and v:
             return float(v)

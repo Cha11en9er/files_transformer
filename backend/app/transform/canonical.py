@@ -133,6 +133,7 @@ SYNONYMS: dict[str, tuple[tuple[str, float], ...]] = {
         ("number of rolls", 10), ("q-ty rolls", 10), ("кол-во рулон", 10), ("количество рулон", 10),
         ("rolls", 6), ("roll", 4), ("рулон", 6), ("packages", 8), ("package", 7),
         ("top adet", 8), ("мест", 4),
+        ("pallet", 8), ("pallets", 8), ("паллет", 8), ("палет", 7), ("palet", 7),
     ),
     "boxes": (
         ("quantity, ctns", 10), ("кол-во коробок", 10), ("cartons", 8), ("carton", 7),
@@ -153,12 +154,15 @@ SYNONYMS: dict[str, tuple[tuple[str, float], ...]] = {
         ("нетто", 7), ("n.w", 7), ("net wt", 8), ("净重", 8), ("net kilogram", 8),
         ("weight netto", 9), ("weight net", 8), ("nett", 5),
         ("netto with primary", 8), ("primary packaging", 6),
+        # exact unit-only headers (matched as whole header in _header_score)
+        ("=kg", 9), ("=кг", 9),
     ),
     "gross_weight": (
         ("g.w, kg", 10), ("gross weight", 9), ("вес брутто", 10), ("weight brutto", 10),
         ("брутто", 7), ("brutto", 8), ("g.w", 7),
         ("gross wt", 8), ("毛重", 8), ("brüt kilogram", 8), ("brut kilogram", 8),
         ("brutt", 6),
+        ("gross weigth", 9), ("gross weigt", 8),  # frequent PDF/OCR typos
     ),
     "volume": (("volume", 8), ("cbm", 8), ("объ", 7), ("м3", 6), ("m3", 6), ("m³", 6)),
     "measurement": (
@@ -190,7 +194,10 @@ _CURRENCY_RE = re.compile(r"(usd|eur|cny|rmb|try|tl|\$|€|￥|руб)", re.IGNO
 # --------------------------------------------------------------------------- #
 
 _US_MONEY = re.compile(r"^-?\d{1,3}(,\d{3})+(\.\d+)?$")
-_EU_MONEY = re.compile(r"^-?\d{1,3}(\.\d{3})+(,\d+)?$")
+# EU thousands need either a comma-decimal ("1.234,56") or 2+ dot-groups ("1.234.567").
+# A lone "77.700" is three decimal places (kg/meters), NOT seventy-seven thousand.
+_EU_MONEY = re.compile(r"^-?\d{1,3}(\.\d{3})+,\d+$")
+_EU_THOUSANDS = re.compile(r"^-?\d{1,3}(\.\d{3}){2,}$")
 
 
 def parse_number(value: Any) -> float | None:
@@ -215,6 +222,8 @@ def parse_number(value: Any) -> float | None:
         body = body.replace(",", "")
     elif _EU_MONEY.match(body):
         body = body.replace(".", "").replace(",", ".")
+    elif _EU_THOUSANDS.match(body):
+        body = body.replace(".", "")
     elif body.count(",") == 1 and body.count(".") == 0:
         body = body.replace(",", ".")
     elif body.count(",") > 1 and body.count(".") == 0:
@@ -293,6 +302,12 @@ def _header_score(field_key: str, header: str) -> float:
     compact = header.replace(" ", "")
     best = 0.0
     for token, weight in SYNONYMS[field_key]:
+        # "=kg" / "=кг" — whole-header match for bare unit columns
+        if token.startswith("="):
+            exact = token[1:]
+            if header.strip() == exact or compact == exact:
+                best = max(best, weight + 2)
+            continue
         token_c = token.replace(" ", "")
         if token in header or (token_c and token_c in compact):
             # a bit of a bonus for exact-ish match
