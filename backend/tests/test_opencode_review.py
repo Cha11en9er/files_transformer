@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -15,9 +16,13 @@ from app.services.opencode_review import (
     build_user_prompt,
     compact_parser_snapshot,
     extract_json_payload,
+    fetch_openrouter_billing,
     normalize_model_payload,
     ping_opencode,
     probe_opencode,
+    _extract_openrouter_key,
+    _model_label,
+    _usage_delta,
 )
 from app.services.pdf_pages import VisionPage
 from app.services.scan_reconcile import apply_scan_review, compute_excel_totals
@@ -285,7 +290,7 @@ class _FakeClient:
     def __exit__(self, *args):
         return False
 
-    def get(self, path: str):
+    def get(self, path: str, **kwargs):
         if isinstance(self._reply, Exception):
             raise self._reply
         return self._reply
@@ -343,6 +348,107 @@ def test_ping_skips_when_disabled(monkeypatch) -> None:
     result = ping_opencode()
     assert result["status"] == "off"
     assert result["reply"] is None
+
+
+def test_model_label_qwen38_max() -> None:
+    assert _model_label("openrouter/qwen/qwen3.8-max-0902") == "Qwen3.8 Max 0902"
+
+
+def test_extract_openrouter_key_from_auth() -> None:
+    blob = {"openrouter": {"type": "api", "key": "sk-or-v1-secret-example"}}
+    assert _extract_openrouter_key(blob) == "sk-or-v1-secret-example"
+
+
+def test_usage_delta() -> None:
+    assert _usage_delta({"usage_usd": 1.0}, {"usage_usd": 1.37}) == 0.37
+
+
+class _JsonReply:
+    def __init__(self, status_code: int, payload: dict) -> None:
+        self.status_code = status_code
+        self._payload = payload
+        self.text = json.dumps(payload)
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _BillingClient:
+    def __init__(self, key_payload: dict, credits_status: int = 200, credits_payload: dict | None = None) -> None:
+        self.key_payload = key_payload
+        self.credits_status = credits_status
+        self.credits_payload = credits_payload or {"data": {"total_credits": 10.0, "total_usage": 1.25}}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def get(self, url: str, **kwargs):
+        path = str(url)
+        if path.endswith("/key"):
+            return _JsonReply(200, {"data": self.key_payload})
+        if "credits" in path:
+            return _JsonReply(self.credits_status, self.credits_payload)
+        return _JsonReply(404, {})
+
+
+def test_openrouter_billing_account_remaining(monkeypatch) -> None:
+    monkeypatch.setenv("OPENCODE_MODEL", "openrouter/qwen/qwen3.8-max-0902")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test-key")
+    fake = _BillingClient({"usage": 1.25, "limit_remaining": 98.75, "limit": 100})
+    with patch("app.services.opencode_review.httpx.Client", return_value=fake):
+        billing = fetch_openrouter_billing()
+    assert billing["usage_usd"] == 1.25
+    assert billing["remaining_usd"] == 8.75
+    assert billing["remaining_is_key_limit"] is False
+
+
+def test_openrouter_billing_falls_back_to_key_limit(monkeypatch) -> None:
+    monkeypatch.setenv("OPENCODE_MODEL", "openrouter/qwen/qwen3.8-max-0902")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test-key")
+    fake = _BillingClient(
+        {"usage": 1.25, "limit_remaining": 98.75, "limit": 100},
+        credits_status=403,
+        credits_payload={"error": {"message": "Only management keys"}},
+    )
+    with patch("app.services.opencode_review.httpx.Client", return_value=fake):
+        billing = fetch_openrouter_billing()
+    assert billing["usage_usd"] == 1.25
+    assert billing["remaining_usd"] == 98.75
+    assert billing["remaining_is_key_limit"] is True
+
+
+class _HealthAndBillingClient:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def get(self, path: str, **kwargs):
+        url = str(path)
+        if url in {"/global/health", "/session", "/doc", "/"}:
+            return _FakeReply(200, "ok")
+        if url.endswith("/key"):
+            return _JsonReply(200, {"data": {"usage": 0.4, "limit_remaining": 99.6, "limit": 100}})
+        if "credits" in url:
+            return _JsonReply(200, {"data": {"total_credits": 10.0, "total_usage": 0.4}})
+        return _FakeReply(404, "")
+
+
+def test_probe_shows_openrouter_balance(monkeypatch) -> None:
+    monkeypatch.setenv("OPENCODE_ENABLED", "1")
+    monkeypatch.setenv("OPENCODE_SERVER_PASSWORD", "secret")
+    monkeypatch.setenv("OPENCODE_MODEL", "openrouter/qwen/qwen3.8-max-0902")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test-key")
+    with patch("app.services.opencode_review.httpx.Client", return_value=_HealthAndBillingClient()):
+        result = probe_opencode()
+    assert result["status"] == "ok"
+    assert "Qwen3.8 Max 0902" in result["title"]
+    assert result["remaining_usd"] == 9.6
+    assert "остаток $9.60" in result["title"]
 
 
 def test_as_float_keeps_european_comma() -> None:

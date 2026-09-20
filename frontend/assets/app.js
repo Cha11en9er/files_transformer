@@ -528,6 +528,7 @@ async function processShipment() {
     state.shipmentId = created.id;
     state.workspace = created;
     applyShipmentTitle(created.title, { force: true });
+    refreshOpenCodeStatus();
     const skipped = created.skipped_count || 0;
     $("#upload-status").textContent =
       `Готово: ${created.item_count} позиций из ${created.files?.length || state.pendingFiles.length} файлов` +
@@ -952,7 +953,13 @@ function renderReviewMeta(ws, review) {
     return;
   }
   const bits = [];
+  if (review.model_label || review.model) bits.push(review.model_label || review.model);
   if (review.image_count) bits.push(`${review.image_count} стр.`);
+  if (review.review_cost_usd != null) bits.push(`это распознавание $${Number(review.review_cost_usd).toFixed(2)}`);
+  if (review.usage_usd != null) bits.push(`расход $${Number(review.usage_usd).toFixed(2)}`);
+  if (review.remaining_usd != null) {
+    bits.push(`${review.remaining_is_key_limit ? "лимит ключа" : "остаток"} $${Number(review.remaining_usd).toFixed(2)}`);
+  }
   if (review.status === "ok") bits.push("модель ответила");
   else if (review.status === "error") bits.push(humanizeClientError(review.error) || "модель не ответила");
   reviewMeta.textContent = bits.join(" · ");
@@ -1617,12 +1624,15 @@ $("#ws-title")?.addEventListener("input", onTitleEdited);
 function paintOpenCodeStatus(data) {
   const el = $("#opencode-status");
   const label = $("#opencode-status-label");
+  const money = $("#opencode-status-money");
   if (!el || !label) return;
   const status = data && data.status ? data.status : "down";
   el.className = `model-status ${status}`;
-  label.textContent = (data && data.title) || "Модель не отвечает";
+  const modelName = (data && (data.title || data.model_label)) || "Модель не отвечает";
+  label.textContent = modelName;
+  if (money) money.textContent = (data && data.money) || "";
   const detail = (data && data.detail) || "";
-  el.title = detail ? `${label.textContent}. ${detail}` : label.textContent;
+  el.title = detail ? `${modelName}. ${detail}` : "Нажми, чтобы обновить модель и баланс";
 }
 
 async function refreshOpenCodeStatus() {
@@ -1649,21 +1659,8 @@ async function refreshOpenCodeStatus() {
 
 async function pingOpenCode() {
   const label = $("#opencode-status-label");
-  if (label) label.textContent = "Спрашиваю модель…";
-  try {
-    const res = await fetch("/api/health/opencode/ping", { method: "POST", cache: "no-store" });
-    const data = await res.json();
-    paintOpenCodeStatus(data);
-    const text = data.reply || data.detail || data.title || "нет ответа";
-    window.alert(text);
-  } catch (err) {
-    paintOpenCodeStatus({
-      status: "down",
-      title: "Модель не отвечает",
-      detail: humanizeClientError(err && err.message),
-    });
-    window.alert(humanizeClientError(err && err.message));
-  }
+  if (label) label.textContent = "Обновляю баланс…";
+  await refreshOpenCodeStatus();
 }
 
 $("#opencode-status")?.addEventListener("click", pingOpenCode);
