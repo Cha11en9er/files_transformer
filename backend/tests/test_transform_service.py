@@ -26,13 +26,13 @@ DOCS = Path(__file__).resolve().parents[2] / "documents"
 requires_docs = pytest.mark.skipif(not DOCS.exists(), reason="documents/ tree not available")
 
 HANGZHOU = [
-    "18080 ЛЮ 621 ТМЛ/Исходные/621-1-YS-RMB-EXW-INVOICE.XLSX",
-    "18080 ЛЮ 621 ТМЛ/Исходные/621-1-YS-RMB-EXW-PL.XLSX",
-    "18080 ЛЮ 621 ТМЛ/Исходные/621-1-YS-RMB-EXW-Specification.xls",
+    "я_тестирую/01_ханчжоу_18233_626-1/вход/инвойс.xlsx",
+    "я_тестирую/01_ханчжоу_18233_626-1/вход/пакинг.xlsx",
+    "я_тестирую/01_ханчжоу_18233_626-1/вход/спецификация.xls",
 ]
 BEIJING = [
-    "dumps/BEIJING GOLDLUCK CO., LTD/(поступление)Invoice n Packing list（003-26E,20260703)-00.xlsx",
-    "dumps/BEIJING GOLDLUCK CO., LTD/(описание )сводная.xlsx",
+    "я_тестирую/11_beijing_goldluck_003/вход/инвойс_и_пакинг.xlsx",
+    "я_тестирую/11_beijing_goldluck_003/вход/справочник_сводная.xlsx",
 ]
 PRAVKA_17974 = DOCS / "3_pravka" / "17974"
 PRAVKA_17974_SRC = PRAVKA_17974 / "Исходные"
@@ -190,7 +190,10 @@ def test_17974_without_catalog_warns_about_descriptions():
 
 @requires_docs
 def test_hangzhou_transform_and_export(tmp_path):
-    result = transform_paths(_paths(HANGZHOU))
+    paths = _paths(HANGZHOU)
+    if not all(Path(p).exists() for p, _ in paths):
+        pytest.skip("Hangzhou 626-1 kit not available")
+    result = transform_paths(paths)
     assert result.profile == "18233"
     assert result.header.get("invoice_no")
     rows = canonical_to_rows(result.items)
@@ -210,7 +213,10 @@ def test_hangzhou_transform_and_export(tmp_path):
 
 @requires_docs
 def test_beijing_transform_and_export(tmp_path):
-    result = transform_paths(_paths(BEIJING))
+    paths = _paths(BEIJING)
+    if not all(Path(p).exists() for p, _ in paths):
+        pytest.skip("Beijing Goldluck kit not available")
+    result = transform_paths(paths)
     assert result.profile == "beijing"
     rows = canonical_to_rows(result.items)
     assert rows, "Beijing kit produced no items"
@@ -245,6 +251,8 @@ def test_route_end_to_end_create_and_export():
     files = []
     for rel in HANGZHOU:
         p = DOCS / rel
+        if not p.exists():
+            pytest.skip("Hangzhou 626-1 kit not available")
         files.append(("files", (p.name, p.read_bytes(), "application/octet-stream")))
 
     resp = client.post("/api/v1/shipments/", data={"title": "e2e", "profile_type": "18233"}, files=files)
@@ -265,3 +273,77 @@ def test_route_end_to_end_create_and_export():
     assert export.status_code == 200, export.text
     assert export.headers["content-type"] == "application/zip"
     assert len(export.content) > 0
+    import zipfile
+    from io import BytesIO
+
+    with zipfile.ZipFile(BytesIO(export.content)) as zf:
+        names = [n.lower() for n in zf.namelist()]
+    assert len(names) == 3
+    assert any("инвойс" in n or "invoice" in n for n in names)
+    assert any("пакинг" in n or "pack" in n for n in names)
+
+
+@requires_docs
+def test_18312_element_is_18233_three_files_without_family_dupes(tmp_path):
+    kit = DOCS / "я_тестирую" / "10_ханчжоу_18312_элемент" / "вход"
+    if not kit.exists():
+        pytest.skip("18312 test kit not available")
+    paths = [
+        (str(p), p.name)
+        for p in sorted(kit.iterdir())
+        if p.suffix.lower() in {".xlsx", ".xls", ".xlsm"} and not p.name.startswith("~")
+    ]
+    result = transform_paths(paths, catalog_names={"справочник_сводная.xlsx"})
+    assert result.profile == "18233"
+    rows = canonical_to_rows(result.items)
+    articles = [r["article"] for r in rows]
+    assert len(rows) == 21
+    glued = [
+        a for a in articles
+        if a and any(
+            a.replace(" ", "").lower().startswith(p)
+            for p in ("мебельныйпрофильпрофиль", "мебельнаяфурнитураmd", "лентаэластичнаялента", "механизмтрансформации")
+        )
+    ]
+    assert glued == []
+    o30 = next(r for r in rows if "О-30" in (r.get("article") or ""))
+    assert o30["article"].startswith("Профиль")
+    assert abs(float(o30["commercial_data"]["qty"]) - 18000) < 0.01
+    assert abs(float(o30["commercial_data"]["amount"]) - 2340) < 0.01
+    assert o30["packing_data"].get("rolls") == 3
+    assert abs(float(o30["packing_data"].get("net_weight")) - 84) < 0.01
+    assert o30["commercial_data"].get("group") == "Мебельный профиль"
+
+    md832 = next(r for r in rows if r.get("article") == "MD832")
+    assert abs(float(md832["commercial_data"]["qty"]) - 20400) < 0.01
+    assert md832["packing_data"].get("rolls") in (None, 0, 0.0)
+
+    total_qty = sum(float((r.get("commercial_data") or {}).get("qty") or 0) for r in rows)
+    assert total_qty == pytest.approx(1009980, abs=1)
+    total_amount = sum(float((r.get("commercial_data") or {}).get("amount") or 0) for r in rows)
+    assert total_amount == pytest.approx(329706.9, abs=0.2)
+    total_nw = sum(float((r.get("packing_data") or {}).get("net_weight") or 0) for r in rows)
+    assert total_nw == pytest.approx(22539.4, abs=0.2)
+    total_pkg = sum(float((r.get("packing_data") or {}).get("rolls") or 0) for r in rows)
+    assert total_pkg == pytest.approx(484, abs=0.1)
+
+    paths_out = export_18233(rows, tmp_path, header=result.header, shipment_title="ZFRMB26136-354")
+    assert len(paths_out) == 3
+    names = [p.name.lower() for p in paths_out]
+    assert any("инвойс" in n for n in names)
+    assert any("пакинг" in n for n in names)
+    assert any("спецификац" in n for n in names)
+
+    from app.services.export_18233_templates import packing_table_rows, invoice_table_rows, is_fabric_layout
+
+    assert is_fabric_layout(None, rows) is False
+    pack_rows = packing_table_rows(rows, fabric=False)
+    product_pack = [r for r in pack_rows if isinstance(r[0], int)]
+    assert len(product_pack) == 21
+    inv_rows = invoice_table_rows(rows, fabric=False)
+    numbered = [r for r in inv_rows if isinstance(r[0], int)]
+    captions = [r for r in inv_rows if r[0] is None and str(r[1] or "").upper() != "TOTAL:"]
+    assert len(numbered) == 21
+    assert len(captions) == 21
+    assert "Мебельный профиль" in str(captions[0][1])
+    assert "О-30" in str(numbered[0][1])

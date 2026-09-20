@@ -168,7 +168,14 @@ _FABRIC_HS = ("5407", "5512", "5801", "5903", "6001", "4107", "5408")
 _HARDWARE_HS = ("7318", "8302", "9401", "8412", "3926", "3921")
 
 
-def detect_profile(items: list[CanonicalItem]) -> str:
+def detect_profile(items: list[CanonicalItem], sheets: list[ExtractedSheet] | None = None) -> str:
+    roles = {sheet.role for sheet in (sheets or [])}
+    # Separate invoice + packing workbooks are the Hangzhou 18233 layout even when
+    # the goods are hardware (18312 furniture profile), not fabric.
+    if "invoice" in roles and "packing" in roles and "mixed" not in roles:
+        return "18233"
+    if "mixed" in roles:
+        return "beijing"
     fabric = 0
     hardware = 0
     for it in items:
@@ -343,7 +350,7 @@ def transform_paths(
         input_sheets = scan_sheets
 
     result.items = merge_documents(input_sheets, catalog=catalog)
-    result.profile = detect_profile(result.items)
+    result.profile = detect_profile(result.items, input_sheets)
     result.header = _extract_header(input_sheets)
     result.header = merge_header_fields(result.header, extract_header_fields(result.sources))
 
@@ -415,6 +422,8 @@ def canonical_to_rows(items: list[CanonicalItem]) -> list[dict[str, Any]]:
         f = it.fields
         desc_en, desc_ru = _split_description(f.get("description"))
         commercial = {k: f[k] for k in ("qty", "unit", "price", "amount", "currency", "color") if f.get(k) not in (None, "")}
+        if f.get("_group"):
+            commercial["group"] = f["_group"]
         packing = {k: f[k] for k in ("rolls", "boxes", "meters", "area", "width", "net_weight", "gross_weight", "volume", "measurement", "pcs_per_carton", "gm") if f.get(k) not in (None, "")}
         if f.get("_pack_group"):
             packing["pack_group"] = f["_pack_group"]
@@ -481,6 +490,11 @@ def canonical_to_rows(items: list[CanonicalItem]) -> list[dict[str, Any]]:
                 "message": fl.get("message", ""),
             })
         article = "-" if f.get("sku_missing") else it.article
+        traces: dict[str, Any] = {"sources": list(it.sources)}
+        if f.get("_no") is not None:
+            traces["invoice"] = {"no": f["_no"]}
+        if f.get("_group"):
+            traces["group"] = f["_group"]
         rows.append({
             "article": article,
             "model": article,
@@ -488,7 +502,7 @@ def canonical_to_rows(items: list[CanonicalItem]) -> list[dict[str, Any]]:
             "commercial_data": commercial,
             "packing_data": packing,
             "customs_data": customs,
-            "source_traces": {"sources": it.sources},
+            "source_traces": traces,
             "invoice_subkit": None,
             "validation_errors": errors,
         })

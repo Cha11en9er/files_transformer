@@ -6,7 +6,9 @@ Given one `Sheet` (grid with merges expanded) we:
 3. read every data row into canonical fields, handling
    - blank-article continuation rows (a lot of the same article split over rows),
    - the "numbered child + unnumbered SOFA FABRIC family" invoice layout where the
-     family row carries the unit price for its children.
+     family row carries the unit price for its children,
+   - an unnumbered caption under a priced SKU: DESIGN is "category + same article"
+     (newline, " / ", or glued suffix). That is a family label, not a second item.
 """
 
 from __future__ import annotations
@@ -135,6 +137,29 @@ class ExtractedSheet:
 
 def _cell(v: Any) -> str:
     return normalize_text("" if v is None else str(v))
+
+
+def _article_cell(v: Any) -> str:
+    """Keep line breaks in DESIGN/Art No. so category and SKU stay separable."""
+    if v is None:
+        return ""
+    return str(v).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def split_design(text: str) -> tuple[str, str]:
+    """'category \\n SKU' or 'category / SKU' -> (category, sku). Else ('', text)."""
+    raw = _article_cell(text)
+    if not raw:
+        return "", ""
+    lines = [part.strip() for part in raw.split("\n") if part.strip()]
+    if len(lines) >= 2:
+        return lines[0], lines[-1]
+    if " / " in raw:
+        left, right = raw.rsplit(" / ", 1)
+        left, right = left.strip(), right.strip()
+        if left and right and len(right) >= 2:
+            return left, right
+    return "", raw
 
 
 def _letterhead_cell(v: Any) -> str:
@@ -336,6 +361,49 @@ def _qty_token(fields: dict[str, Any] | None) -> str:
     return ""
 
 
+def _article_key(text: str) -> str:
+    return normalize_article(text)
+
+
+def _is_repeat_caption(prev: Row, article: str) -> bool:
+    """Unnumbered DESIGN that repeats the previous SKU (optionally after a category)."""
+    prev_key = _article_key(prev.article)
+    art_key = _article_key(article)
+    if not prev_key or not art_key:
+        return False
+    if art_key == prev_key:
+        return True
+    return art_key.endswith(prev_key) and len(art_key) > len(prev_key)
+
+
+def _category_prefix(design: str, article: str) -> str:
+    category, sku = split_design(design)
+    if category:
+        return category
+    raw = _article_cell(design)
+    seed = (article or "").strip()
+    if seed and raw.endswith(seed) and len(raw) > len(seed):
+        return raw[: -len(seed)].strip(" \n/-")
+    prev_key = _article_key(article)
+    art_key = _article_key(raw)
+    if prev_key and art_key.endswith(prev_key) and len(art_key) > len(prev_key):
+        # glued "CategorySKU" without a separator
+        cut = len(art_key) - len(prev_key)
+        compact = re.sub(r"\s+", "", raw)
+        if len(compact) >= cut:
+            return compact[:cut].strip()
+    return ""
+
+
+def _attach_caption(prev: Row, extra: dict[str, Any], category: str) -> None:
+    """Family caption: keep category. Do not copy qty/packages - they repeat the SKU."""
+    if category and not prev.fields.get("_group"):
+        prev.fields["_group"] = category
+    for key in ("hs_code", "unit"):
+        if prev.fields.get(key) in (None, "") and extra.get(key) not in (None, ""):
+            prev.fields[key] = extra[key]
+
+
 def _item_no(sheet: Sheet, r: int, mapping: dict[int, str]) -> int | None:
     # column 0 is usually the running number; take the left-most non-mapped numeric cell
     mapped = set(mapping)
@@ -505,9 +573,10 @@ def extract_sheet(
         fields, inherited = _row_fields(sheet, r, active_mapping)
         _drop_note_description(fields)
         article_cell = (
-            _cell(row[active_key_col]) if active_key_col is not None and active_key_col < len(row) else ""
+            _article_cell(row[active_key_col]) if active_key_col is not None and active_key_col < len(row) else ""
         )
-        article_raw = _sku_cell(article_cell)
+        category, sku_part = split_design(article_cell)
+        article_raw = _sku_cell(sku_part) or _sku_cell(article_cell.replace("\n", " "))
         article_inherited = bool(
             active_key_col is not None and (r, active_key_col) in sheet.inherited
         )
@@ -521,6 +590,22 @@ def extract_sheet(
 
         bucket = ex.component_rows if component_mode else ex.rows
         prev = pending_children[-1] if pending_children else (bucket[-1] if bucket else None)
+
+        if (
+            prev is not None
+            and item_no is None
+            and not component_mode
+            and not pending_children
+            and own_article
+            and not _own(fields, inherited, "price")
+            and (
+                _is_repeat_caption(prev, sku_part or article_raw or article_cell)
+                or _is_repeat_caption(prev, article_cell)
+            )
+        ):
+            cat = category or _category_prefix(article_cell, prev.article)
+            _attach_caption(prev, fields, cat)
+            continue
 
         if prev is not None and not own_article and not own_qty and not component_mode:
             packing_only = _strip_inherited(fields, inherited, _COMMERCIAL_FIELDS)
@@ -547,7 +632,9 @@ def extract_sheet(
         if own_article and own_qty:
             fields = _strip_inherited(fields, inherited, _PACKING_FIELDS)
 
-        article = article_raw
+        article = sku_part.strip() if sku_part and _sku_cell(sku_part) else article_raw
+        if category:
+            fields["_group"] = category
         if not article:
             desc = str(fields.get("description") or "").strip()
             if desc and not _is_header_label_article(desc):
@@ -668,7 +755,7 @@ def _apply_group(children: list[Row], group: Row) -> None:
         for key in ("hs_code", "customs_code", "currency", "unit"):
             if key in group.fields and key not in child.fields:
                 child.fields[key] = group.fields[key]
-        child.fields["_group"] = group.article
+        child.fields["_group"] = group.fields.get("_group") or group.article
 
 
 def _flush_children(ex: ExtractedSheet, children: list[Row]) -> None:
