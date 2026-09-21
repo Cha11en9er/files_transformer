@@ -220,6 +220,83 @@ function fileCountLabel(n) {
   return `${n} файлов`;
 }
 
+function rowCountLabel(n) {
+  const n10 = n % 10;
+  const n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return `${n} строку таблицы`;
+  if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return `${n} строки таблицы`;
+  return `${n} строк таблицы`;
+}
+
+function showToast(message, { kind = "ok", ms = 3200 } = {}) {
+  const text = String(message || "").trim();
+  if (!text) return;
+  const host = $("#toast-stack");
+  if (!host) return;
+  const el = document.createElement("div");
+  el.className = `toast toast-${kind}`;
+  const mark = kind === "error" ? "!" : kind === "info" ? "i" : "✓";
+  el.innerHTML = `<span class="toast-mark" aria-hidden="true">${mark}</span><span class="toast-text"></span>`;
+  el.querySelector(".toast-text").textContent = text;
+  host.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("show"));
+  window.setTimeout(() => {
+    el.classList.add("hide");
+    el.classList.remove("show");
+    window.setTimeout(() => el.remove(), 220);
+  }, ms);
+}
+
+function stableJson(value) {
+  return JSON.stringify(value ?? null);
+}
+
+function headerSnapshot(fields) {
+  const src = fields || {};
+  const keys = [
+    "buyer",
+    "buyer_address",
+    "seller",
+    "seller_address",
+    "contract_no",
+    "contract_date",
+    "invoice_no",
+    "invoice_date",
+    "delivery_terms",
+    "payment_terms",
+    "manufacturer",
+    "delivery_date",
+    "warehouse_address",
+  ];
+  const out = {};
+  keys.forEach((key) => {
+    out[key] = String(src[key] ?? "").trim();
+  });
+  return out;
+}
+
+function itemEditSnapshot(item) {
+  const c = item?.commercial_data || {};
+  const p = item?.packing_data || {};
+  const u = item?.customs_data || {};
+  return {
+    article: item?.article ?? null,
+    qty: c.qty ?? null,
+    price: c.price ?? null,
+    amount: c.amount ?? null,
+    rolls: p.rolls ?? p.boxes ?? null,
+    meters: p.meters ?? null,
+    width: p.width ?? null,
+    area: p.area ?? null,
+    net_weight: p.net_weight ?? null,
+    gross_weight: p.gross_weight ?? null,
+    hs_code: u.hs_code ?? null,
+    tnved_code: u.tnved_code ?? null,
+    description_en: u.description_en || u.description || null,
+    description_ru: u.description_ru || null,
+  };
+}
+
 const GENERIC_TITLES = new Set(["", "export", "комплект документов", "shipment"]);
 
 function isGenericTitle(value) {
@@ -267,6 +344,7 @@ async function addPendingFiles(fileList, { extra = false } = {}) {
   const raw = [...(fileList || [])];
   const incoming = raw.filter(isUsefulUpload);
   const hint = $("#kit-check");
+  const beforeCount = state.pendingFiles.length;
   try {
     if (!incoming.length) {
       if (raw.length && hint) {
@@ -305,6 +383,10 @@ async function addPendingFiles(fileList, { extra = false } = {}) {
     state.pendingFiles = [...known.values()];
     hideOldWorkspace();
     syncFileInput();
+    const added = Math.max(0, state.pendingFiles.length - beforeCount);
+    if (added > 0) {
+      showToast(`Вы загрузили ${fileCountLabel(added)}`, { kind: "ok" });
+    }
     if (odd.length && hint) {
       hint.textContent =
         `Пропущен неподдерживаемый формат: ${odd.map((f) => f.name).join(", ")}. Этап 1: Excel и PDF.`;
@@ -315,6 +397,10 @@ async function addPendingFiles(fileList, { extra = false } = {}) {
       hint.textContent = `Не удалось взять файлы: ${err && err.message ? err.message : err}`;
       hint.className = "status";
     }
+    showToast(`Не удалось взять файлы: ${humanizeClientError(err && err.message ? err.message : err)}`, {
+      kind: "error",
+      ms: 4500,
+    });
   }
 }
 
@@ -482,9 +568,11 @@ async function processShipment() {
   if (processing || state.sessionLocked) return;
   if (!state.pendingFiles.length) {
     $("#upload-status").textContent = "Выберите файлы или папки.";
+    showToast("Выберите файлы или папки", { kind: "info" });
     return;
   }
   setSessionLocked(true, { busy: true, buttonLabel: "Обработка…" });
+  showToast("Началась обработка", { kind: "info", ms: 2500 });
   const form = $("#create-form");
   const fd = new FormData();
   fd.append("title", form.title.value.trim());
@@ -572,9 +660,11 @@ async function processShipment() {
     }
     setSessionLocked(true, { busy: false, buttonLabel: "Обработано" });
     renderWorkspace();
+    showToast("Обработка прошла успешно", { kind: "ok", ms: 4000 });
   } catch (err) {
     $("#upload-status").textContent = `Ошибка: ${humanizeClientError(err.message)}`;
     setSessionLocked(false, { busy: false, buttonLabel: "Обработать" });
+    showToast(`Ошибка обработки: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5200 });
   }
 }
 
@@ -1509,7 +1599,7 @@ async function saveEditedItem() {
     const idx = state.workspace.items.findIndex((row) => String(row.id) === String(itemId));
     if (idx < 0) throw new Error("Позиция не найдена");
     const item = state.workspace.items[idx];
-    state.workspace.items[idx] = {
+    const nextItem = {
       ...item,
       article: payload.article,
       commercial_data: { ...(item.commercial_data || {}), ...payload.commercial_data },
@@ -1517,12 +1607,21 @@ async function saveEditedItem() {
       customs_data: { ...(item.customs_data || {}), ...payload.customs_data },
       validation_errors: (item.validation_errors || []).map((err) => ({ ...err, resolved: true })),
     };
+    const changed = stableJson(itemEditSnapshot(item)) !== stableJson(itemEditSnapshot(nextItem));
+    if (!changed) {
+      status.textContent = "";
+      $("#edit-dialog").close();
+      return;
+    }
+    state.workspace.items[idx] = nextItem;
     $("#edit-dialog").close();
     renderWorkspace();
     $("#upload-status").textContent = "Изменения сохранены в текущем сеансе. При обновлении страницы данные будут потеряны.";
+    showToast(`Вы изменили ${rowCountLabel(1)}`, { kind: "ok" });
   } catch (err) {
     status.textContent = `Ошибка: ${err.message}`;
     alert(`Не удалось сохранить позицию: ${err.message}`);
+    showToast(`Не удалось сохранить строку: ${err.message}`, { kind: "error", ms: 4500 });
   } finally {
     saveBtn.disabled = false;
   }
@@ -1598,12 +1697,19 @@ $("#header-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!state.workspace) return;
   try {
+    const before = headerSnapshot(state.workspace.header_fields);
+    const next = headerSnapshot(readHeaderForm());
+    if (stableJson(before) === stableJson(next)) {
+      return;
+    }
     applyHeaderFields(readHeaderForm(), { syncItems: true });
     renderWorkspace();
     $("#upload-status").textContent =
       "Реквизиты сохранены в текущем сеансе. При обновлении страницы правки будут потеряны.";
+    showToast("Реквизиты изменились", { kind: "ok" });
   } catch (err) {
     alert(`Не удалось сохранить шапку: ${err.message}`);
+    showToast(`Не удалось сохранить реквизиты: ${err.message}`, { kind: "error", ms: 4500 });
   }
 });
 
@@ -1612,12 +1718,14 @@ $("#btn-export").addEventListener("click", async () => {
   const box = $("#export-result");
   if (!state.workspace) {
     box.textContent = "Сначала загрузите и обработайте документы.";
+    showToast("Сначала загрузите и обработайте документы", { kind: "info" });
     return;
   }
   btn.disabled = true;
   const prevLabel = btn.textContent;
   btn.textContent = "Формирование…";
   box.textContent = "Формирование Excel…";
+  showToast("Формирование Excel", { kind: "info", ms: 2200 });
   try {
     const res = await fetch("/api/v1/shipments/export", {
       method: "POST",
@@ -1632,8 +1740,10 @@ $("#btn-export").addEventListener("click", async () => {
     const zipName = `${state.workspace.title || "export"}_Excel.zip`;
     await downloadBlob(blob, zipName);
     box.textContent = `Файл сохранен: ${zipName}`;
+    showToast("Excel сформирован", { kind: "ok" });
   } catch (err) {
     box.textContent = `Ошибка экспорта: ${err.message}`;
+    showToast(`Ошибка экспорта: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5200 });
   } finally {
     btn.disabled = false;
     btn.textContent = prevLabel;
