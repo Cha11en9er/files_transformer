@@ -15,10 +15,9 @@
 * { box-sizing: border-box; }
 html.modal-open,
 html.modal-open body {
-  overflow: hidden;
   overscroll-behavior: none;
-  height: 100%;
 }
+/* Scroll lock is done in JS via body position:fixed so the page does not jump to top. */
 body {
   margin: 0;
   font-family: "IBM Plex Sans", sans-serif;
@@ -110,9 +109,22 @@ input, select, button, textarea {
   min-height: 40px;
 }
 .header-form .compact-btn {
-  padding: 6px 10px;
-  font-size: 12px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
   height: fit-content;
+}
+.header-form .btn-save-header {
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 4px 12px rgba(15, 92, 99, 0.22);
+}
+.header-form .btn-save-header:hover {
+  filter: brightness(1.05);
+}
+.header-form .btn-save-header:active {
+  filter: brightness(0.96);
 }
 .dropzone-wrap {
   grid-column: 1 / -1;

@@ -760,9 +760,47 @@ function longCell(value, extra) {
   return `<td class="${longCellClass(raw, extra)}" data-full="${escapeHtml(raw)}"${editAttr}>${renderLongHtml(raw)}</td>`;
 }
 
+let lockedScrollY = 0;
+
+function lockPageScroll() {
+  const root = document.documentElement;
+  const body = document.body;
+  if (root.classList.contains("modal-open")) return;
+  lockedScrollY = window.scrollY || window.pageYOffset || 0;
+  body.style.position = "fixed";
+  body.style.top = `-${lockedScrollY}px`;
+  body.style.left = "0";
+  body.style.right = "0";
+  body.style.width = "100%";
+  root.classList.add("modal-open");
+}
+
+function unlockPageScroll() {
+  const root = document.documentElement;
+  const body = document.body;
+  if (!root.classList.contains("modal-open")) return;
+  root.classList.remove("modal-open");
+  body.style.position = "";
+  body.style.top = "";
+  body.style.left = "";
+  body.style.right = "";
+  body.style.width = "";
+  window.scrollTo(0, lockedScrollY);
+}
+
 function setModalScrollLock() {
   const open = [...document.querySelectorAll("dialog")].some((dialog) => dialog.open);
-  document.documentElement.classList.toggle("modal-open", open);
+  if (open) lockPageScroll();
+  else unlockPageScroll();
+}
+
+function openDialog(dialog) {
+  if (!dialog) return;
+  // Lock before showModal so the browser does not jump the page to top.
+  lockPageScroll();
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+  setModalScrollLock();
 }
 
 function severityClass(errors) {
@@ -1145,8 +1183,7 @@ function openReviewPanel(filename) {
   const dialog = $("#review-dialog");
   if (!dialog) return;
   fillReviewDialog(ws, filename);
-  if (typeof dialog.showModal === "function") dialog.showModal();
-  setModalScrollLock();
+  openDialog(dialog);
 }
 
 function applyScanToItem(hit) {
@@ -1546,12 +1583,11 @@ function openEdit(itemId, focusId) {
   }
   const lotsEl = $("#edit-lots");
   if (lotsEl) lotsEl.innerHTML = editLotsHtml(item);
-  $("#edit-dialog").showModal();
-  setModalScrollLock();
+  openDialog($("#edit-dialog"));
   const focusEl = focusId ? editField(focusId) : editField("edit-article");
   if (focusEl && typeof focusEl.focus === "function") {
     requestAnimationFrame(() => {
-      focusEl.focus();
+      focusEl.focus({ preventScroll: true });
       if (typeof focusEl.select === "function") focusEl.select();
     });
   }
