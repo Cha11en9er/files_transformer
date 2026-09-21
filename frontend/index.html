@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=35" />
+  <link rel="stylesheet" href="/assets/styles.css?v=37" />
 </head>
 <body>
   <div class="app">
@@ -32,7 +32,7 @@
       <form id="create-form" class="form-grid">
         <label>Название поставки
           <input name="title" placeholder="Если пусто - подставим номер инвойса" autocomplete="off" />
-          <span class="field-note">Если оставить поле пустым, сервис автоматически подставит номер инвойса. При необходимости можно указать своё название.</span>
+          <span class="field-note">Можно указать название самостоятельно. Если оставить пустым - после обработки оно само станет тем, что нашлось в файлах; потом его всё равно можно поменять.</span>
         </label>
         <label>Выберите профиль выгрузки
           <select name="profile_type">
@@ -111,7 +111,7 @@
           <label>Производитель <input name="manufacturer" /></label>
           <label>Срок поставки <input name="delivery_date" /></label>
           <label>Адрес склада <input name="warehouse_address" /></label>
-          <button type="submit" class="btn compact-btn">Сохранить</button>
+          <button type="submit" class="btn primary compact-btn btn-save-header">Сохранить</button>
         </form>
       </details>
 
@@ -214,6 +214,6 @@
 
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
-  <script src="/assets/app.js?v=47"></script>
+  <script src="/assets/app.js?v=49"></script>
 </body>
 </html>
