@@ -27,6 +27,7 @@ from typing import Any, Iterable
 
 from app.parsing.normalize import normalize_text
 from app.transform.extract import ExtractedSheet, Row, split_design
+from app.transform.canonical import area_from_meters_width
 
 _NON_ALNUM = re.compile(r"[^0-9A-Za-zА-Яа-яЁё]+")
 _GROUP_PREFIX = re.compile(r"^(sofa\s*fabric|artificial\s*leather|genuine\s*leather|pu\s*leather)\s*", re.IGNORECASE)
@@ -228,6 +229,12 @@ def merge_documents(
                 for key in ("qty", "meters", "area", "price", "amount", "net_weight", "gross_weight", "rolls", "boxes")
             ):
                 continue
+            if _is_placeholder_overlay(row, _by_article(match_key(row.article))):
+                it = _by_article(match_key(row.article))[0]
+                it.sources.append(row.source)
+                for k in ("hs_code", "customs_code", "description", "color", "width", "manufacturer", "country"):
+                    _prefer(it, k, row.fields.get(k))
+                continue
             it = item_for_lot(row.article, row.fields)
             if not it.fields.get("article_display"):
                 it.article = row.article
@@ -374,6 +381,23 @@ def merge_documents(
 
     ordered = [it for it in items.values() if it.key]
     return ordered
+
+
+def _is_placeholder_overlay(row: Row, existing: list[CanonicalItem]) -> bool:
+    """описание/Опис dummy qty=1 must not become a second lot or overwrite meters."""
+    if not existing:
+        return False
+    qty = row.fields.get("qty")
+    meters = row.fields.get("meters")
+    token = lot_token(row.fields)
+    if token == "1" and any(lot_token(it.fields) not in ("", "1") for it in existing):
+        return True
+    if qty in (1, 1.0) and isinstance(meters, (int, float)):
+        for it in existing:
+            have = it.fields.get("meters")
+            if isinstance(have, (int, float)) and have > meters * 1.2:
+                return True
+    return False
 
 
 def _line_snapshot(fields: dict[str, Any] | None) -> dict[str, Any]:
@@ -621,6 +645,10 @@ def _flag_weight_drift(items: dict[str, CanonicalItem]) -> None:
 
 def _finalize(it: CanonicalItem) -> None:
     f = it.fields
+    if f.get("area") in (None, "") and f.get("meters") not in (None, "") and f.get("width") not in (None, ""):
+        area = area_from_meters_width(f.get("meters"), f.get("width"))
+        if area is not None:
+            f["area"] = area
     price = f.get("price")
     amount = f.get("amount")
     basis = None

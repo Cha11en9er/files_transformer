@@ -135,6 +135,10 @@ def test_compact_snapshot_keeps_qty_and_excel_context() -> None:
     assert "catalog" in prompt.lower() or "сводная" in prompt
     assert "Later pages" in prompt
     assert "NO Excel" in prompt
+    assert "54.07.73" in prompt or "54.07.73.00.90.11" in prompt
+    assert "dirham" in prompt.lower() or "GBP" in prompt
+    assert "UNIT PICE" in prompt or "METRS" in prompt
+    assert "Customer Name" in prompt
     assert "SERIES / ART." in prompt
     assert "parser_json.items is empty" in prompt
     assert "goods row is structural" in prompt

@@ -16,7 +16,7 @@ Languages mix freely (RU/EN/ZH/TR/IT and later others). Same field, different ti
   amount = AMOUNT / Tutar / 金额
   description (customs) = Product name / Наименование товара  — NOT the article, NOT empty Annotation/Remarks
   article on Zhongfang spec = PRODUCT NAME (Melange 928), even though the words look like a name
-Decimals: EU 1.740,82 = 1740.82; US/TR 3,85 or 3.85. RMB/CNY/USD/EUR are currencies, not qty.
+Decimals: EU 1.740,82 = 1740.82; US/TR 3,85 or 3.85. Currency ISO on PRICE/AMOUNT may be USD/EUR/CNY/GBP/TRY/AED/SAR/KWD/IQD and others (pound, lira, dirham, dinar). If USD and TRY both print, the commercial amount is the foreign ISO (usually USD), not the local-tax column. Do not guess a currency when two ISO codes sit on the same price line with no winner.
 
 A goods row is structural, not a named product. Keep it when the line has numbers
 (qty and/or price/amount and/or net/gross and/or packages) PLUS any identity:
@@ -33,6 +33,15 @@ pages/workbook. Do not return items:[]. Overlap-with-draft applies only when the
 Read EVERY sheet. Empty Foglio2/Foglio3, date-only Sheet2, and catalog card sheets named like 1601057 are not goods.
 Merged cells: a family name in column A may cover several colour rows — keep colours separate if numbers differ.
 Do not invent HS / TN VED. Catalog (справочник, сводная, Item/Артикул + ТНВЭД) fills codes only on exact article match.
+If a code IS printed, normalize it: strip dots/spaces (54.07.73.00.90.11 → 540773009011), drop Excel .0, keep 6-13 digits. TNVED for the broker is at most 10 digits, no dots. HS with dots can sit in any cell (not only the HS column). A short PO like 2604 is not a code.
+
+Junk rows can sit under the header, in the middle, or at the end: a lone PO number, a repeated 3-5 digit cell, a translation header (DESEN ADI / Sack nr), "page 2", "continued". Skip them. Do not remap columns from those rows. Stop only at TOTAL / a real new table header.
+
+Two columns with the same title (DESING / DESIGN): the text one is article, the numeric one is color (997), not a second article. UNIT PICE is a price typo. METRS / AMOUNT (M) are meters, never amount money. PACKAGE is places, not qty.
+On packing, Customer Name / Müşteri Kodu is the goods key; mill Design / Ürün Kodu is not. Area m2 = meters × width when m2 is not printed (width 1.38 M or 140 cm).
+Sheet names QC / QCReport / certificate / menşe are not goods. A second sheet "Опис"/"описание" with qty=1 is a catalog identity overlay, not a second lot.
+
+PDF invoices may be a letter or slash-line blob with no grid. Read the page text: "294,70 JACQUARD –LORENSA 6,60 1.945,02 USD" and "D15-5745 / DYER 290 / … 622,00 MT 3,85$ 2.394,70$". Design Name between slashes is the article. HS CODE under the line still counts. Two-row EN then TR headers merge into one title row.
 
 --- Cross-supplier principles (apply to ANY new file, not only the kits below) ---
 Letterhead: scan the rows ABOVE the goods table. Invoice No and Contract/Container are often label+adjacent cell.
@@ -97,7 +106,8 @@ Invoice Tosun (ORIGINAL INVOICE, glued columns, no grid):
   ZIMMY  1740.82 MT  5.78 USD  10061.93 USD
 Printed TOTAL: 1781.25 MT, 10311.38 USD, 35 ROLLS. Ignore bank/IBAN, TRY if USD present, certification notes.
 Invoice Weavers: blob "Desing No / Design Name / Weavers Code / Item No / PO ... HS CODE : 540753009011" then 206.00 MT 3.85 $ 793.10 $
-If HS digits run into meters (540753009011206,00 MT), split HS=540753009011 qty=206.00. Prefer Design Name (DYER 789).
+If HS digits run into meters (540753009011206,00 MT), split HS=540753009011 qty=206.00. Prefer Design Name (DYER 789). HS may be dotted (54.07.73.00.90.11) in any cell — digits only, TNVED first 10.
+Packing Weavers: Customer Name is the goods article, mill Design is not. Two lots of one Design Name with own meters stay two items.
 Packing Tosun "Seçme Listesi", no black borders:
   Ürün Kodu = mill/model; Müşteri Kodu = customer article (goods key, SINDRI 162)
   Artikel 1 Top 40.43 ... = group total, 1 = rolls. Genel Toplam = document totals, not an item.

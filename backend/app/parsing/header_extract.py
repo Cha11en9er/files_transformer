@@ -12,6 +12,7 @@ from collections import defaultdict
 from typing import Any
 
 from app.parsing.normalize import normalize_text
+from app.transform.canonical import normalize_currency_iso
 
 _LOOKALIKE = str.maketrans(
     "АВЕКМНОРСТХавекмнорстх",
@@ -734,27 +735,9 @@ def _majority_text(values: list[str]) -> str | None:
     return ranked[0][0]
 
 
-_CURRENCY_CODE = re.compile(r"\b(USD|EUR|CNY|RMB|RUB|GBP)\b", re.I)
-
-
 def normalize_currency_code(value: Any) -> str | None:
-    text = normalize_text(str(value or ""))
-    if not text:
-        return None
-    match = _CURRENCY_CODE.search(text)
-    if match:
-        code = match.group(1).upper()
-        return "CNY" if code == "RMB" else code
-    low = text.lower()
-    if "usd" in low or "dollar" in low or "доллар" in low:
-        return "USD"
-    if "eur" in low or "euro" in low or "евро" in low:
-        return "EUR"
-    if "cny" in low or "rmb" in low or "yuan" in low or "юан" in low:
-        return "CNY"
-    if "руб" in low or "rub" in low:
-        return "RUB"
-    return None
+    """ISO from a token or short phrase. Two different codes in one blob → None."""
+    return normalize_currency_iso(value)
 
 
 def currency_from_sources(
@@ -776,20 +759,7 @@ def currency_from_sources(
     # Payment clauses often list several allowed currencies ("yuan, US dollars").
     # Those are not the invoice price currency — ignore mixed blobs.
     blob = " ".join(str(v) for v in header.values() if v not in (None, ""))
-    low = blob.lower()
-    has_usd = bool(re.search(r"\busd\b|dollar|доллар", low))
-    has_cny = bool(re.search(r"\bcny\b|\brmb\b|yuan|юан", low))
-    has_eur = bool(re.search(r"\beur\b|euro|евро", low))
-    mentioned = sum(bool(flag) for flag in (has_usd, has_cny, has_eur))
-    if mentioned >= 2:
-        return None
-    if has_usd:
-        return "USD"
-    if has_eur:
-        return "EUR"
-    if has_cny:
-        return "CNY"
-    return None
+    return normalize_currency_iso(blob)
 
 
 def export_currency_label(code: str | None, *, hangzhou_style: bool = False) -> str:

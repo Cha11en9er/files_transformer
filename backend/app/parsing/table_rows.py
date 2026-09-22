@@ -75,7 +75,17 @@ HEADER_HINTS = (
 )
 
 _DATE_RE = re.compile(r"^\d{1,2}[./-]\d{1,2}([./-]\d{2,4})?$")
-_CURRENCY = r"(?:USD|EUR|US\$|\$|TL|TRY|USO|US0)"
+_WEAVERS_LINE = re.compile(
+    r"(?i)(?P<design_no>[A-Z]\d{2}-\d{4})\s*/\s*(?P<article>[A-Z][A-Z0-9 ]{2,40}?)\s*/\s*"
+    r"(?P<code>PX[A-Z0-9.]+(?:\s+\d+)?)"
+    r"[^\n]{0,200}?"
+    r"(?:HS\s*CODE\s*:?\s*[\d. ]{6,20})?"
+    r"(?P<qty>\d+[.,]\d+)\s*MT\.?"
+    r"\s*(?P<price>\d+[.,]\d+)\s*(?:USD|EUR|GBP|TRY|TL|\$|€|£)?"
+    r"[^\n]{0,40}?"
+    r"(?P<amount>\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})|\d+[.,]\d+)\s*(?:USD|EUR|GBP|TRY|\$|€)?"
+)
+_CURRENCY = r"(?:USD|EUR|GBP|TRY|TL|AED|SAR|CNY|RMB|US\$|\$|€|£|USO|US0)"
 _QTY_PRICE_LINE = re.compile(
     r"(?im)(?P<article>[A-Z][A-Za-z0-9._/-]{2,24}(?:[ -]\d{2,5})?)\s+"
     r"(?P<qty>\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+[.,]\d+|\d+)\s+"
@@ -94,20 +104,11 @@ _MILL_QTY_PRICE = re.compile(
 _GLUED_MT_USD = re.compile(
     r"(?i)(?P<article>[A-Z]{3,24})"
     r"(?P<qty>\d{1,3}(?:\.\d{3})+,\d+|\d+,\d+)\s*MT\.?"
-    r"(?P<price>\d+[.,]\d+)\s*USD"
+    r"(?P<price>\d+[.,]\d+)\s*(?:USD|EUR|GBP|AED|CNY|RMB)?"
     r"[^\n]{0,90}?"
-    r"(?P<amount>\d{1,3}(?:\.\d{3})+,\d+|\d+[.,]\d+)\s*USD"
+    r"(?P<amount>\d{1,3}(?:\.\d{3})+,\d+|\d+[.,]\d+)\s*(?:USD|EUR|GBP|AED|CNY|RMB)"
 )
-_GLUED_CCY_PREFIX = re.compile(r"^(?:USD|EUR|TRY|TL|US)+", re.I)
-_WEAVERS_LINE = re.compile(
-    r"(?i)(?P<design_no>[A-Z]\d{2}-\d{4})\s*/\s*(?P<article>[A-Z][A-Z0-9 ]{2,40}?)\s*/\s*"
-    r"(?P<code>PX[A-Z0-9.]+(?:\s+\d+)?)"
-    r"[^\n]{0,160}?"
-    r"HS\s*CODE\s*:?\s*\d{8,12}"
-    r"(?P<qty>\d+[.,]\d+)\s*MT\.?"
-    r"(?P<price>\d+[.,]\d+)\s*\$"
-    r"(?P<amount>\d+[.,]\d+)\s*\$"
-)
+_GLUED_CCY_PREFIX = re.compile(r"^(?:USD|EUR|GBP|TRY|TL|AED|US)+", re.I)
 _SKIP_PLAINTEXT = (
     "invoice no",
     "page ",
