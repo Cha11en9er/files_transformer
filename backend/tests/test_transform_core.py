@@ -944,3 +944,212 @@ def test_shary_pdf_kit_two_balloon_lots():
     assert nets == [300.9, 588.8]
 
 
+# --------------------------------------------------------------------------- #
+# 5_pravka-class layouts: junk rows, dotted HS, dual DESIGN, currency, blob PDF
+# --------------------------------------------------------------------------- #
+
+def test_hs_digits_dotted_float_and_not_money():
+    from app.transform.canonical import hs_digits, looks_like_hs_code, parse_number, tnved_digits
+
+    assert hs_digits("54.07.73.00.90.11") == "540773009011"
+    assert hs_digits("59.03.10.90.10.00") == "590310901000"
+    assert hs_digits("HS CODE :540783009011") == "540783009011"
+    assert hs_digits(5903202000999.0) == "5903202000999"
+    assert hs_digits("5903202000999.0") == "5903202000999"
+    assert hs_digits("20270.25") is None
+    assert hs_digits("1.38") is None
+    assert hs_digits("2604") is None
+    assert not looks_like_hs_code("44.55")
+    assert tnved_digits("54.07.73.00.90.11") == "5407730090"
+    assert parse_number("54.07.73.00.90.11") is None
+    assert parse_number("1.234,56") == 1234.56
+
+
+def test_parse_number_other_currencies():
+    from app.transform.canonical import parse_number, normalize_currency_iso
+
+    assert parse_number("5,78 USD") == 5.78
+    assert parse_number("£12.50") == 12.50
+    assert parse_number("3.85$") == 3.85
+    assert parse_number("10061.93 TRY") == 10061.93
+    assert parse_number("¥44.55") == 44.55
+    assert parse_number("1.38 M") == 1.38
+    assert normalize_currency_iso("PRICE PER GBP") == "GBP"
+    assert normalize_currency_iso("Amount (AED)") == "AED"
+    assert normalize_currency_iso("KWD") == "KWD"
+    assert normalize_currency_iso("IQD") == "IQD"
+    assert normalize_currency_iso("фунт стерлингов") == "GBP"
+    assert normalize_currency_iso("лира") == "TRY"
+    assert normalize_currency_iso("динар") is None
+    assert normalize_currency_iso("USD and TRY on the same line") is None
+    assert normalize_currency_iso("yuan, US dollars") is None
+
+
+def test_dual_desing_metrs_unit_pice_and_junk_po_row():
+    from app.transform.extract import extract_sheet
+    from app.transform.reader import Sheet
+
+    grid = [
+        ["NO", "DESING", "DESING", "ROLL", "WIDTH", "METRS", "UNIT MT / PICE", "UNIT PICE", "AMOUNT", "CUSTOMS CODE"],
+        [None, None, None, None, None, None, None, None, None, 2604],
+        [1, "MAXWELL", 997, 13, "1.38 M", 455, "M", "¥44.55", "¥20270.25", 5903202000999.0],
+        [2, "MAXWELL", 236, 20, "1.38 M", 1111, "M", "¥44.55", 49545.05, "5903202000999"],
+        [None, "page 2", None, None, None, None, None, None, None, None],
+        [3, "MAXWELL", 960, 8, "1.38 M", 485, "M", 44.55, 21606.75, "5903202000999"],
+        [None, "TOTAL", None, 41, None, 2051, None, None, 91422.05, None],
+    ]
+    sheet = Sheet(name="Invoice", grid=grid, source="shipping.xls")
+    extracted = extract_sheet(sheet)
+    assert extracted is not None
+    arts = [row.article for row in extracted.rows]
+    assert arts == ["MAXWELL", "MAXWELL", "MAXWELL"]
+    assert "2604" not in arts
+    first = extracted.rows[0]
+    assert first.fields.get("color") in (997, 997.0, "997")
+    assert first.fields.get("meters") == 455
+    assert first.fields.get("price") == pytest.approx(44.55, abs=0.01)
+    assert first.fields.get("unit") in ("M", "m")
+    assert str(first.fields.get("hs_code") or first.fields.get("customs_code")).startswith("5903202000")
+    assert first.fields.get("area") == pytest.approx(455 * 1.38, abs=0.05)
+
+
+def test_two_row_en_tr_header_amount_m_is_meters():
+    from app.transform.extract import extract_sheet
+    from app.transform.reader import Sheet
+
+    grid = [
+        ["PACKING LIST / CEKI LISTESI"],
+        ["ROLL NR", "DESING NAME", "COLOR NR", "AMOUNT (M)", "NETT KG", "WIDTH", "M2"],
+        ["Sack nr", "DESEN ADI", "RENK NO", "AMOUNT (M)", "BRUTT", "EN, M", "M2"],
+        [1, "LORENSA", "01", "294,70", 120.5, 1.40, 412.58],
+        [2, "LORENSA", "02", "50,20", 22.1, 1.40, 70.28],
+        ["GENEL TOPLAM", None, None, "344,90", 142.6, None, 482.86],
+    ]
+    sheet = Sheet(name="Ceki", grid=grid, source="pack.xlsx")
+    extracted = extract_sheet(sheet)
+    assert extracted is not None
+    assert len(extracted.rows) == 2
+    row = extracted.rows[0]
+    assert "LORENSA" in row.article.upper()
+    assert row.fields.get("meters") == pytest.approx(294.70, abs=0.01)
+    assert row.fields.get("amount") in (None, "") or row.fields.get("amount") != pytest.approx(294.70, abs=0.01)
+    assert row.fields.get("net_weight") == pytest.approx(120.5, abs=0.05)
+
+
+def test_qcreport_sheet_is_not_goods():
+    from app.transform.extract import extract_sheet
+    from app.transform.reader import Sheet
+
+    grid = [
+        ["Roll#", "SKU", "colour"],
+        [2604, 2604, 2604],
+        [1, "MAXWELL", 997],
+    ]
+    sheet = Sheet(name="QCReport", grid=grid, source="shipping.xls")
+    assert extract_sheet(sheet) is None
+
+
+def test_catalog_qty_one_does_not_overwrite_meters():
+    from app.transform.extract import ExtractedSheet, Row
+
+    invoice = ExtractedSheet(
+        name="inv",
+        source="inv.xlsx",
+        role="invoice",
+        mapping={},
+        header_text="invoice USD",
+        rows=[
+            Row(
+                article="ZIMMY",
+                normalized="ZIMMY",
+                fields={"meters": 322.0, "price": 5.78, "amount": 1861.16, "qty": 322.0, "width": 1.4},
+                source="inv",
+                role="invoice",
+            ),
+        ],
+    )
+    opis = ExtractedSheet(
+        name="Опис",
+        source="spec.xlsx",
+        role="specification",
+        mapping={},
+        header_text="описание",
+        rows=[
+            Row(
+                article="ZIMMY",
+                normalized="ZIMMY",
+                fields={"qty": 1.0, "meters": 55.04, "color": "925", "hs_code": "540753009011"},
+                source="opis",
+                role="specification",
+            ),
+        ],
+    )
+    items = merge_documents([invoice, opis])
+    assert len(items) == 1
+    item = items[0]
+    assert item.fields.get("meters") == pytest.approx(322.0, abs=0.01)
+    assert item.fields.get("color") in ("925", 925)
+    assert str(item.fields.get("hs_code")).startswith("540753")
+    assert item.fields.get("area") == pytest.approx(322.0 * 1.4, abs=0.05)
+
+
+def test_packing_customer_name_is_article():
+    from app.transform.extract import extract_sheet
+    from app.transform.reader import Sheet
+
+    grid = [
+        ["Design", "Customer Name", "Meters", "N.W", "G.W"],
+        ["MILL-88", "DYER 290", 622.00, 210.0, 225.0],
+        ["MILL-88", "DYER 291", 400.00, 140.0, 150.0],
+        ["TOTAL", None, 1022.00, 350.0, 375.0],
+    ]
+    sheet = Sheet(name="PL", grid=grid, source="packing.xlsx")
+    extracted = extract_sheet(sheet)
+    assert extracted is not None
+    arts = {row.article.upper() for row in extracted.rows}
+    assert "DYER 290" in arts
+    assert "MILL-88" not in arts
+
+
+def test_blob_pdf_letter_and_slash_lines():
+    from app.transform.pdf import goods_grid_from_blob
+
+    weavers = (
+        "Desing No / Design Name / Weavers Code / Item No / PO\n"
+        "D15-5745 / DYER 290 / PX03.BEJ 337 / 0 / new order 622,00 MT 3,85$ 2.394,70$\n"
+        "HS CODE : 54.07.73.00.90.11\n"
+        "Total Sum 622,00 MT\n"
+    )
+    grid = goods_grid_from_blob(weavers)
+    assert len(grid) >= 2
+    body = grid[1]
+    assert "DYER" in str(body[0]).upper()
+    assert float(body[1]) == pytest.approx(622.0, abs=0.05)
+    letter = (
+        "294,70 JACQUARD FLOCK PRINTED –LORENSA 6,60 1.945,02 USD\n"
+        "HS CODE :540783009011\n"
+        "50,20 VELVET –MILANO 7,10 356,42 USD\n"
+    )
+    grid2 = goods_grid_from_blob(letter)
+    arts = [str(row[0]).upper() for row in grid2[1:]]
+    assert any("LORENSA" in a for a in arts)
+
+
+def test_canonical_to_rows_tnved_max_ten_no_dots():
+    from app.transform.merge import CanonicalItem
+    from app.transform.service import canonical_to_rows
+
+    item = CanonicalItem(
+        article="BLOOM",
+        key="BLOOM",
+        fields={"hs_code": "54.07.73.00.90.11", "meters": 10, "price": 1, "amount": 10},
+    )
+    rows = canonical_to_rows([item])
+    hs = rows[0]["customs_data"].get("hs_code")
+    tnved = rows[0]["customs_data"].get("tnved_code")
+    assert hs and "." not in str(hs)
+    assert tnved and "." not in str(tnved)
+    assert len(str(tnved)) <= 10
+
+
+

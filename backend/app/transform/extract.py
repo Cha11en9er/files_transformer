@@ -21,11 +21,16 @@ from app.parsing.header_extract import is_catalog_filename
 from app.parsing.normalize import normalize_article, normalize_text
 from app.parsing.product_row import is_plausible_article
 from app.transform.canonical import (
+    CODE_FIELDS,
     NUMERIC_FIELDS,
     ColumnStat,
+    area_from_meters_width,
     classify_columns,
+    hs_digits,
     is_number_like,
+    looks_like_hs_code,
     parse_number,
+    width_in_meters,
 )
 from app.transform.reader import Sheet
 
@@ -75,8 +80,24 @@ ROLE_KEYWORDS = {
     "invoice": ("commercial invoice", "invoice", "инвойс", "商业发票", "发票", "фактура"),
     "packing": ("packing list", "упаковочный", "装箱单", "çeki", "ceki", "seçme listesi", "packing"),
     "specification": ("specification", "спецификация", "规格"),
-    "catalog": ("справочник", "сводная", "catalog", "описание", "риск"),
+    "catalog": ("справочник", "сводная", "catalog", "описание", "опис", "риск"),
 }
+
+_NON_GOODS_SHEET = re.compile(
+    r"(?:^|[\s_\-])(?:qc(?:\s*report)?|qcreport|certificate|men[sş]e|"
+    r"origin\s*of\s*goods|test\s*report)(?:$|[\s_\-])",
+    re.I,
+)
+_TRANSLATION_HEADER_HINTS = (
+    "desen", "sack nr", "sack no", "brutt", "nett", "renk", "mal cinsi",
+    "birim", "miktar", "tutar", "müşteri", "musteri", "ürün", "urun",
+    "en,", "m2", "top adet", "çeşit", "cesit",
+)
+_NOISE_ROW_RE = re.compile(
+    r"^(?:continued|continue|page\s*\d+|p\.?\s*\d+|po\s*:?\s*\d+|"
+    r"see\s+below|n/?a|null)$",
+    re.I,
+)
 
 
 _LINE_FIELDS = (
@@ -180,33 +201,150 @@ def _score_mapping(mapping: dict[int, str]) -> int:
     return score
 
 
-def _build_columns(sheet: Sheet, header_row: int) -> list[ColumnStat]:
-    headers = sheet.grid[header_row]
+def _row_is_structural_noise(cells: list[Any]) -> bool:
+    """PO / page / repeated short number / empty — not a sample for column stats."""
+    texts = [_cell(v) for v in cells if _cell(v)]
+    if not texts:
+        return True
+    joined = " ".join(texts).strip()
+    if _NOISE_ROW_RE.match(joined) or _is_letterhead_junk(joined):
+        return True
+    if _TOTAL_RE.match(texts[0]) or _TOTAL_RE.match(joined):
+        return True
+    unique = {re.sub(r"\s+", "", t) for t in texts}
+    if len(unique) == 1:
+        tok = next(iter(unique))
+        if re.fullmatch(r"\d{1,5}", tok):
+            return True
+        if _is_header_label_article(tok):
+            return True
+    if len(texts) == 1 and re.fullmatch(r"\d{1,5}", texts[0]):
+        return True
+    if _DETAIL_SECTION_RE.search(joined) or _NAKED_SECTION_RE.match(joined):
+        return True
+    nums = sum(1 for t in texts if is_number_like(t) and not looks_like_hs_code(t))
+    letters = sum(1 for t in texts if any(ch.isalpha() for ch in t) and not is_number_like(t))
+    if letters >= 3 and nums <= 1:
+        return True
+    return False
+
+
+def _is_subheader_row(sheet: Sheet, row_index: int) -> bool:
+    """EN then TR (or stacked WEIGHT/NETTO) title row, not goods."""
+    if row_index < 0 or row_index >= sheet.nrows:
+        return False
+    row = sheet.grid[row_index]
+    texts = [_cell(v) for v in row if _cell(v)]
+    if len(texts) < 3:
+        return False
+    nums = sum(1 for t in texts if is_number_like(t) and not looks_like_hs_code(t))
+    if nums >= 2:
+        return False
+    letters = sum(1 for t in texts if any(ch.isalpha() for ch in t))
+    if letters < 3:
+        return False
+    joined = " ".join(texts).lower()
+    hints = sum(1 for token in _TRANSLATION_HEADER_HINTS if token in joined)
+    if hints >= 2:
+        return True
+    # stacked EN titles (WEIGHT / NETTO) without a translation row: mostly words, header-like
+    if nums == 0 and letters >= 4 and any(
+        tok in joined for tok in ("netto", "brutto", "weight", "series", "art.", "ед.изм", "ст-сть")
+    ):
+        return True
+    return False
+
+
+def _weight_header_kind(text: str) -> str:
+    low = (text or "").lower()
+    if any(tok in low for tok in ("brutt", "brutto", "gross", "g.w", "брутто")):
+        return "gross"
+    if any(tok in low for tok in ("nett", "netto", "net wt", "n.w", "нетто", "net kg")):
+        return "net"
+    return ""
+
+
+def _merge_header_cells(top: list[Any], bottom: list[Any], width: int) -> list[str]:
+    merged: list[str] = []
+    for c in range(width):
+        a = _cell(top[c] if c < len(top) else "")
+        b = _cell(bottom[c] if c < len(bottom) else "")
+        if not b or b.lower() in a.lower():
+            merged.append(a)
+            continue
+        # NETT over BRUTT in one column is two names for different fields — keep the top.
+        if _weight_header_kind(a) and _weight_header_kind(b) and _weight_header_kind(a) != _weight_header_kind(b):
+            merged.append(a)
+            continue
+        merged.append(f"{a} {b}".strip())
+    return merged
+
+
+def _build_columns(sheet: Sheet, header_row: int, headers: list[Any] | None = None) -> list[ColumnStat]:
+    titles = headers if headers is not None else sheet.grid[header_row]
     cols: list[ColumnStat] = []
     for c in range(sheet.ncols):
-        header = _cell(headers[c] if c < len(headers) else "")
-        values = [
-            sheet.grid[r][c]
-            for r in range(header_row + 1, min(header_row + 1 + SAMPLE, sheet.nrows))
-            if c < len(sheet.grid[r])
-        ]
+        header = _cell(titles[c] if c < len(titles) else "")
+        values = []
+        for r in range(header_row + 1, min(header_row + 1 + SAMPLE * 2, sheet.nrows)):
+            if c >= len(sheet.grid[r]):
+                continue
+            if _row_is_structural_noise(sheet.grid[r]):
+                continue
+            if _is_subheader_row(sheet, r) and r == header_row + 1:
+                continue
+            values.append(sheet.grid[r][c])
+            if len(values) >= SAMPLE:
+                break
         cols.append(ColumnStat(index=c, header=header, values=values))
     return cols
 
 
 def find_header(sheet: Sheet) -> tuple[int, dict[int, str], list[ColumnStat]]:
-    """Return (header_row_index, mapping, columns). header_row = -1 if none good."""
-    best: tuple[int, int, dict[int, str], list[ColumnStat]] | None = None
+    """Return (header_row_index, mapping, columns). header_row = -1 if none good.
+
+    header_row is the last title row: data starts at header_row + 1. A stacked
+    EN/TR or WEIGHT/NETTO pair is merged into one mapping and skipped as data.
+    """
+    best: tuple[tuple[int, int, int], int, dict[int, str], list[ColumnStat]] | None = None
     limit = min(sheet.nrows, HEADER_SCAN)
     for r in range(limit):
         cols = _build_columns(sheet, r)
         mapping = classify_columns(cols)
         score = _score_mapping(mapping)
-        if best is None or score > best[0]:
-            best = (score, r, mapping, cols)
-    if best is None or best[0] < 3:
+        if score < 3:
+            continue
+        follow = _follow_goods_count(sheet, r, mapping)
+        rank = (follow, score, -r)
+        if best is None or rank > best[0]:
+            best = (rank, r, mapping, cols)
+    if best is None:
         return -1, {}, []
-    return best[1], best[2], best[3]
+    header_row, mapping, cols = best[1], best[2], best[3]
+    nxt = header_row + 1
+    if _is_subheader_row(sheet, nxt):
+        merged = _merge_header_cells(sheet.grid[header_row], sheet.grid[nxt], sheet.ncols)
+        cols = _build_columns(sheet, nxt, merged)
+        mapping = classify_columns(cols)
+        header_row = nxt
+    return header_row, mapping, cols
+
+
+def _follow_goods_count(sheet: Sheet, header_row: int, mapping: dict[int, str]) -> int:
+    """How many goods-like rows sit under this header before TOTAL / a new table."""
+    hits = 0
+    for r in range(header_row + 1, min(header_row + 1 + 12, sheet.nrows)):
+        joined = " ".join(_cell(v) for v in sheet.grid[r]).strip()
+        if not joined:
+            continue
+        if _TOTAL_RE.match(joined) or _DETAIL_SECTION_RE.search(joined) or _NAKED_SECTION_RE.match(joined):
+            break
+        if _row_is_structural_noise(sheet.grid[r]) or _is_subheader_row(sheet, r):
+            continue
+        fields, _inherited = _row_fields(sheet, r, mapping)
+        if _has_goods_numbers(fields):
+            hits += 1
+    return hits
 
 
 def _sheet_text(sheet: Sheet, header_row: int) -> str:
@@ -221,6 +359,10 @@ def _sheet_text(sheet: Sheet, header_row: int) -> str:
 def classify_role(text: str, mapping_fields: set[str], source: str = "") -> str:
     if is_catalog_filename(source):
         return "catalog"
+    if _NON_GOODS_SHEET.search(text):
+        has_price = bool(mapping_fields & {"price", "amount"})
+        if not has_price:
+            return "catalog"
     scores = {role: 0 for role in ROLE_KEYWORDS}
     for role, words in ROLE_KEYWORDS.items():
         for w in words:
@@ -233,6 +375,9 @@ def classify_role(text: str, mapping_fields: set[str], source: str = "") -> str:
     has_shipping_qty = bool(mapping_fields & {"qty", "meters", "rolls", "area"})
 
     if scores["catalog"] and has_code and not has_shipping_qty:
+        return "catalog"
+    # sheet "Опис" / "описание" with codes is identity catalog even if a dummy qty column exists
+    if scores["catalog"] and has_code and re.search(r"\b(опис|описание)\b", text):
         return "catalog"
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     top_role, top_score = ranked[0]
@@ -266,14 +411,35 @@ def _row_fields(sheet: Sheet, r: int, mapping: dict[int, str]) -> tuple[dict[str
             continue
         if (r, c) in sheet.inherited:
             inherited.add(field_key)
+        if field_key in CODE_FIELDS:
+            code = hs_digits(raw)
+            if code:
+                out[field_key] = code
+            else:
+                out[field_key] = text
+            continue
         if field_key in NUMERIC_FIELDS:
-            num = parse_number(raw)
+            if looks_like_hs_code(raw) and not isinstance(raw, (int, float)):
+                dotted = re.sub(r"\s+", "", text)
+                if re.match(r"^\d{2}(?:[.\s]\d{2}){2,6}$", dotted):
+                    continue
+            if field_key == "width":
+                num = width_in_meters(raw)
+            else:
+                num = parse_number(raw)
             if num is not None:
                 out[field_key] = num
-        elif field_key == "measurement":
+            continue
+        if field_key == "measurement":
             out[field_key] = text
+        elif field_key == "currency":
+            from app.parsing.header_extract import normalize_currency_code
+            out[field_key] = normalize_currency_code(text) or text
         else:
             out[field_key] = text
+    area = area_from_meters_width(out.get("meters"), out.get("width"))
+    if area is not None and out.get("area") in (None, ""):
+        out["area"] = area
     return out, inherited
 
 
@@ -372,7 +538,7 @@ def _is_repeat_caption(prev: Row, article: str) -> bool:
     if not prev_key or not art_key:
         return False
     if art_key == prev_key:
-        return True
+        return False
     return art_key.endswith(prev_key) and len(art_key) > len(prev_key)
 
 
@@ -450,26 +616,33 @@ def _sheet_currency(header_text: str) -> str | None:
 
     text = header_text or ""
     low = text.lower()
-    # Prefer markers next to price/amount headers (PRICE PER USD, Amount (CNY), …).
-    for pattern, code in (
-        (r"(?:unit\s*)?price[^A-Za-zА-Яа-я]{0,12}(?:per\s*)?\(?\s*usd\b", "USD"),
-        (r"amount[^A-Za-zА-Яа-я]{0,8}\(?\s*usd\b", "USD"),
-        (r"(?:unit\s*)?price[^A-Za-zА-Яа-я]{0,12}(?:per\s*)?\(?\s*(?:cny|rmb)\b", "CNY"),
-        (r"amount[^A-Za-zА-Яа-я]{0,8}\(?\s*(?:cny|rmb)\b", "CNY"),
-        (r"(?:unit\s*)?price[^A-Za-zА-Яа-я]{0,12}(?:per\s*)?\(?\s*eur\b", "EUR"),
-        (r"amount[^A-Za-zА-Яа-я]{0,8}\(?\s*eur\b", "EUR"),
-        (r"цена[^A-Za-zА-Яа-яЁё]{0,12}(?:usd|долл)", "USD"),
-        (r"сумма[^A-Za-zА-Яа-яЁё]{0,8}(?:usd|долл)", "USD"),
-        (r"цена[^A-Za-zА-Яа-яЁё]{0,12}(?:cny|rmb|юан|yuan)", "CNY"),
-        (r"сумма[^A-Za-zА-Яа-яЁё]{0,8}(?:cny|rmb|юан|yuan)", "CNY"),
-    ):
-        if re.search(pattern, low, re.I):
-            return code
-    # Lone currency token only when payment text does not list several options.
-    has_usd = bool(re.search(r"\busd\b|dollar|доллар", low))
-    has_cny = bool(re.search(r"\bcny\b|\brmb\b|yuan|юан", low))
-    has_eur = bool(re.search(r"\beur\b|euro|евро", low))
-    if sum(bool(flag) for flag in (has_usd, has_cny, has_eur)) >= 2:
+    iso = (
+        "usd", "eur", "gbp", "cny", "rmb", "try", "tl", "aed", "sar", "qar",
+        "omr", "kwd", "bhd", "jod", "iqd", "jpy", "chf", "pln", "rub",
+    )
+    iso_alt = {"rmb": "CNY", "tl": "TRY"}
+    # Prefer markers next to price/amount headers.
+    for kind in ("price", "amount", "цена", "сумма", "fiyat", "tutar", "单价", "金额"):
+        for code in iso:
+            if re.search(
+                rf"{kind}[^A-Za-zА-Яа-яЁё]{{0,16}}(?:per\s*)?\(?\s*{code}\b",
+                low,
+                re.I,
+            ):
+                return iso_alt.get(code, code.upper())
+    pinned = []
+    for code in iso:
+        if re.search(rf"\b{code}\b", low):
+            pinned.append(iso_alt.get(code, code.upper()))
+    uniq = list(dict.fromkeys(pinned))
+    if len(uniq) == 1:
+        return uniq[0]
+    if len(uniq) >= 2:
+        local = {"TRY", "RUB"}
+        hard = [c for c in uniq if c not in local]
+        loc = [c for c in uniq if c in local]
+        if len(hard) == 1 and loc:
+            return hard[0]
         return None
     return normalize_currency_code(text)
 
@@ -519,6 +692,10 @@ def extract_sheet(
 ) -> ExtractedSheet | None:
     header_row, mapping, _cols = find_header(sheet)
     used_inherited = False
+    if _NON_GOODS_SHEET.search(f"{sheet.name} {sheet.source}"):
+        mapped = set(mapping.values())
+        if "price" not in mapped and "amount" not in mapped:
+            return None
     if header_row < 0 or "article" not in set(mapping.values()) and "description" not in set(mapping.values()):
         if not inherited_mapping:
             return None
@@ -588,9 +765,13 @@ def extract_sheet(
         if component_mode and _looks_like_new_header(joined, active_mapping) and ex.component_rows:
             break
         if not after_total and ex.rows and _looks_like_new_header(joined, active_mapping):
+            if _is_subheader_row(sheet, r) or _row_is_structural_noise(row):
+                continue
             _flush_children(ex, pending_children)
             break
         if _is_letterhead_junk(joined):
+            continue
+        if _row_is_structural_noise(row):
             continue
         fields, inherited = _row_fields(sheet, r, active_mapping)
         _drop_note_description(fields)

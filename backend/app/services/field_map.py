@@ -46,6 +46,8 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "desen adı",
         "desen adi",
         "articolo",
+        "customer name",
+        "desing name",
     ),
     "model": ("model", "модель", "design", "дизайн", "ürün kodu", "urun kodu"),
     "color": ("color", "colour", "цвет", "renk", "colore"),
@@ -53,6 +55,7 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "unit": ("unit", "uom", "ед", "единица", "birim", "unità"),
     "price": (
         "unit price",
+        "unit pice",
         "per meter",
         "за пог",
         "price",
@@ -98,6 +101,9 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "brut metre",
         "total meter",
         "total metres",
+        "metrs",
+        "amount (m)",
+        "amount(m)",
     ),
     "area": ("кв.м", "area", "м²", "m2", "sqm", "площад", "mq"),
     "gm": ("g/m", "g.m", "gsm"),
@@ -189,23 +195,9 @@ _AMOUNT_TOTAL_BLOCK_RE = re.compile(
 
 
 def parse_number(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = normalize_text(str(value)).replace("\u00a0", "").replace(" ", "")
-    if not text:
-        return None
-    if _US_MONEY.match(text):
-        text = text.replace(",", "")
-    elif _EU_MONEY.match(text):
-        text = text.replace(".", "").replace(",", ".")
-    elif text.count(",") == 1 and text.count(".") == 0:
-        text = text.replace(",", ".")
-    try:
-        return float(text)
-    except ValueError:
-        return None
+    from app.transform.canonical import parse_number as _canon
+
+    return _canon(value)
 
 
 def is_numeric_token(value: Any) -> bool:
@@ -316,6 +308,7 @@ def classify_header(header: str) -> str | None:
             "desing",
             "desen adi",
             "desen adı",
+            "customer name",
         )
     ):
         return "article"
@@ -341,7 +334,7 @@ def classify_header(header: str) -> str | None:
         return None
     if "number of rolls" in h or "количество рулон" in h or re.search(r"\brolls\b", h):
         return "rolls"
-    if "погонных метров" in h or "q-ty meters" in h or "metres" in h or "meters" in h:
+    if "погонных метров" in h or "q-ty meters" in h or "metres" in h or "meters" in h or "metrs" in h:
         return "meters"
     if _AREA_HEADER_RE.search(h) and "euro" not in h and "price" not in h and "amount" not in h:
         return "area"
@@ -363,7 +356,7 @@ def classify_header(header: str) -> str | None:
         return "area"
     if "total price" in h or "цена, долл" in h or "сумма" in h or "tutar" in h or "金额" in h:
         return "amount"
-    if "per meter" in h or "за пог" in h or "unit price" in h or "birim fiyat" in h or "单价" in h or "price per" in h:
+    if "per meter" in h or "за пог" in h or "unit price" in h or "unit pice" in h or "birim fiyat" in h or "单价" in h or "price per" in h:
         return "price"
     if "miktar" in h or "adet" in h or "数量" in h:
         return "qty"

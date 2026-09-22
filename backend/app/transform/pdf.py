@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from app.transform.canonical import is_number_like
+from app.transform.canonical import hs_digits, is_number_like, parse_number
 from app.transform.reader import Sheet
 
 MAX_PAGES = 25
@@ -187,10 +187,12 @@ def _read_pdfplumber(path: str) -> PdfReadResult | None:
             return None
         sheets = _sheets_from_pages(name, stitch_continuation_tables(page_tables))
         full_text = "\n".join(texts)
+        sheets = _maybe_add_blob_sheet(name, sheets, full_text)
         return PdfReadResult(sheets, full_text, scanned=not sheets and not texts)
 
     sheets = _sheets_from_pages(name, stitch_continuation_tables(page_tables))
     full_text = "\n".join(texts)
+    sheets = _maybe_add_blob_sheet(name, sheets, full_text)
     scanned = not full_text and not sheets
     return PdfReadResult(sheets, full_text, scanned=scanned)
 
@@ -231,10 +233,12 @@ def _read_pypdf(path: str) -> PdfReadResult:
     except Exception:  # noqa: BLE001
         sheets = _sheets_from_pages(name, stitch_continuation_tables(page_tables))
         full_text = "\n".join(texts)
+        sheets = _maybe_add_blob_sheet(name, sheets, full_text)
         return PdfReadResult(sheets, full_text, scanned=not sheets and not texts)
 
     sheets = _sheets_from_pages(name, stitch_continuation_tables(page_tables))
     full_text = "\n".join(texts)
+    sheets = _maybe_add_blob_sheet(name, sheets, full_text)
     scanned = not full_text and not sheets
     return PdfReadResult(sheets, full_text, scanned=scanned)
 
@@ -249,3 +253,127 @@ def _grid_from_text(text: str) -> list[list[str]]:
         cells = re.split(r"\s{2,}|\t", line.strip())
         rows.append([c.strip() for c in cells])
     return rows
+
+
+_BLOB_SLASH = re.compile(
+    r"(?i)(?P<design_no>[A-Z]\d{2}-\d{4})\s*/\s*(?P<article>[A-Z][A-Z0-9][A-Z0-9 .()\-]{1,40}?)"
+    r"\s*/"
+    r"[^\n]{0,200}?"
+    r"(?P<qty>\d{1,4}(?:[.,]\d{2,3})?)\s*MT\.?"
+    r"\s*(?P<price>\d+[.,]\d+)\s*(?P<ccy>USD|EUR|GBP|TRY|TL|CNY|RMB|AED|\$|€|£)?"
+    r".{0,40}?"
+    r"(?P<amount>\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})|\d+[.,]\d+)\s*(?:USD|EUR|GBP|TRY|TL|\$|€|£)?"
+)
+_BLOB_GLUED = re.compile(
+    r"(?i)(?P<article>[A-Z][A-Z0-9]{2,24})"
+    r"(?P<qty>\d{1,3}(?:\.\d{3})+,\d+|\d+[.,]\d+)\s*MT\.?"
+    r"\s*(?P<price>\d+[.,]\d+)\s*(?P<ccy>USD|EUR|GBP|TRY|TL|CNY|RMB)?"
+    r".{0,90}?"
+    r"(?P<amount>\d{1,3}(?:\.\d{3})+,\d+|\d+[.,]\d+)"
+)
+_BLOB_LETTER = re.compile(
+    r"(?im)^(?P<qty>\d{1,4}[.,]\d{2})\s+(?P<article>.+?)\s+"
+    r"(?P<price>\d+[.,]\d{2})\s+(?P<amount>\d{1,3}(?:\.\d{3})+,\d{2}|\d+[.,]\d{2})"
+    r"\s*(?P<ccy>USD|EUR|GBP|TRY|TL|CNY|RMB|AED|\$)?"
+)
+_BLOB_HS = re.compile(r"(?i)hs\s*code\s*:?\s*([\d. ]{6,24})")
+_BLOB_CCY_MAP = {
+    "$": "USD", "€": "EUR", "£": "GBP", "TL": "TRY", "RMB": "CNY",
+}
+
+
+def _blob_ccy(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    token = raw.strip().upper()
+    return _BLOB_CCY_MAP.get(token, token if len(token) == 3 else None)
+
+
+def _table_is_weak(grid: list[list[object]]) -> bool:
+    if not grid or len(grid) < 3:
+        return True
+    numeric_rows = 0
+    for row in grid[1:]:
+        nums = sum(1 for cell in row if cell not in (None, "") and is_number_like(cell) and not hs_digits(cell))
+        if nums >= 2:
+            numeric_rows += 1
+    return numeric_rows < 2
+
+
+def goods_grid_from_blob(text: str) -> list[list[object]]:
+    """Invoice-as-letter / slash-line PDF text → a rectangular goods table."""
+    if not text or len(text) < 20:
+        return []
+    hs_all = [hs_digits(m) for m in _BLOB_HS.findall(text)]
+    hs_all = [h for h in hs_all if h]
+    rows: list[list[object]] = [
+        ["Article", "Meters", "Price", "Amount", "H.S. CODE", "Currency"],
+    ]
+    seen: set[str] = set()
+
+    def add(article: str, qty: object, price: object, amount: object, ccy: str | None, hs: str | None) -> None:
+        name = (article or "").strip(" /-")
+        q = parse_number(qty)
+        p = parse_number(price)
+        a = parse_number(amount)
+        if not name or q is None or p is None:
+            return
+        key = re.sub(r"[^A-Z0-9А-Я]+", "", name.upper())
+        if not key or key in seen:
+            return
+        seen.add(key)
+        if a is None:
+            a = round(q * p, 2)
+        rows.append([name, q, p, a, hs, ccy])
+
+    for match in _BLOB_SLASH.finditer(text):
+        article = (match.group("article") or "").strip()
+        if article.lower() in {"design name", "desing no", "item no", "new order"}:
+            continue
+        add(
+            article,
+            match.group("qty"),
+            match.group("price"),
+            match.group("amount"),
+            _blob_ccy(match.group("ccy")),
+            hs_all[0] if hs_all else None,
+        )
+    for match in _BLOB_GLUED.finditer(text):
+        add(
+            match.group("article"),
+            match.group("qty"),
+            match.group("price"),
+            match.group("amount"),
+            _blob_ccy(match.group("ccy")),
+            hs_all[0] if hs_all else None,
+        )
+    for match in _BLOB_LETTER.finditer(text):
+        article = re.sub(r"\s+", " ", match.group("article") or "").strip(" -–—")
+        if len(article) < 3 or article.lower().startswith(("total", "hs code")):
+            continue
+        # Prefer the design token after a dash: "JACQUARD … –LORENSA"
+        if "–" in article or "—" in article or " -" in article:
+            article = re.split(r"[–—]| -", article)[-1].strip()
+        add(
+            article,
+            match.group("qty"),
+            match.group("price"),
+            match.group("amount"),
+            _blob_ccy(match.group("ccy")),
+            hs_all[0] if len(hs_all) == 1 else None,
+        )
+        if hs_all and len(rows) - 1 <= len(hs_all):
+            rows[-1][4] = hs_all[min(len(rows) - 2, len(hs_all) - 1)]
+    return rows if len(rows) >= 2 else []
+
+
+def _maybe_add_blob_sheet(name: str, sheets: list[Sheet], text: str) -> list[Sheet]:
+    blob = goods_grid_from_blob(text)
+    if len(blob) < 2:
+        return sheets
+    weak = not sheets or all(_table_is_weak(s.grid) for s in sheets)
+    if not weak:
+        return sheets
+    extra = Sheet(name="text", grid=blob, source=name)
+    # Prefer the blob table when plumber only found a totals footer.
+    return [extra, *[s for s in sheets if not _table_is_weak(s.grid)]]
