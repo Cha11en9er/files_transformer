@@ -38,6 +38,8 @@ HEADER_SCAN = 25
 SAMPLE = 20
 
 _TOTAL_RE = re.compile(r"^\s*(total|grand\s*total|итого|всего|genel\s*toplam|合计|总计)\b", re.IGNORECASE)
+# Per-group subtotal inside the body ("Total Roll :"), not the document TOTAL that ends the sheet.
+_INLINE_SUBTOTAL_RE = re.compile(r"\b(total\s*rolls?|sub\s*total|ara\s*toplam)\b", re.IGNORECASE)
 _DETAIL_SECTION_RE = re.compile(r"detail\s*packing|подробн", re.IGNORECASE)
 _NAKED_SECTION_RE = re.compile(r"^\s*(packing\s*list|invoice|specification|инвойс|упаковочн|спецификац)\s*$", re.IGNORECASE)
 _JUNK_RE = re.compile(
@@ -282,6 +284,10 @@ def _merge_header_cells(top: list[Any], bottom: list[Any], width: int) -> list[s
 
 def _build_columns(sheet: Sheet, header_row: int, headers: list[Any] | None = None) -> list[ColumnStat]:
     titles = headers if headers is not None else sheet.grid[header_row]
+    # Wide broker templates repeat one merge across hundreds of columns.
+    # Noise/subheader checks must run once per row, not once per column.
+    noise: dict[int, bool] = {}
+    subheader: dict[int, bool] = {}
     cols: list[ColumnStat] = []
     for c in range(sheet.ncols):
         header = _cell(titles[c] if c < len(titles) else "")
@@ -289,10 +295,15 @@ def _build_columns(sheet: Sheet, header_row: int, headers: list[Any] | None = No
         for r in range(header_row + 1, min(header_row + 1 + SAMPLE * 2, sheet.nrows)):
             if c >= len(sheet.grid[r]):
                 continue
-            if _row_is_structural_noise(sheet.grid[r]):
+            if r not in noise:
+                noise[r] = _row_is_structural_noise(sheet.grid[r])
+            if noise[r]:
                 continue
-            if _is_subheader_row(sheet, r) and r == header_row + 1:
-                continue
+            if r == header_row + 1:
+                if r not in subheader:
+                    subheader[r] = _is_subheader_row(sheet, r)
+                if subheader[r]:
+                    continue
             values.append(sheet.grid[r][c])
             if len(values) >= SAMPLE:
                 break
@@ -321,12 +332,22 @@ def find_header(sheet: Sheet) -> tuple[int, dict[int, str], list[ColumnStat]]:
     if best is None:
         return -1, {}, []
     header_row, mapping, cols = best[1], best[2], best[3]
-    nxt = header_row + 1
-    if _is_subheader_row(sheet, nxt):
-        merged = _merge_header_cells(sheet.grid[header_row], sheet.grid[nxt], sheet.ncols)
-        cols = _build_columns(sheet, nxt, merged)
-        mapping = classify_columns(cols)
-        header_row = nxt
+    # The Turkish (or second) title row can outscore the English one on row-count.
+    # Step back and merge so AMOUNT (M) stays metres and NETT KG stays weight.
+    if _is_subheader_row(sheet, header_row) and header_row > 0:
+        prev = header_row - 1
+        prev_map = classify_columns(_build_columns(sheet, prev))
+        if _score_mapping(prev_map) >= 3:
+            merged = _merge_header_cells(sheet.grid[prev], sheet.grid[header_row], sheet.ncols)
+            cols = _build_columns(sheet, header_row, merged)
+            mapping = classify_columns(cols)
+    else:
+        nxt = header_row + 1
+        if nxt < sheet.nrows and _is_subheader_row(sheet, nxt):
+            merged = _merge_header_cells(sheet.grid[header_row], sheet.grid[nxt], sheet.ncols)
+            cols = _build_columns(sheet, nxt, merged)
+            mapping = classify_columns(cols)
+            header_row = nxt
     return header_row, mapping, cols
 
 
@@ -740,6 +761,10 @@ def extract_sheet(
         if not joined:
             continue
         first_cells = " ".join(_cell(v) for v in row[:3])
+        if _INLINE_SUBTOTAL_RE.search(joined) and not (
+            _TOTAL_RE.match(first_cells) or _TOTAL_RE.match(joined)
+        ):
+            continue
         if _is_stop_row(joined, first_cells):
             _flush_children(ex, pending_children)
             pending_children = []
@@ -940,11 +965,17 @@ def extract_sheet(
             token in blob
             for token in ("packing list", "packing", "упаковоч", "çeki", "ceki", "seçme listesi")
         )
-        # Color-lot packing (leather HIDES/m2/kg with unit price): keep packing.
-        # Per-roll sender specifications: high article repeat, usually no price → detail.
-        if packing_hint and priced_lots >= max(2, nrows // 3):
+        # One row per colour (own meters/price) is a commercial lot, not roll-detail.
+        # Per-roll lists repeat one colour many times and usually have no price.
+        colors = {
+            str(row_obj.fields.get("color")).strip()
+            for row_obj in ex.rows
+            if str(row_obj.fields.get("color") or "").strip()
+        }
+        color_lots = len(colors) >= 2 and len(colors) >= nrows * 0.5
+        if color_lots or (packing_hint and priced_lots >= max(2, nrows // 3)):
             ex.detail = False
-            if role != "catalog":
+            if packing_hint and role != "catalog":
                 ex.role = "packing"
         else:
             ex.detail = True

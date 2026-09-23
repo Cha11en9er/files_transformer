@@ -74,6 +74,20 @@ def _family_model(article: str) -> str:
     return stripped.strip()
 
 
+def _digit_suffix_items(items: Iterable[CanonicalItem], key: str) -> list[CanonicalItem]:
+    """Design name plus only a colour number: VELA -> VELA 01, not VELA CORD 04."""
+    if len(key) < 3:
+        return []
+    hits: list[CanonicalItem] = []
+    for it in items:
+        if len(it.key) <= len(key) or not it.key.startswith(key):
+            continue
+        tail = it.key[len(key):]
+        if tail.isdigit() and len(tail) <= 4:
+            hits.append(it)
+    return hits
+
+
 @dataclass
 class CanonicalItem:
     article: str
@@ -261,15 +275,23 @@ def merge_documents(
         agg = _aggregate_detail(sheet.rows)
         for key, data in agg.items():
             cands = _by_article(key)
+            via_suffix = False
+            if not cands:
+                cands = _digit_suffix_items(items.values(), key)
+                via_suffix = bool(cands)
             if not cands:
                 cands = [item_for(data["article"])]
             # Several commercial lots of one Art No.: do not dump the spec total onto each.
             apply_weights = len(cands) == 1
+            stamp_measures = not (via_suffix and len(cands) > 1)
             for it in cands:
                 it.sources.append(sheet.source + " (spec)")
-                for k in ("meters", "area", "width"):
-                    _prefer(it, k, data.get(k))
+                if stamp_measures:
+                    for k in ("meters", "area", "width"):
+                        _prefer(it, k, data.get(k))
                 for k in ("hs_code", "customs_code", "description", "price", "color"):
+                    if via_suffix and len(cands) > 1 and k == "color":
+                        continue
                     _prefer(it, k, data.get(k))
                 if not apply_weights:
                     continue
@@ -293,11 +315,7 @@ def merge_documents(
             key = match_key(article)
             if not key:
                 continue
-            prefix_children = [
-                it
-                for it in items.values()
-                if key and len(key) >= 3 and it.key.startswith(key) and len(it.key) > len(key)
-            ]
+            prefix_children = _digit_suffix_items(items.values(), key)
             if _by_article(key):
                 it = pick_lot(article, row.fields) or item_for_lot(article, row.fields)
                 it.sources.append(row.source)
@@ -311,6 +329,7 @@ def merge_documents(
                     _apply_packing_to_item(it, row.fields)
                 for k in _PACKING_FILL:
                     _prefer(it, k, row.fields.get(k))
+                _prefer(it, "description", row.fields.get("description"))
                 for k in _PACKING_OVERWRITE:
                     if not it.lines:
                         _prefer(it, k, row.fields.get(k), overwrite=True)
@@ -329,6 +348,7 @@ def merge_documents(
                     _apply_packing_to_item(it, row.fields)
                 for k in _PACKING_FILL:
                     _prefer(it, k, row.fields.get(k))
+                _prefer(it, "description", row.fields.get("description"))
                 for k in _PACKING_OVERWRITE:
                     if not it.lines:
                         _prefer(it, k, row.fields.get(k), overwrite=True)
@@ -548,7 +568,12 @@ def _distribute_families(family_rows: list[Row], items: dict[str, CanonicalItem]
         model_key = match_key(model)
         if not model_key:
             continue
-        children = [it for it in items.values() if it.key.startswith(model_key)]
+        longer = [
+            it for it in items.values()
+            if len(it.key) > len(model_key) and it.key.startswith(model_key)
+        ]
+        digit = _digit_suffix_items(longer, model_key)
+        children = digit or longer
         if not children:
             # keep the family itself as an item so its data is not lost
             fam_key = match_key(fam.article)

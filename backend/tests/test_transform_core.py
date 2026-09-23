@@ -1150,6 +1150,101 @@ def test_canonical_to_rows_tnved_max_ten_no_dots():
     assert hs and "." not in str(hs)
     assert tnved and "." not in str(tnved)
     assert len(str(tnved)) <= 10
+    assert len(str(hs)) == 12
+    assert str(tnved) == "5407730090"
+
+
+def test_tr_subheader_does_not_steal_meters_or_serials():
+    """EN header + TR translation + Total Roll subtotal + 10-digit roll ids."""
+    from app.transform.extract import extract_sheet
+    from app.transform.reader import Sheet
+
+    grid = [
+        ["PACKING LIST / CEKI LISTESI"],
+        ["ROLL NR", "DESING NAME", "COLOR NR", "AMOUNT (M)", "AMOUNT (M)", "WIDTH", "m2", "NETT KG", "GROSS KG"],
+        ["Sack nr", "DESEN ADI", "RENK NO", "NETT", "BRUTT", "EN", "M2", "NET KG", "BRUT KG"],
+        [2026002135, "VELA", "1", 50.7, 50.7, 140, 70.98, 21.5, 21.6],
+        [2026002136, "VELA", "1", 40.0, 40.0, 140, 56.0, 18.0, 18.2],
+        ["-", "VELA", "Total Roll :", 2, 90.7, 90.7, "-", 126.98, 39.5, 39.8],
+        [2026002140, "VELA CORD", "4", 25.0, 25.0, 140, 35.0, 12.4, 12.5],
+    ]
+    # The subtotal row above is misaligned vs the header on purpose: "Total Roll :"
+    # sits in a middle cell, the way real packing lists print a group total.
+    sheet = Sheet(name="Ceki", grid=grid, source="pack.xlsx")
+    extracted = extract_sheet(sheet)
+    assert extracted is not None
+    assert len(extracted.rows) == 3
+    vela = [row for row in extracted.rows if row.article == "VELA"]
+    assert len(vela) == 2
+    assert vela[0].fields.get("meters") == pytest.approx(50.7, abs=0.01)
+    assert vela[0].fields.get("net_weight") == pytest.approx(21.5, abs=0.05)
+    assert vela[0].fields.get("gross_weight") == pytest.approx(21.6, abs=0.05)
+    assert vela[0].fields.get("width") == pytest.approx(1.4, abs=0.01)
+    assert "customs_code" not in vela[0].fields
+    assert "hs_code" not in vela[0].fields
+    assert vela[0].fields.get("rolls") in (None, "")
+    summed = sum(row.fields["meters"] for row in vela)
+    assert summed == pytest.approx(90.7, abs=0.05)
+
+
+def test_color_lots_stay_separate_rows():
+    from app.transform.extract import extract_sheet
+    from app.transform.merge import merge_documents
+    from app.transform.reader import Sheet
+
+    grid = [
+        ["Customs Code", "DESING", "COLOUR", "ROLL", "WIDTH", "METRS", "UNIT", "UNIT PICE", "AMOUNT"],
+        ["5903202000999", "LEDER", 11, 13, "1.38 M", 455, "M", 44.55, 20270.25],
+        ["5903202000999", "LEDER", 22, 32, "1.38 M", 1111, "M", 44.55, 49495.05],
+        ["5903202000999", "LEDER", 33, 8, "1.38 M", 268, "M", 44.55, 11939.40],
+    ]
+    sheet = Sheet(name="invoice", grid=grid, source="shipping.xls")
+    extracted = extract_sheet(sheet)
+    assert extracted is not None
+    assert extracted.detail is False
+    assert len(extracted.rows) == 3
+    items = merge_documents([extracted])
+    assert len(items) == 3
+    meters = sorted(it.fields["meters"] for it in items)
+    assert meters == [268, 455, 1111]
+    assert {str(it.fields.get("color")) for it in items} == {"11", "22", "33"}
+
+
+def test_design_plus_color_code_does_not_duplicate():
+    from app.transform.extract import ExtractedSheet, Row
+    from app.transform.merge import merge_documents
+
+    goods = ExtractedSheet(
+        name="spec",
+        source="spec.xlsx",
+        role="specification",
+        mapping={},
+        header_text="specification",
+        rows=[
+            Row(article="Vela 01", normalized="VELA01", fields={"meters": 90.7, "price": 6.6, "amount": 598.62, "rolls": 2, "net_weight": 39.5, "gross_weight": 39.8, "width": 1.4}, source="spec", role="specification"),
+            Row(article="Vela Cord 04", normalized="VELACORD04", fields={"meters": 25.0, "price": 6.6, "amount": 165.0, "rolls": 1, "net_weight": 12.4, "gross_weight": 12.5, "width": 1.4}, source="spec", role="specification"),
+        ],
+    )
+    packing = ExtractedSheet(
+        name="Ceki",
+        source="pack.xlsx",
+        role="specification",
+        mapping={},
+        header_text="ceki",
+        detail=True,
+        rows=[
+            Row(article="VELA", normalized="VELA", fields={"meters": 50.7, "net_weight": 21.5, "gross_weight": 21.6, "area": 70.98}, source="pack", role="specification"),
+            Row(article="VELA", normalized="VELA", fields={"meters": 40.0, "net_weight": 18.0, "gross_weight": 18.2, "area": 56.0}, source="pack", role="specification"),
+            Row(article="VELA CORD", normalized="VELACORD", fields={"meters": 25.0, "net_weight": 12.4, "gross_weight": 12.5, "area": 35.0}, source="pack", role="specification"),
+        ],
+    )
+    items = merge_documents([goods, packing])
+    assert len(items) == 2
+    by = {it.article: it for it in items}
+    assert by["Vela 01"].fields["meters"] == pytest.approx(90.7)
+    assert by["Vela 01"].fields["net_weight"] == pytest.approx(39.5)
+    assert by["Vela Cord 04"].fields["meters"] == pytest.approx(25.0)
+    assert "VELA" not in by
 
 
 

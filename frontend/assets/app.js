@@ -902,6 +902,16 @@ function fieldSeverity(errors, field) {
   return hit ? `sev-${hit.severity}` : "";
 }
 
+function articleLabel(item) {
+  const art = item?.article || "-";
+  const color = item?.commercial_data?.color;
+  if (color == null || color === "") return art;
+  const c = String(color).trim();
+  if (!c) return art;
+  if (String(art).toUpperCase().includes(c.toUpperCase())) return art;
+  return `${art} ${c}`;
+}
+
 function itemQty(item) {
   const qty = item?.commercial_data?.qty;
   if (qty !== null && qty !== undefined && qty !== "") return qty;
@@ -1408,7 +1418,7 @@ function renderWorkspace() {
     const desc = u.description || u.description_ru || u.description_en || "-";
     tr.innerHTML = `
       <td class="row-no">${idx + 1}</td>
-      ${longCell(item.article || "-", "article")}
+      ${longCell(articleLabel(item), "article")}
       <td class="num ${fieldSeverity(errs, "rolls")}" data-edit="edit-rolls">${formatNum(p.rolls ?? p.boxes, 0)}</td>
       <td class="num ${fieldSeverity(errs, "meters")}" data-edit="edit-qty">${formatNum(p.meters ?? c.qty)}</td>
       <td class="num ${fieldSeverity(errs, "width")}" data-edit="edit-width">${formatNum(p.width, 3)}</td>

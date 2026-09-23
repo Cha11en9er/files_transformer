@@ -166,6 +166,7 @@ SYNONYMS: dict[str, tuple[tuple[str, float], ...]] = {
         ("g.w, kg", 10), ("gross weight", 9), ("вес брутто", 10), ("weight brutto", 10),
         ("брутто", 7), ("brutto", 8), ("g.w", 7),
         ("gross wt", 8), ("毛重", 8), ("brüt kilogram", 8), ("brut kilogram", 8),
+        ("gross kg", 10), ("brut kg", 9), ("brüt kg", 9),
         ("brutt", 6),
         ("gross weigth", 9), ("gross weigt", 8),  # frequent PDF/OCR typos
     ),
@@ -489,6 +490,17 @@ def _is_ignore_header(header: str) -> bool:
     return h in _IGNORE_HEADERS or h in {"no", "№", "no.", "n"}
 
 
+# Roll / sack / batch serials are often 10 digits and look like HS. They are ids.
+_SERIAL_ID_RE = re.compile(
+    r"(roll\s*n|sack\s*n|batch|sip\s*,?\s*n|barcode|serial)",
+    re.IGNORECASE,
+)
+
+
+def is_serial_id_header(header: str) -> bool:
+    return bool(_SERIAL_ID_RE.search(header or ""))
+
+
 def classify_columns(columns: list[ColumnStat]) -> dict[int, str]:
     """Assign at most one canonical field per column and one column per field.
 
@@ -501,7 +513,17 @@ def classify_columns(columns: list[ColumnStat]) -> dict[int, str]:
         header = col.header_norm
         if _is_ignore_header(header):
             continue
+        serial = is_serial_id_header(header)
+        meters_score = _header_score("meters", header)
         for field_key in SYNONYMS:
+            # "AMOUNT (M)" is metres, not a money amount.
+            if field_key == "amount" and meters_score >= 9:
+                continue
+            if field_key in CODE_FIELDS and serial:
+                continue
+            if serial and field_key in {"rolls", "qty", "boxes"}:
+                if col.code_fraction() >= 0.4 or col.max_magnitude() >= 100000:
+                    continue
             score = _header_score(field_key, header)
             if score > 0:
                 candidates[field_key][col.index] = score
@@ -513,7 +535,7 @@ def classify_columns(columns: list[ColumnStat]) -> dict[int, str]:
             continue
         if col.dimension_fraction() >= 0.5:
             candidates["measurement"].setdefault(col.index, 4.0)
-        elif col.code_fraction() >= 0.6:
+        elif col.code_fraction() >= 0.6 and not is_serial_id_header(col.header_norm):
             candidates["customs_code"].setdefault(col.index, 2.0)
 
     # 3) disambiguation: apply value affinity as a tie-adjusting bonus
