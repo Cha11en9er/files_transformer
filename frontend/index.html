@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=37" />
+  <link rel="stylesheet" href="/assets/styles.css?v=38" />
 </head>
 <body>
   <div class="app">
@@ -30,17 +30,21 @@
       <p class="hint">Загрузите документы одной поставки: инвойс, пакинг, спецификацию и при необходимости PDF/сканы. Сервис обработает их, сопоставит данные и сформирует готовые Excel-файлы.</p>
       <p class="hint">Если у вас есть отдельный справочник с кодами ТН ВЭД и описаниями, загрузите его в блок «Справочник».</p>
       <form id="create-form" class="form-grid">
-        <label>Название поставки
-          <input name="title" placeholder="Если пусто - подставим номер инвойса" autocomplete="off" />
-          <span class="field-note">Можно указать название самостоятельно. Если оставить пустым - после обработки оно само станет тем, что нашлось в файлах; потом его всё равно можно поменять.</span>
-        </label>
-        <label>Выберите профиль выгрузки
-          <select name="profile_type">
-            <option value="18233" selected>Три Excel: Инвойс + Пакинг + Спецификация</option>
-            <option value="BEIJING">Одна книга: Invoice + Packing list + Specification + Описание</option>
-          </select>
-          <span class="field-note">Формат Excel для таможни. Выберите тот, который нужен по этой поставке.</span>
-        </label>
+        <div class="upload-fields">
+          <label>
+            <span class="upload-label">Название поставки</span>
+            <input name="title" placeholder="Если пусто - подставим номер инвойса" autocomplete="off" />
+            <span class="field-note">Можно указать название самостоятельно. Если оставить пустым - после обработки оно само станет тем, что нашлось в файлах; потом его всё равно можно поменять.</span>
+          </label>
+          <label>
+            <span class="upload-label">Выберите профиль выгрузки</span>
+            <select name="profile_type">
+              <option value="18233" selected>Три Excel: Инвойс + Пакинг + Спецификация</option>
+              <option value="BEIJING">Одна книга: Invoice + Packing list + Specification + Описание</option>
+            </select>
+            <span class="field-note">Формат Excel для таможни. Выберите тот, который нужен по этой поставке.</span>
+          </label>
+        </div>
         <div class="dropzone-wrap" id="dropzone-wrap">
           <div class="dropzone-split">
             <label class="dropzone" id="dropzone">
@@ -214,6 +218,6 @@
 
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
-  <script src="/assets/app.js?v=49"></script>
+  <script src="/assets/app.js?v=50"></script>
 </body>
 </html>

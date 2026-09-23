@@ -26,7 +26,7 @@ from app.parsing.normalize import normalize_text
 from app.transform.errors import FileReadError, humanize_for_file
 from app.transform.extract import ExtractedSheet, extract_sheet, mapping_fits_sheet
 from app.transform.merge import CanonicalItem, match_key, merge_documents
-from app.transform.canonical import tnved_digits
+from app.transform.canonical import hs_digits, tnved_digits
 from app.transform.pdf import read_pdf
 from app.transform.reader import EXCEL_SUFFIXES, read_workbook
 
@@ -464,13 +464,12 @@ def canonical_to_rows(items: list[CanonicalItem]) -> list[dict[str, Any]]:
             if packing_lines:
                 packing["lines"] = packing_lines
         customs: dict[str, Any] = {}
-        hs = tnved_digits(f.get("hs_code"), max_digits=13) or (str(f["hs_code"]).strip() if f.get("hs_code") else None)
-        customs_raw = f.get("customs_code")
-        tnved = tnved_digits(customs_raw) or tnved_digits(hs)
-        if hs:
-            customs["hs_code"] = hs if len(hs) <= 13 else hs[:13]
+        long_code = hs_digits(f.get("hs_code")) or hs_digits(f.get("customs_code"))
+        tnved = tnved_digits(f.get("customs_code")) or tnved_digits(f.get("hs_code"))
+        if long_code:
+            customs["hs_code"] = long_code[:13]
         if tnved:
-            customs["tnved_code"] = tnved
+            customs["tnved_code"] = tnved[:10]
         if customs.get("tnved_code") and not customs.get("hs_code"):
             customs["hs_code"] = customs["tnved_code"]
         if customs.get("hs_code") and not customs.get("tnved_code"):
