@@ -8,6 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from app.parsing.header_extract import currency_from_sources
+from app.services.field_map import article_with_color
 from app.services.export_style import (
     merge_column,
     style_data_table,
@@ -175,6 +176,7 @@ def _invoice_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[t
     pack_spans: list[tuple[str, int, int]] = []
     for idx, item in enumerate(items, start=1):
         customs = item.get("customs_data") or {}
+        commercial = item.get("commercial_data") or {}
         lines = _visual_lines(item, mode="invoice")
         start = len(rows)
         for line_i, line in enumerate(lines):
@@ -184,7 +186,7 @@ def _invoice_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[t
                     idx if first else None,
                     (customs.get("tnved_code") or customs.get("hs_code")) if first else None,
                     _desc(item) if first else None,
-                    (item.get("article") or item.get("normalized_article") or "") if first else None,
+                    (article_with_color(item.get("article") or item.get("normalized_article"), line.get("color") or commercial.get("color")) if first else None),
                     line.get("color"),
                     _count(line.get("qty")),
                     line.get("unit") or (_unit(item) if first else None),
@@ -230,7 +232,7 @@ def _packing_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[t
                 [
                     idx if first else None,
                     _desc(item) if first else None,
-                    (item.get("article") or "") if first else None,
+                    (article_with_color(item.get("article"), line.get("color") or (item.get("commercial_data") or {}).get("color")) if first else None),
                     line.get("color"),
                     _count(line.get("qty")),
                     line.get("unit") or (_unit(item) if first else None),
@@ -282,7 +284,7 @@ def _spec_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[tupl
             rows.append(
                 [
                     idx if first else None,
-                    (item.get("article") or "") if first else None,
+                    (article_with_color(item.get("article"), line.get("color") or (item.get("commercial_data") or {}).get("color")) if first else None),
                     _desc(item) if first else None,
                     _count(line.get("boxes") if line.get("boxes") not in (None, "") else (_cartons(item) if first else None)),
                     "CT" if first or line.get("boxes") not in (None, "") else None,
@@ -341,7 +343,7 @@ def description_rows(items: list[dict[str, Any]], header: dict[str, Any] | None)
         customs = item.get("customs_data") or {}
         rows.append(
             [
-                item.get("article") or "",
+                article_with_color(item.get("article"), (item.get("commercial_data") or {}).get("color")),
                 _desc(item),
                 (header or {}).get("manufacturer") or customs.get("manufacturer") or manufacturer,
                 customs.get("country") or country,

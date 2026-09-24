@@ -62,11 +62,17 @@ _CONTRACT_NO = re.compile(
     re.I,
 )
 _CONTRACT_DATED = re.compile(
-    r"(?:dd|dated|(?<![A-Za-zА-Яа-яЁё])от)[\s|:：.]*(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})",
+    r"(?:contract|контракт)[^\n]{0,60}?"
+    r"(?:dd\.?|dated|(?<![A-Za-zА-Яа-яЁё])от)[\s|:：.]*"
+    r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})",
+    re.I,
+)
+_SALUTATION = re.compile(
+    r"^(?:messrs?|attn|attention|sir|sirs|madam|dear|господа|уважаемые)\.?$",
     re.I,
 )
 _DATE_VALUE = (
-    r"([A-Za-z]{3,9}\.?\s*\d{1,2},?\s*\d{4}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})"
+    r"([A-Za-z]{3,9}\.?\s*\d{1,2}(?:[.,]\s*|\s+)\d{4}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})"
 )
 _DATE_LABEL = re.compile(
     r"(?:invoice\s*date|inv\.?\s*date|(?:^|[\n|])\s*date|tarih)"
@@ -75,7 +81,7 @@ _DATE_LABEL = re.compile(
 )
 _DATE_STEAL = re.compile(r"(?:delivery|b/?l|bill of|etd|eta)\s*$", re.I)
 _BUYER = re.compile(
-    r"(?:(?:the\s+)?buyer|покупатель|to)\s*[:：]\s*([^\n|]{0,400})",
+    r"(?:(?:the\s+)?buyer|покупатель|(?<![A-Za-zА-Яа-яЁё])to(?=\s*[:：]))\s*[:：]\s*([^\n|]{0,400})",
     re.I,
 )
 _SELLER = re.compile(
@@ -147,7 +153,7 @@ _SKIP_VALUE = re.compile(
 )
 _ROLE_ONLY = re.compile(
     r"^(?:the\s+)?(?:buyer|seller|recipient|consignee|shipper|exporter|manufacturer|"
-    r"delivery(?:\s+basis)?|address|add|покупатель|продавец|получатель)$",
+    r"delivery(?:\s+basis)?|address|add|покупатель|продавец|получатель|производитель)$",
     re.I,
 )
 _HEADERISH = re.compile(
@@ -256,7 +262,9 @@ def _clean_address(raw: str | None) -> str | None:
     text = str(raw).replace("\\n", "\n")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" *\n *", "\n", text).strip(" :：|/")
-    text = re.sub(r"^(?:address\s*:?\s*)+", "", text, flags=re.I)
+    text = re.sub(r"^[\s|/:：]+", "", text)
+    text = re.sub(r"^(?:(?:address|адрес)\s*[:/]?\s*)+", "", text, flags=re.I)
+    text = re.sub(r"(\d)\s*(OGRN|ОГРН|TIN|INN|ИНН|KPP|КПП)\b", r"\1 \2", text, flags=re.I)
     text = _GLUED_ADDRESS_LABEL.split(text, maxsplit=1)[0]
     text = text.strip(" :：|/,")
     if len(text) < 6:
@@ -298,7 +306,8 @@ def split_party_address(text: str | None, *, seller: bool) -> str | None:
         )
         if leftover and first and _ADDRESS_HINT.search(first) and len(first) >= 12:
             chosen = first
-    return chosen[:240] or None
+    chosen = _clean_address(chosen) or chosen
+    return (chosen or "")[:240] or None
 
 
 def _address_followup(blob: str, end: int) -> str | None:
@@ -390,16 +399,23 @@ def _companies_on_line(line: str) -> list[str]:
 
 def _party_from_match(blob: str, match: re.Match[str], *, role: str) -> tuple[str | None, str | None]:
     name, addr = _split_party_block(match.group(1))
-    if name and not _is_role_only(name):
-        return _prefer_party_name(name, match.group(1), role), addr
+    picked = _usable_party_name(_prefer_party_name(name, match.group(1), role))
+    if picked:
+        return picked, addr
+    # Same line after the label is the other column (Seller | Buyer). Read the next line.
     rest = blob[match.end() :]
+    newline = rest.find("\n")
+    rest = rest[newline + 1 :] if newline >= 0 else ""
     for line in rest.splitlines():
         line = line.strip(" |")
-        if not line:
+        if not line or _is_role_only(line) or _PARTY_LABEL_CELL.match(line):
             continue
+        segments = [part.strip() for part in re.split(r"\s+\|\s+", line) if part.strip()]
+        if len(segments) > 1:
+            line = segments[-1] if role == "seller" else segments[0]
         name, addr = _split_party_block(line)
-        picked = _prefer_party_name(name, line, role)
-        if picked and not _is_role_only(picked):
+        picked = _usable_party_name(_prefer_party_name(name, line, role))
+        if picked:
             return picked, addr
         break
     return None, None
@@ -447,8 +463,10 @@ def _hits_from_text(blob: str) -> dict[str, list[str]]:
     for match in _CONTRACT_DATED.finditer(blob):
         add("contract_date", match.group(1))
     for match in _DATE_LABEL.finditer(blob):
-        prefix = blob[max(0, match.start() - 16) : match.start()]
+        prefix = blob[max(0, match.start() - 24) : match.start()]
         if _DATE_STEAL.search(prefix):
+            continue
+        if _date_inside_code(blob, match.start(1), match.end(1)):
             continue
         add("invoice_date", match.group(1))
     for match in _BUYER.finditer(blob):
@@ -460,7 +478,7 @@ def _hits_from_text(blob: str) -> dict[str, list[str]]:
         add("seller", name)
         add("seller_address", addr or _address_followup(blob, match.end()))
     for match in _MANUFACTURER.finditer(blob):
-        mfr = _clean_party(match.group(1))
+        mfr = _usable_party_name(_clean_party(match.group(1)))
         if mfr and _HEADERISH.search(mfr) and not re.search(r"\b(?:ltd|llc|corp|co\.)\b", mfr, re.I):
             continue
         add("manufacturer", mfr)
@@ -477,6 +495,26 @@ def _hits_from_text(blob: str) -> dict[str, list[str]]:
     return hits
 
 
+def _date_inside_code(blob: str, start: int, end: int) -> bool:
+    """EXD4-26-095 contains 4-26-095, but that fragment is not a date."""
+    before = blob[start - 1] if start > 0 else ""
+    after = blob[end] if end < len(blob) else ""
+    return bool(before.isalnum() or after.isalnum())
+
+
+def _is_salutation(text: str | None) -> bool:
+    token = normalize_text(text or "").strip(" .:")
+    return bool(token) and bool(_SALUTATION.match(token))
+
+
+def _usable_party_name(name: str | None) -> str | None:
+    if not name or _is_role_only(name) or _is_salutation(name):
+        return None
+    if re.search(r"\b(?:buyer|seller|покупатель|продавец)\b", name, re.I) and not _COMPANY.search(name):
+        return None
+    return name
+
+
 def _letterhead_seller(blob: str) -> str | None:
     for line in blob.splitlines()[:40]:
         if _INVOICE_NO.search(line) or _BUYER.search(line):
@@ -487,6 +525,71 @@ def _letterhead_seller(blob: str) -> str | None:
             if name and "buyer" not in name.lower():
                 return name
     return None
+
+
+_BLOCK_STOP = re.compile(
+    r"^(?:terms of|delivery|contract|invoice|date|specification|container|"
+    r"manufacturer|производитель|условия|сроки|контракт|спецификац)",
+    re.I,
+)
+
+
+def _column_text(rows: list[list[str]], r: int, c0: int, c1: int) -> str:
+    parts: list[str] = []
+    row = rows[r] if r < len(rows) else []
+    for c in range(c0, min(c1, len(row))):
+        text = normalize_text(row[c] if c < len(row) else "")
+        if text and text not in parts:
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def _apply_party_columns(rows: list[list[str]], add) -> None:
+    """Buyer and Seller labels on one row own the columns under them, not the cell to the right."""
+    labels: list[tuple[int, int, str, str]] = []
+    for r, row in enumerate(rows):
+        seen: set[int] = set()
+        for c, cell in enumerate(row):
+            if c in seen or not normalize_text(cell):
+                continue
+            party = _PARTY_LABEL_CELL.match(str(cell).strip())
+            if not party:
+                continue
+            role = party.group(1).lower()
+            if role == "to" and not re.match(r"^to\s*[:：]", str(cell).strip(), re.I):
+                continue
+            key = "buyer" if role in {"buyer", "покупатель", "to"} else "seller"
+            labels.append((r, c, key, party.group(2) or ""))
+            seen.add(c)
+
+    for index, (r, c, key, remainder) in enumerate(labels):
+        same_row = [item for item in labels if item[0] == r and item[1] > c]
+        c1 = same_row[0][1] if same_row else max((len(row) for row in rows), default=c + 1)
+        name, addr = _split_party_block(remainder)
+        name = _usable_party_name(_prefer_party_name(name, remainder, key))
+        below: list[str] = []
+        for rr in range(r + 1, min(len(rows), r + 8)):
+            chunk = _column_text(rows, rr, c, c1)
+            if not chunk:
+                continue
+            first = chunk.split("\n", 1)[0].strip()
+            if _PARTY_LABEL_CELL.match(first) or _BLOCK_STOP.match(first):
+                if re.match(r"^(?:address|add|адрес)\b", first, re.I):
+                    nxt = _column_text(rows, rr + 1, c, c1)
+                    if nxt:
+                        below.append(nxt)
+                break
+            below.append(chunk)
+        block = "\n".join(below)
+        if not name and block:
+            name, block_addr = _split_party_block(block)
+            name = _usable_party_name(_prefer_party_name(name, block, key))
+            addr = addr or block_addr
+        elif block and not addr:
+            _name, block_addr = _split_party_block(block)
+            addr = block_addr
+        add(key, name)
+        add(f"{key}_address", addr)
 
 
 def _next_nonempty(cells: list[str], start: int) -> str | None:
@@ -518,23 +621,13 @@ def _hits_from_grid(rows: list[list[str]]) -> dict[str, list[str]]:
         if cleaned:
             hits[key].append(cleaned)
 
+    _apply_party_columns(rows or [], add)
     for row in rows or []:
         cells = ["" if c is None else str(c) for c in row]
         for i, cell in enumerate(cells):
             if not normalize_text(cell):
                 continue
-            party = _PARTY_LABEL_CELL.match(cell.strip())
-            if party:
-                role = party.group(1).lower()
-                remainder = party.group(2) or ""
-                name, addr = _split_party_block(cell)
-                if not name and remainder.strip() == "":
-                    nxt = _next_nonempty(cells, i + 1)
-                    if nxt:
-                        name, addr = _split_party_block(nxt)
-                key = "buyer" if role in {"buyer", "покупатель", "to"} else "seller"
-                add(key, name)
-                add(f"{key}_address", addr)
+            if _PARTY_LABEL_CELL.match(cell.strip()):
                 continue
             for pattern, key in _GRID_VALUE_LABELS:
                 if pattern.match(cell.strip()):
@@ -564,7 +657,7 @@ def _collapse_hits(
             picked = _pick_address(by_field.get(key) or [])
         else:
             picked = _pick_agreed(by_field.get(key) or [])
-        if picked:
+        if picked and not (key == "manufacturer" and _is_role_only(picked)):
             result[key] = picked
     if "invoice_no" not in result:
         spec_no = _pick_agreed(by_field.get("spec_no") or [])
@@ -810,7 +903,7 @@ def enrich_header_from_goods(
         for value in (_item_field(item, "manufacturer") for item in (items or []))
         if value not in (None, "")
     ]
-    goods_mfr = _majority_text(mfrs)
+    goods_mfr = _majority_text([value for value in mfrs if not _is_role_only(value)])
     seller = str(out.get("seller") or "").strip()
     current_mfr = str(out.get("manufacturer") or "").strip()
     if goods_mfr:
@@ -818,9 +911,6 @@ def enrich_header_from_goods(
             out["manufacturer"] = goods_mfr
         elif seller and _norm_key(current_mfr) == _norm_key(seller) and _norm_key(goods_mfr) != _norm_key(seller):
             out["manufacturer"] = goods_mfr
-    elif current_mfr and seller and _norm_key(current_mfr) == _norm_key(seller):
-        # Explicit seller-copy is worse than empty — operator / model should fill maker.
-        out.pop("manufacturer", None)
 
     if not out.get("currency"):
         ccy = currency_from_sources(items, out)

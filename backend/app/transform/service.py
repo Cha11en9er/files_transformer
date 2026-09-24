@@ -82,7 +82,7 @@ _DATE_TOKEN = re.compile(
     r"|"
     r"\d{4}[-./]\d{1,2}[-./]\d{1,2}"
     r"|"
-    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s*\d{1,2},?\s*\d{4}"
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s*\d{1,2}[.,]?\s*\d{4}"
     r"|"
     r"\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s*\d{4}"
     r")",
@@ -93,7 +93,10 @@ _DATE_CONTEXT = re.compile(
     re.IGNORECASE,
 )
 # B/L / transport dates must not steal invoice_date when both appear in the letterhead.
-_DATE_EXCLUDE = re.compile(r"\b(?:b/?l|bill\s*of\s*lading|etd|eta|sailing)\b", re.IGNORECASE)
+_DATE_EXCLUDE = re.compile(
+    r"\b(?:b/?l|bill\s*of\s*lading|etd|eta|sailing|delivery|сроки\s+поставки|not\s+later)\b",
+    re.IGNORECASE,
+)
 
 
 def _clean_header_value(text: str) -> str:
@@ -115,15 +118,23 @@ def _date_from_letterhead_cell(cell: str) -> str | None:
     text = normalize_text(cell or "")
     if not text or _DATE_EXCLUDE.search(text):
         return None
+    # "Contract ... dated 12.12.2018" is the contract date, not the invoice date.
+    if re.search(r"\b(?:contract|контракт)\b", text, re.I) and not re.search(
+        r"invoice\s*date|(?:^|\s)date\s*:|дата\s*инв", text, re.I
+    ):
+        return None
     if not _DATE_CONTEXT.search(text) and not (
         re.search(r"\binvoice\b|\binv\b|\binвойс\b|\bpacking\b", text, re.I)
         and _DATE_TOKEN.search(text)
     ):
         return None
-    m = _DATE_TOKEN.search(text)
-    if not m:
-        return None
-    return m.group(1).strip(" .")
+    for m in _DATE_TOKEN.finditer(text):
+        before = text[m.start(1) - 1] if m.start(1) else ""
+        after = text[m.end(1)] if m.end(1) < len(text) else ""
+        if before.isalnum() or after.isalnum():
+            continue
+        return m.group(1).strip(" .")
+    return None
 
 
 def _extract_header(sheets: list[ExtractedSheet]) -> dict[str, Any]:

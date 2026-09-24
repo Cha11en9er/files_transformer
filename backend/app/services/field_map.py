@@ -418,6 +418,19 @@ def map_row(raw: dict[str, Any]) -> dict[str, Any]:
         mapped["article"] = mapped["model"]
     color = mapped.get("color")
     article = mapped.get("article")
-    if article and color and re.fullmatch(r"\d{1,4}", str(color).strip()) and not re.search(r"\d", str(article)):
-        mapped["article"] = f"{article} {int(color):02d}"
+    if article and color:
+        mapped["article"] = article_with_color(article, color)
     return repair_line_amount(mapped)
+
+
+def article_with_color(article: Any, color: Any) -> str:
+    """MAXWELL + colour code 997 -> MAXWELL 997. A colour already in the article stays as printed."""
+    art = str(article or "").strip()
+    code = str(color or "").strip()
+    if not art:
+        return code
+    if not code or code.upper() in art.upper():
+        return art
+    if not re.fullmatch(r"\d{1,4}", code):
+        return art
+    return f"{art} {code}"
