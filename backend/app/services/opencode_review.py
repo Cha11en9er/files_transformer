@@ -181,7 +181,8 @@ Catalog sheets may fill description and tnved only on an exact article match. Do
 
 Letterhead / header (flexible — titles differ by supplier):
 - invoice_no: value next to Inv No / Invoice No / INV.NO / инв номер / similar — not a date in parentheses.
-- invoice_date: the date next to Date / Invoice date on the invoice (including MAY.20.2026 = 20 May 2026). A fragment inside the invoice number (EXD4-26-095) is not a date. Delivery date / сроки поставки / not later than is delivery_date, never invoice_date. B/L, ETD, ETA, sailing are not invoice_date.
+- invoice_date: the date next to Date / Invoice date, or the date on the specification/invoice number line ("№ … от 02.04.2026", "dd …"). MAY.20.2026 is 20 May 2026. A fragment inside the invoice number (EXD4-26-095) is not a date. The Contract dated line is contract_date, not invoice_date. Delivery date / сроки поставки / not later than is delivery_date. B/L, ETD, ETA, sailing are not invoice_date.
+- currency: from the price/amount column (USD, $, EUR). A street abbreviation "Cad." (cadde) is not the CAD currency.
 - contract_date: only the date on the Contract / Контракт line (dd / dated / от). The date after Specification / Спецификация № is the spec date, not the contract date.
 - contract_no / container: label or the adjacent cell, any language.
 - buyer and seller: the company under its own label. Buyer and Seller on one row own the columns below them, not the cell to the right. "TO: Messrs" / Attn is a salutation, the company on the next line is the buyer. Do not put the buyer's address into the seller.
