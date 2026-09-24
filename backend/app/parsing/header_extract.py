@@ -63,8 +63,13 @@ _CONTRACT_NO = re.compile(
 )
 _CONTRACT_DATED = re.compile(
     r"(?:contract|контракт)[^\n]{0,60}?"
-    r"(?:dd\.?|dated|(?<![A-Za-zА-Яа-яЁё])от)[\s|:：.]*"
+    r"(?:dd\.?|dated|(?<![A-Za-zА-Яа-яЁё])date|(?<![A-Za-zА-Яа-яЁё])от)[\s|:：.]*"
     r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})",
+    re.I,
+)
+_SPEC_NO = re.compile(
+    r"(?:specification|спецификац\w*)[^\n]{0,50}?№\s*"
+    r"([A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9._/-]{1,})",
     re.I,
 )
 _DOC_DATED = re.compile(
@@ -462,6 +467,13 @@ def _hits_from_text(blob: str) -> dict[str, list[str]]:
 
     for match in _INVOICE_NO.finditer(blob):
         add("invoice_no", _clean_invoice_no(match.group(1)))
+    for match in _SPEC_NO.finditer(blob):
+        add("spec_no", _clean_invoice_no(match.group(1)))
+    buyer_at = re.search(r"(?:buyer|покупатель)\s*[:/]", blob, re.I)
+    head = blob[: buyer_at.start()] if buyer_at else ""
+    for line in head.splitlines():
+        if re.match(r"^(?:address|адрес)\s*[:：]", line.strip(), re.I):
+            add("seller_address", line)
     for match in _INVOICE_DATE_NUMER.finditer(blob):
         add("invoice_no", _clean_invoice_no(match.group(1)))
     for match in _CONTRACT_NO.finditer(blob):
@@ -635,6 +647,17 @@ def _hits_from_grid(rows: list[list[str]]) -> dict[str, list[str]]:
             hits[key].append(cleaned)
 
     _apply_party_columns(rows or [], add)
+    label_at = None
+    for r, row in enumerate(rows or []):
+        if any(re.search(r"(?:buyer|покупатель)\s*[:/]", str(cell or ""), re.I) for cell in row):
+            label_at = r
+            break
+    if label_at:
+        for row in rows[:label_at]:
+            for cell in row:
+                text = str(cell or "").strip()
+                if re.match(r"^(?:address|адрес)\s*[:：]", text, re.I):
+                    add("seller_address", text)
     for row in rows or []:
         cells = ["" if c is None else str(c) for c in row]
         for i, cell in enumerate(cells):
@@ -668,10 +691,25 @@ def _collapse_hits(
             picked = _pick_incoterm(by_field.get(key) or [])
         elif key in {"buyer_address", "seller_address", "warehouse_address"}:
             picked = _pick_address(by_field.get(key) or [])
+        elif key in {"buyer", "seller"}:
+            picked = _pick_party(by_field.get(key) or [])
         else:
             picked = _pick_agreed(by_field.get(key) or [])
         if picked and not (key == "manufacturer" and _is_role_only(picked)):
             result[key] = picked
+    buyer_addr = result.get("buyer_address")
+    seller_addr = result.get("seller_address")
+    if buyer_addr and seller_addr and _compact_address(str(buyer_addr)) == _compact_address(str(seller_addr)):
+        others = [
+            ("", value)
+            for _source, value in (by_field.get("seller_address") or [])
+            if value and _compact_address(value) != _compact_address(str(buyer_addr))
+        ]
+        replacement = _pick_address(others) if others else None
+        if replacement:
+            result["seller_address"] = replacement
+        else:
+            result.pop("seller_address", None)
     if "invoice_no" not in result:
         spec_no = _pick_agreed(by_field.get("spec_no") or [])
         if spec_no:
@@ -751,6 +789,11 @@ def _pick_address(pairs: list[tuple[str, str]]) -> str | None:
         for value in ranked
     ):
         return ranked[0]
+    def words(value: str) -> set[str]:
+        return set(re.findall(r"[a-zа-яё]{5,}", value.lower()))
+    rich = [value for value in ranked if re.search(r"\d{5,}|\b(?:ogrn|огрн|tin|inn|инн)\b", value, re.I)]
+    if len(rich) == 1 and all(words(value) & words(rich[0]) for value in ranked):
+        return rich[0]
     return _pick_agreed(pairs)
 
 
@@ -779,6 +822,21 @@ def _pick_incoterm(pairs: list[tuple[str, str]]) -> str | None:
         return max(buckets[code], key=_latin_ratio)
     if leftover:
         return _pick_agreed([("", value) for value in leftover])
+    return None
+
+
+def _pick_party(pairs: list[tuple[str, str]]) -> str | None:
+    """A short name inside a longer company line is the same party, not a conflict."""
+    picked = _pick_agreed(pairs)
+    if picked:
+        return picked
+    values = [value for _source, value in pairs if value]
+    if not values:
+        return None
+    longest = max(values, key=len)
+    folded = _norm_key(longest)
+    if folded and all(_norm_key(value) in folded for value in values):
+        return longest
     return None
 
 
