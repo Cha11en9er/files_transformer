@@ -668,6 +668,63 @@ def search_permits() -> PermitSearchOut:
     )
 
 
+@router.post("/recognize")
+def recognize_uploads(
+    files: list[UploadFile] = File(...),
+    title: str = Form("export"),
+    export: bool = Form(False),
+) -> Response:
+    """Parse a kit without the UI. JSON: file messages, header, table. export=1 returns the archive."""
+    from app.services.export import export_18233, export_beijing
+
+    with tempfile.TemporaryDirectory(prefix="recognize_") as tmp:
+        tmp_dir = Path(tmp)
+        saved: list[tuple[str, str]] = []
+        for upload in files:
+            path = _write_upload(tmp_dir, upload)
+            display = Path((upload.filename or path.name).replace("\\", "/")).name
+            saved.append((str(path), display))
+        result = transform_paths(saved)
+        rows = canonical_to_rows(result.items)
+        header = result.header or {}
+        resolved = resolve_shipment_title(title, header)
+        if export:
+            out_dir = tmp_dir / "out"
+            out_dir.mkdir()
+            if result.profile == "beijing":
+                book = export_beijing(rows, out_dir / f"{safe_export_stem(resolved)}.xlsx", header)
+                payload_bytes = book.read_bytes()
+                media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                filename = book.name
+            else:
+                paths = export_18233(rows, out_dir, header=header, shipment_title=resolved)
+                buf = BytesIO()
+                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+                    for path in paths:
+                        archive.write(path, arcname=path.name)
+                payload_bytes = buf.getvalue()
+                media = "application/zip"
+                filename = f"{safe_export_stem(resolved)}.zip"
+            return Response(
+                content=payload_bytes,
+                media_type=media,
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        body = {
+            "profile": result.profile,
+            "title": resolved,
+            "invoice_no": header.get("invoice_no"),
+            "header": {k: v for k, v in header.items() if v not in (None, "", [])},
+            "files": [
+                {"filename": item.filename, "status": item.status, "message": item.message, "role": item.role_summary}
+                for item in result.files
+            ],
+            "warnings": result.warnings,
+            "items": rows,
+        }
+        return Response(content=json.dumps(body, ensure_ascii=False, default=str), media_type="application/json")
+
+
 @router.post("/export")
 def export_workspace(payload: ExportRequest) -> Response:
     items = [item.model_dump(mode="json") for item in payload.items]

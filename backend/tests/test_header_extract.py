@@ -93,6 +93,50 @@ def test_header_conflict_is_not_picked() -> None:
     assert "invoice_no" not in header
 
 
+def test_invoice_no_ignores_title_word_without_digits() -> None:
+    doc = ParsedDocument(
+        filename="inv.pdf",
+        file_path="inv.pdf",
+        mime_hint="pdf",
+        text_preview="发票号码\nCOMMERCIAL\nInvoice No.:EXD4-26-095\nContract No.:SM-AN2",
+    )
+    header = extract_header_fields([doc])
+    assert header.get("invoice_no") == "EXD4-26-095"
+
+
+def test_invoice_no_from_date_numer_cell() -> None:
+    from app.parsing.header_extract import extract_header_from_letterheads
+
+    rows = [
+        ["PACKING LIST"],
+        ["INVOICE DATE/NUMER : 29,04,2026 / ESI2026000000043"],
+    ]
+    header = extract_header_from_letterheads([("pack.xlsx", rows)])
+    assert header.get("invoice_no") == "ESI2026000000043"
+
+
+def test_spec_number_fills_invoice_when_invoice_missing() -> None:
+    from app.parsing.header_extract import extract_header_from_letterheads
+
+    rows = [
+        ["SPECIFICATION/Спецификация № ", "FI02026000000076  от 02.04.2026"],
+        ["Contract/Контракт №：TUR-2-FL dated 12.12.2018"],
+    ]
+    header = extract_header_from_letterheads([("spec.xlsx", rows)])
+    assert header.get("invoice_no") == "FI02026000000076"
+
+
+def test_spec_number_does_not_replace_invoice() -> None:
+    from app.parsing.header_extract import extract_header_from_letterheads
+
+    rows = [
+        ["Invoice No.", "EXD4-26-095"],
+        ["SPECIFICATION/Спецификация № ", "FI02026000000076  от 02.04.2026"],
+    ]
+    header = extract_header_from_letterheads([("spec.xlsx", rows)])
+    assert header.get("invoice_no") == "EXD4-26-095"
+
+
 def test_merge_fills_gaps_and_keeps_excel() -> None:
     base = {"invoice_no": "ZFRMB26148-626-1", "buyer": "SM"}
     incoming = {"invoice_no": "OTHER", "seller": "HANGZHOU ZHONGFANG TEXTILE IMP./EXP. CO., LTD."}

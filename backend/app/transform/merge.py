@@ -367,7 +367,14 @@ def merge_documents(
             model_key = match_key(str(it.fields.get("model") or ""))
             if model_key:
                 hit = catalog.get(model_key) or by_model.get(model_key)
-        if hit:
+        if not hit or hit.get("_conflict"):
+            from app.transform.canonical import hs_digits
+
+            digits = hs_digits(it.fields.get("customs_code") or it.fields.get("hs_code"))
+            by_code = catalog.get(f"hs:{digits}") if digits else None
+            if by_code and not by_code.get("_conflict"):
+                hit = by_code
+        if hit and not hit.get("_conflict"):
             _prefer(it, "customs_code", hit.get("customs_code"), overwrite=True)
             _prefer(it, "hs_code", hit.get("hs_code"))
             if hit.get("description"):
