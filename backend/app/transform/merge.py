@@ -678,6 +678,21 @@ def _pick_family_children(
     return []
 
 
+def _has_unique_exact_child(fam: Row, items: dict[str, CanonicalItem]) -> bool:
+    """A packing lot that maps to exactly one colour child by exact metres/rolls."""
+    model_key = match_key(_family_label(fam.article, str(fam.fields.get("_group") or "")))
+    if not model_key:
+        return False
+    pool = list(items.values())
+    target_m = _measure(fam.fields, ("meters",))
+    target_r = _measure(fam.fields, ("rolls", "boxes"))
+    for cand in (_digit_suffix_items(pool, model_key), _word_prefix_items(pool, model_key)):
+        exact = _exact_measure(cand, target_m, ("meters",)) or _exact_measure(cand, target_r, ("rolls", "boxes"))
+        if len(exact) == 1:
+            return True
+    return False
+
+
 def _distribute_families(family_rows: list[Row], items: dict[str, CanonicalItem]) -> None:
     grouped: dict[str, list[Row]] = {}
     for fam in family_rows:
@@ -685,6 +700,18 @@ def _distribute_families(family_rows: list[Row], items: dict[str, CanonicalItem]
         grouped.setdefault(model_key, []).append(fam)
     used: set[int] = set()
     ordered = [fam for rows in grouped.values() for fam in rows]
+    # Assign the most constrained lots first. When one design ships as several
+    # packing lots (e.g. 71 rolls over four colours plus 38 rolls on one colour),
+    # the lot that maps to a single colour by exact metres/rolls is unambiguous:
+    # claim it first, then the remaining colours sum cleanly to the other lot.
+    # Otherwise the larger lot fails to match, is dropped as a phantom family item,
+    # and its rolls/metres are double-counted in the packing total.
+    ordered.sort(
+        key=lambda fam: (
+            0 if _has_unique_exact_child(fam, items) else 1,
+            _measure(fam.fields, ("meters",)) or _measure(fam.fields, ("rolls", "boxes")) or 0.0,
+        )
+    )
     for fam in ordered:
         model = _family_label(fam.article, str(fam.fields.get("_group") or ""))
         model_key = match_key(model)
