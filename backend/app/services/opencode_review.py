@@ -181,10 +181,12 @@ Catalog sheets may fill description and tnved only on an exact article match. Do
 
 Letterhead / header (flexible — titles differ by supplier):
 - invoice_no: value next to Inv No / Invoice No / INV.NO / инв номер / similar — not a date in parentheses.
-- invoice_date: labeled Invoice date / дата, OR a date embedded in the document title (shipment of …, dated …, dd.mm.yyyy / Jul.18,2026 near Invoice/Packing/Specification). Ignore B/L Date, ETD, ETA, sailing.
-- contract_no / container: same idea — label or adjacent cell, any language.
-- seller: THE SELLER / Seller / Shipper / trading company on the invoice — not the goods maker.
-- manufacturer: MANUFACTURER / BRAND / Производитель column on goods rows, or an explicit Manufacturer label. Often differs from seller (trader vs factory/brand). Never copy seller into manufacturer.
+- invoice_date: the date next to Date / Invoice date on the invoice (including MAY.20.2026 = 20 May 2026). A fragment inside the invoice number (EXD4-26-095) is not a date. Delivery date / сроки поставки / not later than is delivery_date, never invoice_date. B/L, ETD, ETA, sailing are not invoice_date.
+- contract_date: only the date on the Contract / Контракт line (dd / dated / от). The date after Specification / Спецификация № is the spec date, not the contract date.
+- contract_no / container: label or the adjacent cell, any language.
+- buyer and seller: the company under its own label. Buyer and Seller on one row own the columns below them, not the cell to the right. "TO: Messrs" / Attn is a salutation, the company on the next line is the buyer. Do not put the buyer's address into the seller.
+- seller: THE SELLER / Seller / Shipper, or the company in the letterhead above TO/Buyer.
+- manufacturer: an explicit Manufacturer / Производитель label, even when that company is also the seller. Never invent a manufacturer by copying the seller when the document has no such label.
 - currency: from PRICE PER / Amount column titles (USD, CNY/RMB, EUR). Payment text that lists several allowed currencies ("yuan, US dollars") is NOT the invoice currency.
 If parser_json.header missed a field that is visible in the workbook letterhead, fill header[] and mention "excel:header" in notes on any related item or in meaning.
 
@@ -281,8 +283,10 @@ Rules:
 - qty is commercial quantity in unit. meters is packing meters. Amount is money, never m2. rolls/boxes are places. gross_weight is brutto, net_weight is netto.
 - description is customs Product name from Excel or catalog, or null. Never copy (15+30), (A), 0605 Special Order, and never invent text because an etalon once had it.
 - net_weight / gross_weight / volume / boxes / rolls: prefer packing-list commercial numbers; if draft used sender-spec rolls and packing disagrees beyond ~0.2 kg, correct to packing and verdict "question" with notes like "excel:weight packing vs spec". If WEIGHT BRUTTO / GROSS WEIGHT is a printed column, gross_weight must not stay null.
-- header.invoice_date and header.invoice_no: fill from letterhead even when the draft left them empty; do not put a shipment date into invoice_no.
-- header.seller is the trading party; header.manufacturer is the goods maker/brand from the Manufacturer column. Keep them separate when the document shows both.
+- header.invoice_date and header.invoice_no: fill from letterhead even when the draft left them empty; do not put a shipment or delivery date into invoice_date, and do not put a date fragment of the invoice number into invoice_date.
+- header.contract_date comes only from the Contract line. header.buyer_address is the address under Buyer, header.seller_address under Seller.
+- header.seller is the trading party; header.manufacturer is the labeled Manufacturer / Производитель. If the document names the same company as both, keep both. If there is no manufacturer label, leave manufacturer null.
+- items[].article includes the colour code when it is a separate column (MAXWELL + 997 -> "MAXWELL 997"). Do not collapse those packing rows into one family line unless the packing list itself printed one family total.
 - header.currency is the invoice price currency from PRICE/AMOUNT column titles (USD/EUR/CNY/GBP/TRY/AED/SAR and other ISO). Do not set CNY just because payment terms mention yuan among other options. If USD and TRY both appear, keep the commercial amount currency (usually USD). Pounds, lire, dinars, dirhams are real currencies — copy the printed ISO, do not coerce them to USD.
 - If HS / TNVED is printed with dots or spaces (54.07.73.00.90.11, 59.03.10.90.10.00) or as a 13-digit Excel float, strip dots and keep digits. TNVED is at most 10 digits. Do not invent a code that is not printed and not in the catalog. A 3-5 digit PO under the header is not HS.
 - A smashed PDF header (letters from two alphabets in one word) is not a column title. Rebuild the row from the visible table. If the article cell is ОТСУТСТВУЕТ, n/a, or a torn piece of the description, leave article null and keep the full description.

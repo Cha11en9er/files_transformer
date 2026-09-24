@@ -47,7 +47,10 @@ PDF invoices may be a letter or slash-line blob with no grid. Read the page text
 Letterhead: scan the rows ABOVE the goods table. Invoice No and Contract/Container are often label+adjacent cell.
 Invoice/shipment DATE may be only inside a title phrase (any language): "shipment of …", "dated …", "dd.mm.yyyy",
 "Jul.18,2026", "дата …" next to Invoice/Packing/Specification. That date is header.invoice_date, never invoice_no.
-Do not use B/L Date, ETD, ETA, sailing as invoice_date.
+Do not use B/L Date, ETD, ETA, sailing, or delivery / сроки поставки / not later than as invoice_date.
+A piece of the invoice number (EXD4-26-095) is not a date. Contract date is only the date on the Contract line, not the Specification dd date.
+Buyer and Seller on one row: read down each column. "TO: Messrs" is not the buyer. Manufacturer is the Производитель label, even if it matches the seller.
+Two DESIGN columns: article text plus colour code stay one item, and the exported article keeps both (MAXWELL 997). Do not merge those packing lines into one family row unless the packing list printed a single family total.
 Weights: packing-list net/gross (family or article) are the commercial truth for the finished export.
 Sender Specification roll rows, summed by article, are a cross-check (about ±0.2 kg usual). If they diverge more,
 keep packing and flag. When packing is family-level and goods are per colour, share packing weight by each colour's

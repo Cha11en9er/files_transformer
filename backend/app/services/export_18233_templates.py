@@ -19,7 +19,7 @@ from app.parsing.header_extract import (
 )
 from app.parsing.normalize import normalize_article
 from app.services.export_style import safe_export_stem, unfreeze_workbook
-from app.services.field_map import classify_header, is_factory_note, parse_number
+from app.services.field_map import article_with_color, classify_header, is_factory_note, parse_number
 from app.services.materials_18233 import kit_templates, materials_available
 from app.services.profile_18233 import GROUP_PREFIXES, _design_family
 
@@ -250,8 +250,7 @@ def _format_packing_design(design: str | None, article: str | None = None) -> st
         text = ""
     text = re.sub(r"^\([^)]{0,48}\)\s*/\s*", "", text)
     if not text:
-        family = (article or "").split()[0] if article else ""
-        return f"SOFA FABRIC\n{family}".strip()
+        return str(article or "").strip()
     if " / " in text:
         left, right = text.split(" / ", 1)
         if any(left.upper().startswith(prefix) for prefix in GROUP_PREFIXES) or len(left) <= 40:
@@ -290,7 +289,7 @@ def _group_prefix(item: dict[str, Any], fabric: bool) -> str:
         return ""
     if article.upper().startswith("NAPPA") or article.upper().startswith("MAGIC"):
         return "ARTIFICIAL LEATHER"
-    return "SOFA FABRIC"
+    return ""
 
 
 def _invoice_group_key(item: dict[str, Any], fabric: bool) -> str:
@@ -315,32 +314,25 @@ def _collect_packing_groups(products: list[dict[str, Any]], fabric: bool) -> lis
             groups.append(part)
     if groups:
         return groups
-    families: list[str] = []
-    by_family: dict[str, list[dict[str, Any]]] = {}
+    # No family packing row in the source: each goods line keeps its own places and weight.
     for item in products:
-        fam = _invoice_group_key(item, fabric)
-        if fam not in by_family:
-            families.append(fam)
-            by_family[fam] = []
-        by_family[fam].append(item)
-    for fam in families:
-        group_items = by_family[fam]
-        first = group_items[0]
-        prefix = _group_prefix(first, fabric)
-        article = (first.get("article") or fam).split()[0] if fabric else (first.get("article") or fam)
-        design = f"{prefix}\n{article}".strip() if prefix else str(first.get("article") or "")
-        packing = first.get("packing_data") or {}
+        commercial = item.get("commercial_data") or {}
+        packing = item.get("packing_data") or {}
+        label = article_with_color(item.get("article"), commercial.get("color"))
+        prefix = _group_prefix(item, fabric)
+        design = f"{prefix}\n{label}".strip() if prefix else label
         groups.append(
             {
                 "design": design,
-                "gm": packing.get("gm") or ((first.get("source_traces") or {}).get("packing_list_group") or {}).get("gm"),
-                "rolls": sum(float((i.get("packing_data") or {}).get("rolls") or 0) for i in group_items),
-                "meters": sum(float((i.get("packing_data") or {}).get("meters") or (i.get("commercial_data") or {}).get("qty") or 0) for i in group_items),
-                "qty": sum(float((i.get("commercial_data") or {}).get("qty") or (i.get("packing_data") or {}).get("meters") or 0) for i in group_items),
-                "unit": (first.get("commercial_data") or {}).get("unit") or packing.get("unit"),
-                "net_weight": sum(float((i.get("packing_data") or {}).get("net_weight") or 0) for i in group_items),
-                "gross_weight": sum(float((i.get("packing_data") or {}).get("gross_weight") or 0) for i in group_items),
-                "area": sum(float((i.get("packing_data") or {}).get("area") or 0) for i in group_items),
+                "article": label,
+                "gm": packing.get("gm"),
+                "rolls": packing.get("rolls") or packing.get("boxes"),
+                "meters": packing.get("meters") if packing.get("meters") is not None else commercial.get("qty"),
+                "qty": commercial.get("qty") if commercial.get("qty") is not None else packing.get("meters"),
+                "unit": commercial.get("unit") or packing.get("unit"),
+                "net_weight": packing.get("net_weight"),
+                "gross_weight": packing.get("gross_weight"),
+                "area": packing.get("area"),
             }
         )
     return groups
@@ -387,7 +379,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                 rows.append(
                     [
                         int(no),
-                        item.get("article"),
+                        article_with_color(item.get("article"), commercial.get("color")),
                         hs,
                         rolls,
                         _as_float(width) if width is not None else None,
@@ -402,7 +394,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                 rows.append(
                     [
                         int(no),
-                        item.get("article"),
+                        article_with_color(item.get("article"), commercial.get("color")),
                         hs,
                         rolls,
                         qty,
@@ -515,7 +507,7 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
                 [
                     int(idx),
                     rolls,
-                    item.get("article"),
+                    article_with_color(item.get("article"), commercial.get("color")),
                     _product_description(item),
                     hs,
                     tnved,
@@ -533,7 +525,7 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
                 [
                     int(idx),
                     rolls,
-                    item.get("article"),
+                    article_with_color(item.get("article"), commercial.get("color")),
                     _product_description(item),
                     hs,
                     tnved,
