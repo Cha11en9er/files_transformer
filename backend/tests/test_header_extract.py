@@ -278,3 +278,90 @@ def test_dap_incoterm_and_street_continuation() -> None:
     assert "117534" in (header.get("buyer_address") or "")
     assert "CHERTANOVSKAYA" in (header.get("buyer_address") or "").upper()
     assert "HONGKONG" in (header.get("seller_address") or "").upper()
+
+
+def test_repeated_invoice_number_still_loses_to_a_different_one() -> None:
+    packing = ParsedDocument(
+        filename="pack.xlsx",
+        file_path="pack.xlsx",
+        mime_hint="excel",
+        text_preview="INVOICE DATE/NUMER : 29,04,2026 / ESI2026000000043\nINV.NO. ESI2026000000043",
+    )
+    invoice = ParsedDocument(
+        filename="invoice.pdf",
+        file_path="invoice.pdf",
+        mime_hint="pdf",
+        text_preview="INVOICE\nNO. ESI2026000000044\nDATE 29,04,2026",
+    )
+    header = extract_header_fields([packing, invoice])
+    assert "invoice_no" not in header
+
+
+def test_address_is_not_cut_or_repeated() -> None:
+    street = (
+        "Demirtaş organize san. Bölgesi Mustafa Karaer Caddesi No:33 "
+        "Osmangazi –Bursa POST CODE: 16110"
+    )
+    doc = ParsedDocument(
+        filename="spec.xlsx",
+        file_path="spec.xlsx",
+        mime_hint="excel",
+        text_preview=(
+            "Seller: IPEKIS MENSUCAT TÜRK A.Ş.\n"
+            f"Address: {street}\n{street}\n{street}\n"
+            "Buyer: “SM REGIONTEKSTIL'” LLC\n"
+            "Address/Адрес: 143421 Moscow region, city of Krasnogorsk\n"
+        ),
+    )
+    header = extract_header_fields([doc])
+    seller = header.get("seller_address") or ""
+    assert seller.count("Caddesi") == 1
+    assert "Caddesi" in seller
+    assert not seller.endswith("Caddes")
+
+
+def test_short_city_does_not_replace_street() -> None:
+    doc = ParsedDocument(
+        filename="spec.xlsx",
+        file_path="spec.xlsx",
+        mime_hint="excel",
+        text_preview=(
+            "Seller: E.S.C. DOSEMELIK VE PERDELIK KUMAS ITH.IHR TIC.VE SAN. LTD. STI.\n"
+            "Address: Demirtas Org. San. Bolgesi Papatya Sk. No:19 16245 Osmangazi Bursa\n"
+            "Address: 16245 Osmangazi Bursa/ Turkiye\n"
+            "Buyer: “SM REGIONTEKSTIL'” LLC\n"
+            "Address: 143421 Moscow region, Krasnogorsk city\n"
+        ),
+    )
+    header = extract_header_fields([doc])
+    assert "PAPATYA" in (header.get("seller_address") or "").upper()
+
+
+def test_buyer_keeps_domestic_address_when_seller_city_is_also_present() -> None:
+    doc = ParsedDocument(
+        filename="inv.pdf",
+        file_path="inv.pdf",
+        mime_hint="pdf",
+        text_preview=(
+            "THE BUYER:\nLLC \"Master\"\n"
+            "Address: CHINA, GUANGDONG PROVINCE, ZHONGSHAN CITY, GUZHEN\n"
+            "Address: 196006, Russia, St. Petersburg, Zastavskaya street, 22\n"
+            "THE SELLER:\nZHONGSHAN HUAYUAN LIGHTING CO. LTD\n"
+            "Address: CHINA, GUANGDONG PROVINCE, ZHONGSHAN CITY, GUZHEN TOWN\n"
+        ),
+    )
+    header = extract_header_fields([doc])
+    assert "PETERSBURG" in (header.get("buyer_address") or "").upper() or "196006" in (header.get("buyer_address") or "")
+
+
+def test_model_fragment_does_not_shorten_a_full_address() -> None:
+    merged = merge_header_fields(
+        {"seller_address": "Demirtas Org. San. Bolgesi Papatya Sk. No:19 16245 Osmangazi Bursa"},
+        {"seller_address": "16245 Osmangazi Bursa"},
+    )
+    assert "PAPATYA" in merged["seller_address"].upper()
+    extended = merge_header_fields(
+        {"seller_address": "16245 Osmangazi Bursa"},
+        {"seller_address": "Demirtas Org. San. Bolgesi Papatya Sk. No:19 16245 Osmangazi Bursa"},
+    )
+    assert "PAPATYA" in extended["seller_address"].upper()

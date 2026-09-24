@@ -124,7 +124,7 @@ _MANUFACTURER = re.compile(
     re.I,
 )
 _PAYMENT = re.compile(
-    r"(?:terms of payment|условия оплаты)\s*[:.：/]?\s*([^\n]{8,220})",
+    r"(?:terms of payment|условия оплаты)\s*[:.：/]?\s*([^\n]{8,500})",
     re.I,
 )
 _DELIVERY_DATE = re.compile(
@@ -267,6 +267,48 @@ _GLUED_ADDRESS_LABEL = re.compile(
 )
 
 
+def _clip_at_word(raw: str | None, limit: int) -> str | None:
+    """Keep a long clause, but never end in the middle of a word."""
+    text = (raw or "").strip()
+    if len(text) <= limit:
+        return text or None
+    cut = text[:limit]
+    space = cut.rfind(" ")
+    if space >= limit // 2:
+        cut = cut[:space]
+    return cut.strip(" ,;:") or None
+
+
+def _dedupe_address(text: str | None) -> str | None:
+    """The same street pasted twice or three times is still one address."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    lines: list[str] = []
+    seen: set[str] = set()
+    for line in raw.splitlines():
+        piece = line.strip(" ,;")
+        if not piece:
+            continue
+        key = _compact_address(piece)
+        if key and key in seen:
+            continue
+        if key and any(key in prev or prev in key for prev in seen):
+            if any(key in prev and len(key) < len(prev) for prev in seen):
+                continue
+            lines = [item for item in lines if _compact_address(item) not in key]
+            seen = {item for item in seen if item not in key}
+        seen.add(key)
+        lines.append(piece)
+    joined = "\n".join(lines).strip()
+    compact = _compact_address(joined)
+    if len(compact) >= 16 and len(compact) % 2 == 0:
+        half = len(compact) // 2
+        if compact[:half] == compact[half:]:
+            joined = "\n".join(lines[: max(1, len(lines) // 2)]).strip() or lines[0]
+    return joined or None
+
+
 def _clean_address(raw: str | None) -> str | None:
     if not raw:
         return None
@@ -278,6 +320,7 @@ def _clean_address(raw: str | None) -> str | None:
     text = re.sub(r"(\d)\s*(OGRN|ОГРН|TIN|INN|ИНН|KPP|КПП)\b", r"\1 \2", text, flags=re.I)
     text = _GLUED_ADDRESS_LABEL.split(text, maxsplit=1)[0]
     text = text.strip(" :：|/,")
+    text = _dedupe_address(text)
     if len(text) < 6:
         return None
     return text
@@ -317,8 +360,8 @@ def split_party_address(text: str | None, *, seller: bool) -> str | None:
         )
         if leftover and first and _ADDRESS_HINT.search(first) and len(first) >= 12:
             chosen = first
-    chosen = _clean_address(chosen) or chosen
-    return (chosen or "")[:240] or None
+    chosen = _dedupe_address(_clean_address(chosen) or chosen)
+    return chosen or None
 
 
 def _address_followup(blob: str, end: int) -> str | None:
@@ -508,11 +551,11 @@ def _hits_from_text(blob: str) -> dict[str, list[str]]:
             continue
         add("manufacturer", mfr)
     for match in _PAYMENT.finditer(blob):
-        add("payment_terms", match.group(1)[:220])
+        add("payment_terms", _clip_at_word(match.group(1), 500))
     for match in _DELIVERY_DATE.finditer(blob):
-        add("delivery_date", match.group(1)[:120])
+        add("delivery_date", _clip_at_word(match.group(1), 180))
     for match in _WAREHOUSE.finditer(blob):
-        add("warehouse_address", match.group(1)[:180])
+        add("warehouse_address", _clip_at_word(match.group(1), 400))
     for match in _CONTAINER.finditer(blob):
         add("container_no", match.group(1))
     for match in _INCOTERMS.finditer(blob):
@@ -689,8 +732,10 @@ def _collapse_hits(
     for key in HEADER_KEYS:
         if key == "delivery_terms":
             picked = _pick_incoterm(by_field.get(key) or [])
+        elif key == "invoice_no":
+            picked = _pick_unanimous(by_field.get(key) or [])
         elif key in {"buyer_address", "seller_address", "warehouse_address"}:
-            picked = _pick_address(by_field.get(key) or [])
+            picked = _pick_address(by_field.get(key) or [], role=key.split("_", 1)[0])
         elif key in {"buyer", "seller"}:
             picked = _pick_party(by_field.get(key) or [])
         else:
@@ -710,8 +755,10 @@ def _collapse_hits(
             result["seller_address"] = replacement
         else:
             result.pop("seller_address", None)
-    if "invoice_no" not in result:
-        spec_no = _pick_agreed(by_field.get("spec_no") or [])
+    invoice_hits = by_field.get("invoice_no") or []
+    invoice_keys = {_norm_key(value) for _source, value in invoice_hits if value}
+    if "invoice_no" not in result and len(invoice_keys) <= 1:
+        spec_no = _pick_unanimous(by_field.get("spec_no") or [])
         if spec_no:
             result["invoice_no"] = spec_no
     if "seller" not in result and letterheads:
@@ -775,26 +822,99 @@ def _norm_key(value: str) -> str:
 
 
 def _compact_address(value: str) -> str:
-    return re.sub(r"[\s,.;:\"'“”«»-]+", "", normalize_text(value)).lower()
+    return re.sub(r"[\s,.;:\"'“”«»/\\-]+", "", normalize_text(value)).lower()
 
 
-def _pick_address(pairs: list[tuple[str, str]]) -> str | None:
+def _longer_same_address(current: str, incoming: str) -> str | None:
+    """A cropped screenshot must not replace a full street, and a full one may extend a fragment."""
+    cur = _compact_address(current)
+    inc = _compact_address(incoming)
+    if not cur or not inc or cur == inc:
+        return None
+    cur_words = _address_words(current)
+    inc_words = _address_words(incoming)
+    if cur in inc or (cur_words and cur_words <= inc_words and len(inc) > len(cur)):
+        return incoming
+    return None
+
+
+def _address_words(value: str) -> set[str]:
+    return set(re.findall(r"[a-zа-яё]{5,}", value.lower()))
+
+
+def _address_core(value: str) -> str:
+    text = re.sub(r"\b(?:turkiye|turkey|china|russia|россия)\b", " ", value, flags=re.I)
+    return _compact_address(text)
+
+
+def _pick_unanimous(pairs: list[tuple[str, str]]) -> str | None:
+    """Two different numbers are a conflict even when one of them is repeated."""
+    buckets: dict[str, list[str]] = defaultdict(list)
+    for _source, value in pairs:
+        if value:
+            buckets[_norm_key(value)].append(value)
+    if len(buckets) != 1:
+        return None
+    return next(iter(buckets.values()))[0]
+
+
+def _pick_address(pairs: list[tuple[str, str]], *, role: str = "") -> str | None:
     values = [value for _source, value in pairs if value]
     if not values:
         return None
     ranked = sorted(values, key=lambda value: len(_compact_address(value)), reverse=True)
-    top = _compact_address(ranked[0])
+    kept: list[str] = []
+    for value in ranked:
+        words = _address_words(value)
+        compact = _address_core(value)
+        swallowed = False
+        for longer in kept:
+            longer_words = _address_words(longer)
+            longer_compact = _address_core(longer)
+            if compact and (compact in longer_compact or (words and words <= longer_words)):
+                swallowed = True
+                break
+        if not swallowed:
+            kept.append(value)
+    if role == "buyer":
+        domestic = [
+            value
+            for value in kept
+            if re.search(r"\b(?:moscow|моск|росси|russia|inn\b|инн|огрн|ogrn)\b", value, re.I)
+        ]
+        overseas = [
+            value
+            for value in kept
+            if re.search(r"\b(?:hong\s*kong|hongkong|china|zhongshan|guangdong)\b", value, re.I)
+        ]
+        if domestic and overseas:
+            kept = domestic
+    if role == "seller":
+        overseas = [
+            value
+            for value in kept
+            if re.search(r"\b(?:hong\s*kong|hongkong|china|zhongshan|guangdong|bursa|istanbul|hangzhou)\b", value, re.I)
+        ]
+        domestic = [
+            value
+            for value in kept
+            if re.search(r"\b(?:moscow|моск|красног|krasnogorsk)\b", value, re.I)
+            and value not in overseas
+        ]
+        if overseas and domestic:
+            kept = overseas
+    if len(kept) == 1:
+        return kept[0]
+    top = _compact_address(kept[0])
     if top and all(
         top.startswith(_compact_address(value)) or _compact_address(value).startswith(top)
-        for value in ranked
+        for value in kept
     ):
-        return ranked[0]
-    def words(value: str) -> set[str]:
-        return set(re.findall(r"[a-zа-яё]{5,}", value.lower()))
-    rich = [value for value in ranked if re.search(r"\d{5,}|\b(?:ogrn|огрн|tin|inn|инн)\b", value, re.I)]
-    if len(rich) == 1 and all(words(value) & words(rich[0]) for value in ranked):
+        return kept[0]
+    rich = [value for value in kept if re.search(r"\d{5,}|\b(?:ogrn|огрн|tin|inn|инн)\b", value, re.I)]
+    if len(rich) == 1 and all(_address_words(value) & _address_words(rich[0]) for value in kept):
         return rich[0]
-    return _pick_agreed(pairs)
+    return _pick_agreed([("", value) for value in kept])
 
 
 def _latin_ratio(text: str) -> float:
@@ -875,6 +995,11 @@ def merge_header_fields(base: dict[str, Any] | None, incoming: dict[str, Any] | 
         current = out.get(mapped)
         if not current:
             out[mapped] = value if mapped != "invoice_no" else (_clean_invoice_no(str(value)) or value)
+            continue
+        if mapped in {"buyer_address", "seller_address", "warehouse_address"}:
+            longer = _longer_same_address(str(current), str(value))
+            if longer:
+                out[mapped] = longer
             continue
         if _norm_key(str(current)) != _norm_key(str(value)):
             continue
