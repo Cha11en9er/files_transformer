@@ -365,3 +365,43 @@ def test_model_fragment_does_not_shorten_a_full_address() -> None:
         {"seller_address": "Demirtas Org. San. Bolgesi Papatya Sk. No:19 16245 Osmangazi Bursa"},
     )
     assert "PAPATYA" in extended["seller_address"].upper()
+
+
+def test_city_date_is_not_a_buyer_and_party_label_is_cut_from_address() -> None:
+    from app.parsing.header_extract import _clean_address, _pick_address, _usable_party_name
+
+    assert _usable_party_name("ISTANBUL :29/04") is None
+    assert _usable_party_name("\"SM REGIONTEKSTIL'\" LLC")
+    address = _clean_address(
+        "Russian Federation, 143050, Moscow region, Odintsovo, office 419 | Buyer:“ELEMENT” LLC"
+    )
+    assert address is not None
+    assert "Buyer" not in address
+    assert "143050" in address
+    merged = merge_header_fields(
+        {"buyer": "ISTANBUL :29/04"},
+        {"buyer": "SM REGIONTEKSTIL LLC"},
+    )
+    assert "REGIONTEKSTIL" in merged["buyer"].upper()
+    street = "143421, MOSCOW REGION, KRASNOGORSK CITY, TER. BALTIYA ROAD, KM 21, H. 2, STR. 1, ROOM 1"
+    picked = _pick_address(
+        [("", street)] * 3 + [("", "EXD4-26-095\n定单或合约号码")],
+        role="buyer",
+    )
+    assert picked == street
+    from app.parsing.header_extract import _letterhead_address
+
+    blank = "\n".join(
+        [
+            "ANHUI ANLI MATERIAL TECHNOLOGY CO., LTD",
+            "TAOHUA INDUSTRIAL ZONE, ECONOMIC-TECHNOLOGICAL DEVELOPMENT DISTRICT,",
+            "HEFEI CITY, ANHUI PROVINCE, CHINA.",
+            "TEL: 0086-551-68991746",
+            "TO: Messrs",
+        ]
+    )
+    factory = _letterhead_address(blank)
+    assert factory is not None
+    assert "TAOHUA" in factory
+    assert "HEFEI" in factory
+    assert "TEL" not in factory

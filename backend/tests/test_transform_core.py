@@ -42,6 +42,53 @@ def test_split_design_keeps_category_and_sku():
     assert split_design("MD813") == ("", "MD813")
 
 
+def test_two_family_rows_keep_their_own_weights():
+    """Two packing rows of one family match colour lines by metres, not by dumping both onto all."""
+    from app.transform.extract import ExtractedSheet, Row
+
+    invoice = ExtractedSheet(
+        name="inv", source="inv.xlsx", role="invoice", mapping={}, header_text="invoice",
+        rows=[
+            Row(article="Galo 994", normalized="GALO994", fields={"meters": 427.1, "rolls": 8, "price": 19.3, "amount": 8243.03}, source="inv", role="invoice", item_no=1),
+            Row(article="Galo 999", normalized="GALO999", fields={"meters": 301.5, "rolls": 6, "price": 20.1, "amount": 6060.15}, source="inv", role="invoice", item_no=2),
+        ],
+    )
+    packing = ExtractedSheet(
+        name="pl", source="pl.xlsx", role="packing", mapping={}, header_text="packing",
+        rows=[
+            Row(article="SOFA FABRIC\nGalo", normalized="SOFAFABRICGALO", fields={"meters": 427.1, "rolls": 8, "net_weight": 136.67, "gross_weight": 145.0}, source="pl", role="packing"),
+            Row(article="SOFA FABRIC\nGalo", normalized="SOFAFABRICGALO", fields={"meters": 301.5, "rolls": 6, "net_weight": 96.48, "gross_weight": 102.0}, source="pl", role="packing"),
+        ],
+    )
+    items = merge_documents([invoice, packing])
+    by = {it.article: it for it in items}
+    assert set(by) == {"Galo 994", "Galo 999"}
+    assert by["Galo 994"].get("net_weight") == pytest.approx(136.67)
+    assert by["Galo 999"].get("net_weight") == pytest.approx(96.48)
+    assert by["Galo 994"].get("gross_weight") == pytest.approx(145.0)
+    assert by["Galo 999"].get("gross_weight") == pytest.approx(102.0)
+
+
+def test_longer_colour_name_absorbs_family_packing_row():
+    from app.transform.extract import ExtractedSheet, Row
+
+    invoice = ExtractedSheet(
+        name="inv", source="inv.xlsx", role="invoice", mapping={}, header_text="invoice",
+        rows=[
+            Row(article="Marseille Linen", normalized="MARSEILLELINEN", fields={"meters": 708.4, "rolls": 14, "price": 21.5, "amount": 15230.6}, source="inv", role="invoice", item_no=1),
+        ],
+    )
+    packing = ExtractedSheet(
+        name="pl", source="pl.xlsx", role="packing", mapping={}, header_text="packing",
+        rows=[
+            Row(article="SOFA FABRIC\nMarseille", normalized="SOFAFABRICMARSEILLE", fields={"meters": 708.4, "rolls": 14, "net_weight": 446.29, "gross_weight": 463.0}, source="pl", role="packing"),
+        ],
+    )
+    items = merge_documents([invoice, packing])
+    assert [it.article for it in items] == ["Marseille Linen"]
+    assert items[0].get("net_weight") == pytest.approx(446.29)
+
+
 def test_unnumbered_category_row_is_caption_not_a_second_item():
     from app.transform.extract import extract_sheet
     from app.transform.reader import Sheet

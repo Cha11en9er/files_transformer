@@ -262,8 +262,12 @@ def _split_party_block(raw: str | None) -> tuple[str | None, str | None]:
 
 
 _GLUED_ADDRESS_LABEL = re.compile(
-    r"\b(?:CONTRACT|THE BUYER|THE SELLER|INVOICE|SPECIFICATIONS|BANK:|SWIFT:)\b",
+    r"\b(?:CONTRACT|THE BUYER|THE SELLER|INVOICE|SPECIFICATIONS|BANK:|SWIFT:)\b"
+    r"|\s*[|]\s*(?:buyer|seller|покупатель|продавец)\s*[:：]",
     re.I,
+)
+_DATE_LIKE_PARTY = re.compile(
+    r"^(?:[A-Za-zА-Яа-яЁё]{2,}\s*[:：]\s*)?\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?$",
 )
 
 
@@ -318,9 +322,22 @@ def _clean_address(raw: str | None) -> str | None:
     text = re.sub(r"^[\s|/:：]+", "", text)
     text = re.sub(r"^(?:(?:address|адрес)\s*[:/]?\s*)+", "", text, flags=re.I)
     text = re.sub(r"(\d)\s*(OGRN|ОГРН|TIN|INN|ИНН|KPP|КПП)\b", r"\1 \2", text, flags=re.I)
-    text = _GLUED_ADDRESS_LABEL.split(text, maxsplit=1)[0]
+    label = _GLUED_ADDRESS_LABEL.search(text)
+    if label:
+        head = text[: label.start()].strip(" :：|/,\n")
+        tail = text[label.end() :].strip(" :：|/,\n")
+        if len(head) >= 6:
+            text = head
+        else:
+            text = re.sub(
+                r"^(?:no\.?\s*[:：]?\s*)?[A-Za-z0-9./-]{4,}\s*",
+                "",
+                tail,
+                count=1,
+                flags=re.I,
+            ).strip()
     text = text.strip(" :：|/,")
-    text = _dedupe_address(text)
+    text = _dedupe_address(text) or ""
     if len(text) < 6:
         return None
     return text
@@ -580,7 +597,35 @@ def _usable_party_name(name: str | None) -> str | None:
         return None
     if re.search(r"\b(?:buyer|seller|покупатель|продавец)\b", name, re.I) and not _COMPANY.search(name):
         return None
+    # A city and a date ("ISTANBUL :29/04") is a place/date line, not a party.
+    compact = normalize_text(name).strip(" :")
+    if _DATE_LIKE_PARTY.match(compact) and not _COMPANY.search(compact):
+        return None
     return name
+
+
+def _letterhead_address(blob: str) -> str | None:
+    """Street printed under the company name, before the buyer block."""
+    lines = [line.strip() for line in blob.splitlines() if line.strip()]
+    start = None
+    for index, line in enumerate(lines[:40]):
+        if _INVOICE_NO.search(line) or _BUYER.search(line):
+            continue
+        if _COMPANY.search(line):
+            start = index + 1
+            break
+    if start is None:
+        return None
+    parts: list[str] = []
+    for line in lines[start : start + 6]:
+        if re.match(r"^(?:to|buyer|seller|invoice|tel|fax|phone|date)\b", line, re.I):
+            break
+        piece = line.split("|", 1)[0].strip(" ,")
+        if not piece or not _ADDRESS_HINT.search(piece):
+            break
+        if piece not in parts:
+            parts.append(piece)
+    return _clean_address("\n".join(parts)) if parts else None
 
 
 def _letterhead_seller(blob: str) -> str | None:
@@ -794,6 +839,10 @@ def extract_header_from_letterheads(packs: list[tuple[str, list[list[str]]]] | N
         head = _letterhead_seller(blob)
         if head:
             letterheads.append(head)
+        if not any(key == "seller_address" for key in found):
+            street = _letterhead_address(blob)
+            if street:
+                by_field["seller_address"].append((str(filename), street))
     return _collapse_hits(by_field, letterheads)
 
 
@@ -859,7 +908,7 @@ def _pick_unanimous(pairs: list[tuple[str, str]]) -> str | None:
 
 
 def _pick_address(pairs: list[tuple[str, str]], *, role: str = "") -> str | None:
-    values = [value for _source, value in pairs if value]
+    values = [value for _source, value in pairs if value and _ADDRESS_HINT.search(value)]
     if not values:
         return None
     ranked = sorted(values, key=lambda value: len(_compact_address(value)), reverse=True)
@@ -993,6 +1042,9 @@ def merge_header_fields(base: dict[str, Any] | None, incoming: dict[str, Any] | 
         if mapped == "incoterms" and "delivery_terms" not in out:
             mapped = "delivery_terms"
         current = out.get(mapped)
+        if mapped in {"buyer", "seller"} and current and not _usable_party_name(str(current)):
+            out[mapped] = value
+            continue
         if not current:
             out[mapped] = value if mapped != "invoice_no" else (_clean_invoice_no(str(value)) or value)
             continue

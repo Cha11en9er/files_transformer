@@ -364,7 +364,8 @@ def settings() -> dict[str, Any]:
         "provider_id": provider,
         "model_id": model_id,
         "enabled": enabled,
-        "timeout_s": float(os.getenv("OPENCODE_TIMEOUT_S", "180")),
+        # 0 = wait until the model answers. A short read timeout drops the whole draft.
+        "timeout_s": float(os.getenv("OPENCODE_TIMEOUT_S", "0")),
     }
 
 
@@ -1262,7 +1263,10 @@ def review_with_opencode(
     auth = None
     if cfg["password"]:
         auth = (cfg["username"], cfg["password"])
-    timeout = httpx.Timeout(cfg["timeout_s"], connect=8.0)
+    if cfg["timeout_s"] > 0:
+        timeout = httpx.Timeout(cfg["timeout_s"], connect=8.0)
+    else:
+        timeout = httpx.Timeout(None, connect=8.0)
     session_id: str | None = None
     try:
         with httpx.Client(base_url=cfg["url"], auth=auth, timeout=timeout) as client:

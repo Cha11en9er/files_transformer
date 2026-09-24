@@ -74,6 +74,18 @@ def _family_model(article: str) -> str:
     return stripped.strip()
 
 
+def _family_label(article: str, group: str = "") -> str:
+    """Short family token: category/sku split, else drop SOFA FABRIC / ARTIFICIAL LEATHER."""
+    category, sku = split_design(article)
+    if category and sku:
+        return sku
+    for text in (article, group):
+        stripped = _family_model(text)
+        if stripped and stripped != normalize_text(text):
+            return stripped
+    return sku or _family_model(article) or normalize_text(article)
+
+
 def _digit_suffix_items(items: Iterable[CanonicalItem], key: str) -> list[CanonicalItem]:
     """Design name plus only a colour number: VELA -> VELA 01, not VELA CORD 04."""
     if len(key) < 3:
@@ -86,6 +98,57 @@ def _digit_suffix_items(items: Iterable[CanonicalItem], key: str) -> list[Canoni
         if tail.isdigit() and len(tail) <= 4:
             hits.append(it)
     return hits
+
+
+def _word_prefix_items(items: Iterable[CanonicalItem], key: str) -> list[CanonicalItem]:
+    """Family token plus a longer name: Marseille -> Marseille Linen. Not a digit colour."""
+    if len(key) < 3:
+        return []
+    hits: list[CanonicalItem] = []
+    for it in items:
+        if len(it.key) <= len(key) or not it.key.startswith(key):
+            continue
+        tail = it.key[len(key):]
+        if tail.isdigit():
+            continue
+        if tail[:1].isalpha():
+            hits.append(it)
+    return hits
+
+
+def _measure(fields: dict[str, Any], names: tuple[str, ...]) -> float | None:
+    for name in names:
+        value = fields.get(name)
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value)
+    return None
+
+
+def _close_measure(left: float, right: float) -> bool:
+    return abs(left - right) <= max(0.05, abs(right) * 0.001)
+
+
+def _exact_measure(children: list[CanonicalItem], target: float | None, names: tuple[str, ...]) -> list[CanonicalItem]:
+    if target is None:
+        return []
+    return [
+        child for child in children
+        if (value := _measure(child.fields, names)) is not None and _close_measure(value, target)
+    ]
+
+
+def _sum_matches(children: list[CanonicalItem], target: float | None, names: tuple[str, ...]) -> bool:
+    if target is None or not children:
+        return False
+    total = 0.0
+    seen = False
+    for child in children:
+        value = _measure(child.fields, names)
+        if value is None:
+            return False
+        total += value
+        seen = True
+    return seen and _close_measure(total, target)
 
 
 @dataclass
@@ -315,8 +378,16 @@ def merge_documents(
             key = match_key(article)
             if not key:
                 continue
-            prefix_children = _digit_suffix_items(items.values(), key)
-            if _by_article(key):
+            family_label = _family_label(row.article, str(row.fields.get("_group") or category or ""))
+            family_key = match_key(family_label)
+            group_name = str(row.fields.get("_group") or category or "")
+            is_family = bool(
+                _GROUP_PREFIX.match(normalize_text(row.article))
+                or _GROUP_PREFIX.match(normalize_text(group_name))
+            )
+            prefix_children = _digit_suffix_items(items.values(), family_key)
+            loose_children = _word_prefix_items(items.values(), family_key)
+            if _by_article(key) and not is_family:
                 it = pick_lot(article, row.fields) or item_for_lot(article, row.fields)
                 it.sources.append(row.source)
                 if category:
@@ -335,7 +406,7 @@ def merge_documents(
                         _prefer(it, k, row.fields.get(k), overwrite=True)
                 if row.fields.get("_pack_group"):
                     _prefer(it, "_pack_group", row.fields.get("_pack_group"))
-            elif _GROUP_PREFIX.match(row.article) or prefix_children:
+            elif is_family or prefix_children or loose_children:
                 family_rows.append(row)
             else:
                 it = pick_lot(article, row.fields) or item_for_lot(article, row.fields)
@@ -569,18 +640,59 @@ def _attach_components(sheets: list[ExtractedSheet], items: dict[str, CanonicalI
             first.lines[0]["measurement"] = joined
 
 
+def _pick_family_children(
+    fam: Row,
+    items: dict[str, CanonicalItem],
+    *,
+    sole_row: bool,
+    used: set[int],
+) -> list[CanonicalItem]:
+    """Children of one packing family row.
+
+    One row whose metres/rolls equal the sum of colour lines is shared across them.
+    Several rows of the same family each keep the colour line with the same metres
+    or rolls, so a later row cannot overwrite the earlier weight.
+    A longer name (Marseille Linen) counts only when its measure matches the row.
+    """
+    model = _family_label(fam.article, str(fam.fields.get("_group") or ""))
+    model_key = match_key(model)
+    if not model_key:
+        return []
+    pool = [it for it in items.values() if id(it) not in used]
+    digit = _digit_suffix_items(pool, model_key)
+    loose = _word_prefix_items(pool, model_key)
+    target_m = _measure(fam.fields, ("meters",))
+    target_r = _measure(fam.fields, ("rolls", "boxes"))
+    exact = _exact_measure(digit, target_m, ("meters",)) or _exact_measure(digit, target_r, ("rolls", "boxes"))
+    if len(exact) == 1:
+        return exact
+    if digit and (_sum_matches(digit, target_m, ("meters",)) or _sum_matches(digit, target_r, ("rolls", "boxes"))):
+        return digit
+    loose_exact = _exact_measure(loose, target_m, ("meters",)) or _exact_measure(loose, target_r, ("rolls", "boxes"))
+    if len(loose_exact) == 1:
+        return loose_exact
+    if loose and (_sum_matches(loose, target_m, ("meters",)) or _sum_matches(loose, target_r, ("rolls", "boxes"))):
+        return loose
+    if sole_row and digit:
+        return digit
+    return []
+
+
 def _distribute_families(family_rows: list[Row], items: dict[str, CanonicalItem]) -> None:
+    grouped: dict[str, list[Row]] = {}
     for fam in family_rows:
-        model = _family_model(fam.article)
+        model_key = match_key(_family_label(fam.article, str(fam.fields.get("_group") or "")))
+        grouped.setdefault(model_key, []).append(fam)
+    used: set[int] = set()
+    ordered = [fam for rows in grouped.values() for fam in rows]
+    for fam in ordered:
+        model = _family_label(fam.article, str(fam.fields.get("_group") or ""))
         model_key = match_key(model)
         if not model_key:
             continue
-        longer = [
-            it for it in items.values()
-            if len(it.key) > len(model_key) and it.key.startswith(model_key)
-        ]
-        digit = _digit_suffix_items(longer, model_key)
-        children = digit or longer
+        children = _pick_family_children(
+            fam, items, sole_row=len(grouped.get(model_key, [])) == 1, used=used
+        )
         if not children:
             # keep the family itself as an item so its data is not lost
             fam_key = match_key(fam.article)
@@ -595,6 +707,8 @@ def _distribute_families(family_rows: list[Row], items: dict[str, CanonicalItem]
                     it.fields.setdefault(k, fam.fields[k])
             continue
 
+        for child in children:
+            used.add(id(child))
         # Net: prefer sender-spec net shares so colour lines match the ready etalon.
         # Gross: prefer sender-spec gross shares (not meters - that skewed G.W vs etalon).
         net = fam.fields.get("net_weight")
