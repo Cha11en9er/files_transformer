@@ -584,7 +584,26 @@ def classify_columns(columns: list[ColumnStat]) -> dict[int, str]:
         assigned_field[field_key] = idx
         assigned_col[idx] = field_key
     _split_duplicate_article_columns(columns, assigned_field, assigned_col)
+    _assign_unlabeled_color_beside_article(columns, assigned_field, assigned_col)
     return assigned_col
+
+
+def _assign_unlabeled_color_beside_article(
+    columns: list[ColumnStat],
+    assigned_field: dict[str, int],
+    assigned_col: dict[int, str],
+) -> None:
+    """PDF grids often drop the colour header, leaving 997 in the column after DESING."""
+    if "color" in assigned_field or "article" not in assigned_field:
+        return
+    col_by_index = {c.index: c for c in columns}
+    neighbor = col_by_index.get(assigned_field["article"] + 1)
+    if neighbor is None or neighbor.header_norm.strip() or neighbor.index in assigned_col:
+        return
+    if neighbor.numeric_fraction() < 0.6 or neighbor.max_magnitude() >= 10000:
+        return
+    assigned_col[neighbor.index] = "color"
+    assigned_field["color"] = neighbor.index
 
 
 def _split_duplicate_article_columns(

@@ -1247,4 +1247,21 @@ def test_design_plus_color_code_does_not_duplicate():
     assert "VELA" not in by
 
 
+def test_description_leading_sku_is_the_article():
+    from app.transform.extract import extract_sheet
+    from app.transform.reader import Sheet
+
+    grid = [
+        ["Описание", "Метры", "Цена", "Сумма"],
+        ["MAXWELL 997 Artificial upholstery leather, made from polyurethane", 455, 44.55, 20270.25],
+        ["MAXWELL 236 Artificial upholstery leather, made from polyurethane", 1111, 44.55, 49495.05],
+    ]
+    extracted = extract_sheet(Sheet(name="spec", grid=grid, source="spec.xlsx"))
+    assert extracted is not None
+    assert [row.article for row in extracted.rows] == ["MAXWELL", "MAXWELL"]
+    assert extracted.rows[0].fields.get("color") == "997"
+    assert "sku_missing" not in extracted.rows[0].fields
+    assert "Artificial" in str(extracted.rows[0].fields.get("description"))
+
+
 

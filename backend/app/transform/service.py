@@ -176,13 +176,37 @@ _HARDWARE_HS = ("7318", "8302", "9401", "8412", "3926", "3921")
 
 
 def detect_profile(items: list[CanonicalItem], sheets: list[ExtractedSheet] | None = None) -> str:
-    roles = {sheet.role for sheet in (sheets or [])}
-    # Separate invoice + packing workbooks are the Hangzhou 18233 layout even when
-    # the goods are hardware (18312 furniture profile), not fabric.
-    if "invoice" in roles and "packing" in roles and "mixed" not in roles:
+    sheets = sheets or []
+    roles = {sheet.role for sheet in sheets}
+    def _file_kind(name: str) -> str:
+        low = Path(name).name.lower()
+        hits = []
+        if "инв" in low or "invoice" in low or low.startswith("inv"):
+            hits.append("invoice")
+        if "пак" in low or "pack" in low:
+            hits.append("packing")
+        if "спец" in low or "spec" in low:
+            hits.append("specification")
+        return hits[0] if len(hits) == 1 else ""
+
+    kinds = {_file_kind(sheet.source) for sheet in sheets}
+    kinds.discard("")
+    # Separate invoice / packing / spec files are 18233. One workbook that already
+    # contains those sheets, with no sibling of another kind, stays Beijing.
+    if len(kinds) >= 2:
         return "18233"
-    if "mixed" in roles:
+    excel_sources = {
+        sheet.source
+        for sheet in sheets
+        if sheet.role in {"invoice", "packing", "specification", "mixed", "goods"}
+        and Path(sheet.source).suffix.lower() not in {".pdf", ".png", ".jpg", ".jpeg"}
+    }
+    if len(excel_sources) >= 2:
+        return "18233"
+    if "mixed" in roles and len(excel_sources) <= 1:
         return "beijing"
+    if "invoice" in roles and "packing" in roles:
+        return "18233"
     fabric = 0
     hardware = 0
     for it in items:
@@ -348,7 +372,7 @@ def transform_paths(
             message=(
                 f"файл {display} обработан кодом, нашлось {n} позиций"
                 if n
-                else "Таблица не собралась."
+                else _empty_table_message(display, sheets)
             ),
             role_summary=", ".join(sorted(set(roles))),
         ))
@@ -357,7 +381,7 @@ def transform_paths(
         input_sheets = scan_sheets
 
     result.items = merge_documents(input_sheets, catalog=catalog)
-    result.profile = detect_profile(result.items, input_sheets)
+    result.profile = detect_profile(result.items, input_sheets + scan_sheets)
     result.header = _extract_header(input_sheets)
     result.header = merge_header_fields(result.header, extract_header_fields(result.sources))
     result.header = enrich_header_from_goods(result.header, result.items)
@@ -373,6 +397,50 @@ def transform_paths(
                 "(файл вроде «сводная» / «описание»). Добавь его к комплекту или заполни описание вручную."
             )
     return result
+
+
+_COLUMN_RU = {
+    "article": "артикул",
+    "description": "описание",
+    "qty": "количество",
+    "meters": "метры",
+    "customs_code": "код ТН ВЭД",
+    "hs_code": "HS",
+    "price": "цена",
+    "amount": "сумма",
+    "net_weight": "нетто",
+    "gross_weight": "брутто",
+}
+
+
+def _empty_table_message(filename: str, sheets: list[ExtractedSheet]) -> str:
+    """Say which columns were found when the grid did not become goods rows."""
+    found: set[str] = set()
+    for sheet in sheets:
+        found.update(sheet.mapping.values())
+    if not found:
+        return f"Файл {filename} распознан, таблица с заголовками колонок не найдена."
+    found_ru = ", ".join(_COLUMN_RU[key] for key in _COLUMN_RU if key in found)
+    missing = [
+        _COLUMN_RU[key]
+        for key in ("article", "qty", "meters", "description", "customs_code")
+        if key not in found
+    ]
+    # A catalog often has a code and a description and no quantity. That is enough.
+    if {"customs_code", "description"} <= found or {"hs_code", "description"} <= found:
+        return (
+            f"Файл {filename} распознан, столбцы есть ({found_ru}). "
+            "Строки не собрались: в артикуле нет кода товара, количество не требуется для справочника."
+        )
+    if missing:
+        return (
+            f"Файл {filename} распознан, но не найдены столбцы: {', '.join(missing)}. "
+            f"Уже есть: {found_ru or 'ничего'}."
+        )
+    return (
+        f"Файл {filename} распознан, столбцы есть ({found_ru}). "
+        "Строки не собрались: артикул пустой или не похож на код товара."
+    )
 
 
 def _index_catalog(catalog: dict[str, dict[str, Any]], ex: ExtractedSheet) -> None:
@@ -392,6 +460,16 @@ def _index_catalog(catalog: dict[str, dict[str, Any]], ex: ExtractedSheet) -> No
         model_key = match_key(str(row.fields.get("model") or ""))
         if model_key and model_key not in catalog:
             catalog[model_key] = catalog[key]
+        digits = hs_digits(code)
+        if not digits:
+            continue
+        slot = f"hs:{digits}"
+        prev = catalog.get(slot)
+        desc = normalize_text(str(row.fields.get("description") or ""))
+        if prev is None:
+            catalog[slot] = catalog[key]
+        elif normalize_text(str(prev.get("description") or "")) != desc:
+            catalog[slot] = {"_conflict": True}
 
 
 # --------------------------------------------------------------------------- #

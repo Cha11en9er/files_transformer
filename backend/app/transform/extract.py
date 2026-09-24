@@ -74,7 +74,8 @@ _COMMERCIAL_FIELDS = frozenset({"qty", "price", "amount", "unit", "meters", "cur
 # Structural blanks in the article column, not product names.
 _BLANK_SKU = re.compile(
     r"^(?:[-–—−.…]|n/?a|n\.\s*a\.?|none|null|nil|нет|б/?н|б\.?\s*н\.?|"
-    r"без\s*арт.*|no\s*art.*|w/?o|tbd|xxx+)$",
+    r"без\s*арт.*|no\s*art.*|w/?o|tbd|xxx+|"
+    r"отсутств\w*|absent|missing|not\s+available)$",
     re.IGNORECASE,
 )
 
@@ -226,6 +227,9 @@ def _row_is_structural_noise(cells: list[Any]) -> bool:
         return True
     nums = sum(1 for t in texts if is_number_like(t) and not looks_like_hs_code(t))
     letters = sum(1 for t in texts if any(ch.isalpha() for ch in t) and not is_number_like(t))
+    # Catalog identity: code + manufacturer + "absent" + description. Not a repeated header.
+    if any(looks_like_hs_code(t) for t in texts) and letters >= 2:
+        return False
     if letters >= 3 and nums <= 1:
         return True
     return False
@@ -491,6 +495,40 @@ def _is_component_header(joined: str) -> bool:
 
 def _snapshot_line(fields: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in fields.items() if k in _LINE_FIELDS and v not in (None, "")}
+
+
+def _peel_sku_from_description(description: str) -> tuple[str, str | None, str] | None:
+    """Description that starts with a SKU and an optional colour code.
+
+    'MAXWELL 997 Artificial leather...' -> ('MAXWELL', '997', 'Artificial leather...').
+    A long goods name with no leading code stays a description.
+    """
+    text = (description or "").strip()
+    match = re.match(
+        r"^([A-Za-z][A-Za-z0-9][A-Za-z0-9._/-]{1,24})"
+        r"(?:[ \t]+(\d{2,4}))?"
+        r"[ \t]+(\S.{12,})$",
+        text,
+    )
+    if not match:
+        return None
+    article, color, rest = match.group(1), match.group(2), match.group(3).strip()
+    if not is_plausible_article(article):
+        return None
+    if not re.search(r"[A-Za-zА-Яа-яЁё]{4,}", rest):
+        return None
+    return article, color, rest
+
+
+def _description_fragment(article: str, description: str) -> bool:
+    """A torn PDF cell often puts the tail of the description into the article column."""
+    art = (article or "").strip()
+    desc = (description or "").strip()
+    if len(art) < 4 or not desc or art.casefold() == desc.casefold():
+        return False
+    if re.search(r"[A-Za-z0-9]", art):
+        return False
+    return art.casefold() in desc.casefold() and len(art) < len(desc) * 0.75
 
 
 def _drop_note_description(fields: dict[str, Any]) -> None:
@@ -813,7 +851,14 @@ def extract_sheet(
         own_qty = _own(fields, inherited, "qty") or _own(fields, inherited, "meters")
         own_commercial = _own(fields, inherited, "price") or _own(fields, inherited, "amount")
 
-        if not article_raw and not any(k in fields for k in ("qty", "meters", "amount", "net_weight", "area")):
+        catalog_identity = role == "catalog" and (
+            fields.get("customs_code") or fields.get("hs_code")
+        ) and fields.get("description")
+        if (
+            not article_raw
+            and not catalog_identity
+            and not any(k in fields for k in ("qty", "meters", "amount", "net_weight", "area"))
+        ):
             continue
 
         bucket = ex.component_rows if component_mode else ex.rows
@@ -835,7 +880,7 @@ def extract_sheet(
             _attach_caption(prev, fields, cat)
             continue
 
-        if prev is not None and not own_article and not own_qty and not component_mode:
+        if prev is not None and not own_article and not own_qty and not component_mode and not catalog_identity:
             packing_only = _strip_inherited(fields, inherited, _COMMERCIAL_FIELDS)
             packing_only = {
                 k: v for k, v in packing_only.items() if k in _PACKING_FIELDS or k not in _COMMERCIAL_FIELDS
@@ -865,7 +910,14 @@ def extract_sheet(
             fields["_group"] = category
         if not article:
             desc = str(fields.get("description") or "").strip()
-            if desc and not _is_header_label_article(desc):
+            peeled = _peel_sku_from_description(desc)
+            if peeled:
+                article, color, rest = peeled
+                fields["description"] = rest
+                if color and fields.get("color") in (None, ""):
+                    fields["color"] = color
+                fields.pop("sku_missing", None)
+            elif desc and not _is_header_label_article(desc):
                 article = desc
             elif (
                 article_cell
@@ -875,10 +927,13 @@ def extract_sheet(
                 article = article_cell.strip()
             elif item_no is not None:
                 article = f"#{item_no}"
-            if article:
+            if article and "sku_missing" not in fields and not peeled:
                 fields["sku_missing"] = True
         if not article:
             continue
+        desc_now = str(fields.get("description") or "")
+        if _description_fragment(article, desc_now):
+            fields["sku_missing"] = True
         if _is_header_label_article(article):
             continue
         if role != "catalog" and not _has_goods_numbers(fields):

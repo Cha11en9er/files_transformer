@@ -49,6 +49,13 @@ _INVOICE_NO = re.compile(
     r"[\s|:：.]*([A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9._/-]{2,})",
     re.I,
 )
+# One cell: "INVOICE DATE/NUMER : 29,04,2026 / ESI2026000000043".
+_INVOICE_DATE_NUMER = re.compile(
+    r"invoice\s+date\s*/\s*(?:numer|number|no\.?|nr\.?)\s*[:：]?\s*"
+    r"\d{1,2}[,./]\d{1,2}[,./]\d{2,4}\s*/\s*"
+    r"([A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9._/-]{2,})",
+    re.I,
+)
 _CONTRACT_NO = re.compile(
     r"(?:contract(?:/контракт)?|контракт(?:у|а|е)?)\s*(?:no\.?|№|#|:)"
     r"[\s|:：.]*([A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9._/-]{1,})",
@@ -86,6 +93,8 @@ _GRID_VALUE_LABELS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^дата\s*:?$", re.I), "invoice_date"),
     (re.compile(r"^(?:container\s*(?:no\.?|number)?|контейнер)\s*:?$", re.I), "container_no"),
     (re.compile(r"^(?:contract(?:\s*(?:no\.?|№|#))?|контракт(?:\s*№)?)\s*:?$", re.I), "contract_no"),
+    # Broker blank: "SPECIFICATION/Спецификация №" and the number sits in the next cell.
+    (re.compile(r"^(?:specification|спецификац\w*).*№\s*$", re.I), "spec_no"),
 )
 _ADDRESS_HINT = re.compile(
     r"(?:\d{5,6}|OGRN|ОГРН|TIN|INN|ИНН|KPP|КПП|street|\bst\.|str\.|avenue|road|"
@@ -342,6 +351,9 @@ def _clean_invoice_no(raw: str | None) -> str | None:
     value = _fold_lookalikes(match.group(1)).strip(" .")
     if value.upper() in {"NO", "NR", "DATE", "INV"}:
         return None
+    # A real invoice id has a digit. Nearby titles ("COMMERCIAL") are not numbers.
+    if not re.search(r"\d", value):
+        return None
     return value
 
 
@@ -428,6 +440,8 @@ def _hits_from_text(blob: str) -> dict[str, list[str]]:
 
     for match in _INVOICE_NO.finditer(blob):
         add("invoice_no", _clean_invoice_no(match.group(1)))
+    for match in _INVOICE_DATE_NUMER.finditer(blob):
+        add("invoice_no", _clean_invoice_no(match.group(1)))
     for match in _CONTRACT_NO.finditer(blob):
         add("contract_no", _clean_contract_no(match.group(1)))
     for match in _CONTRACT_DATED.finditer(blob):
@@ -489,7 +503,7 @@ def _hits_from_grid(rows: list[list[str]]) -> dict[str, list[str]]:
     def add(key: str, value: str | None) -> None:
         if key in {"buyer", "seller", "manufacturer"}:
             cleaned = _clean_party(value)
-        elif key == "invoice_no":
+        elif key in {"invoice_no", "spec_no"}:
             cleaned = _clean_invoice_no(value)
         elif key == "contract_no":
             cleaned = _clean_contract_no(value)
@@ -552,6 +566,10 @@ def _collapse_hits(
             picked = _pick_agreed(by_field.get(key) or [])
         if picked:
             result[key] = picked
+    if "invoice_no" not in result:
+        spec_no = _pick_agreed(by_field.get("spec_no") or [])
+        if spec_no:
+            result["invoice_no"] = spec_no
     if "seller" not in result and letterheads:
         agreed_seller = _pick_agreed([(f"letterhead:{i}", name) for i, name in enumerate(letterheads)])
         if agreed_seller:
