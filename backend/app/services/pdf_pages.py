@@ -97,6 +97,24 @@ def _cell_text(value: Any) -> str:
     return text
 
 
+def _fit_token(word: str, font, width: int) -> list[str]:
+    """A token wider than the cell used to be painted over by the next cell."""
+    if not word or width <= 8 or font.getlength(word) <= width:
+        return [word]
+    parts: list[str] = []
+    buf = ""
+    for ch in word:
+        trial = buf + ch
+        if font.getlength(trial) <= width or not buf:
+            buf = trial
+        else:
+            parts.append(buf)
+            buf = ch
+    if buf:
+        parts.append(buf)
+    return parts or [word]
+
+
 def _wrap(text: str, font, width: int) -> list[str]:
     if not text:
         return [""]
@@ -105,12 +123,13 @@ def _wrap(text: str, font, width: int) -> list[str]:
         words = paragraph.split(" ") or [""]
         current = ""
         for word in words:
-            trial = word if not current else f"{current} {word}"
-            if font.getlength(trial) <= width or not current:
-                current = trial
-            else:
-                lines.append(current)
-                current = word
+            for piece in _fit_token(word, font, width):
+                trial = piece if not current else f"{current} {piece}"
+                if font.getlength(trial) <= width or not current:
+                    current = trial
+                else:
+                    lines.append(current)
+                    current = piece
         lines.append(current)
     return lines or [""]
 
