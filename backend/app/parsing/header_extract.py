@@ -67,6 +67,12 @@ _CONTRACT_DATED = re.compile(
     r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})",
     re.I,
 )
+_DOC_DATED = re.compile(
+    r"(?:specification|спецификац\w*|invoice|инвойс|inv\.?\s*no\.?)"
+    r"[^\n]{0,80}?(?:от|dd\.?|dated)\s*"
+    r"(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})",
+    re.I,
+)
 _SALUTATION = re.compile(
     r"^(?:messrs?|attn|attention|sir|sirs|madam|dear|господа|уважаемые)\.?$",
     re.I,
@@ -462,6 +468,13 @@ def _hits_from_text(blob: str) -> dict[str, list[str]]:
         add("contract_no", _clean_contract_no(match.group(1)))
     for match in _CONTRACT_DATED.finditer(blob):
         add("contract_date", match.group(1))
+    for match in _DOC_DATED.finditer(blob):
+        window = blob[max(0, match.start() - 24) : match.start()]
+        if re.search(r"(?:contract|контракт)\s*$", window, re.I):
+            continue
+        if _date_inside_code(blob, match.start(1), match.end(1)):
+            continue
+        add("invoice_date", match.group(1))
     for match in _DATE_LABEL.finditer(blob):
         prefix = blob[max(0, match.start() - 24) : match.start()]
         if _DATE_STEAL.search(prefix):

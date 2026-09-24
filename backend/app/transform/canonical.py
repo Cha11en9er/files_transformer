@@ -283,10 +283,16 @@ def normalize_currency_iso(value: Any) -> str | None:
         return None
     found: list[str] = []
     for code in CURRENCY_ISO:
-        if re.search(rf"\b{code}\b", text, re.I):
+        for match in re.finditer(rf"\b{code}\b", text, re.I):
+            raw = text[match.start() : match.end()]
+            after = text[match.end() : match.end() + 1]
+            # "Cad. No" is a street abbreviation, not the CAD currency.
+            if after == "." and raw != raw.upper():
+                continue
             iso = _CURRENCY_ISO_ALT.get(code.upper(), code.upper())
             if iso not in found:
                 found.append(iso)
+            break
     if len(found) == 1:
         return found[0]
     if len(found) >= 2:
