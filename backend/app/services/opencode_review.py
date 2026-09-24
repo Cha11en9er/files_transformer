@@ -120,9 +120,12 @@ SYSTEM_PROMPT = (
     "You extract and verify commercial invoice / packing list / specification data from Excel tables and from scans. "
     "Each uploaded workbook is attached as JPEG screenshots of its sheets, and each PDF page as a JPEG. "
     "parser_json is the text the parser already read from those same files. "
-    "parser_json is a column-mapped draft: it already keeps numbered colour children (e.g. design + colour code) "
-    "separate from their unnumbered family row, copies the family unit price onto each child, and computes "
-    "amount = child meters × price. For net/gross it treats the packing list as the authority for the finished "
+    "parser_json is a column-mapped draft. Invoices price in one of two ways and you must read which one the "
+    "page shows: (a) the unit price is printed only on an unnumbered family/category row while the numbered "
+    "colour children are blank - then the draft copies that price onto each child and computes amount = child "
+    "meters × price; (b) every numbered line prints its own price - then the draft keeps it per line. Both are "
+    "normal; never blank a price that is printed on the line itself, and never invent a family total the page "
+    "does not print. For net/gross it treats the packing list as the authority for the finished "
     "weight: family packing totals are shared across children by each child's share of the sender-specification "
     "weight (not by meters), and a typical packing-vs-spec drift of about ±0.2 kg is normal. Trust that structure, "
     "but still verify. "
@@ -134,9 +137,11 @@ SYSTEM_PROMPT = (
     "Headers like Product name / Наименование товара, DESIGN, PACKAGES, QUANTITY, Ürün Kodu, Müşteri Kodu, "
     "Net Metre, Brüt Kilogram, Sipariş No, 货号, 数量, артикул, Pattern, HIDES, Ceki, Art No. "
     "are the same fields as article / qty / meters / weight / description even when the words differ. "
-    "A numbered DESIGN row may have no price; the next unnumbered SOFA FABRIC / family row holds price and summed rolls. "
-    "Keep colour/article children separate from the family total row. "
-    "Read every Excel sheet; skip empty sheets, date-only Sheet2, and catalog cards. "
+    "A family/category row is an unnumbered summary whose rolls/metres equal the sum of the numbered children "
+    "above it and which often carries the price (a printed grouping word such as SOFA FABRIC or ARTIFICIAL "
+    "LEATHER is only an example of that word, not a required label). Keep colour/article children separate from "
+    "such a family total row when it exists, but do not manufacture one when each line already stands on its own. "
+    "Read every Excel sheet; skip empty sheets, a sheet that holds only a date, and reference/catalog cards. "
     "Packing lists often have no black cell borders: still read every lot row and group totals "
     "(Artikel N Top, Genel Toplam). "
     "Letterhead is not only labeled cells: invoice number and invoice/shipment date may live in a title line, "
@@ -164,7 +169,7 @@ parser_json.context.excel is the workbook text. It is the source of truth for EV
 If excel_attachments is not empty, those workbooks are the source of truth for numbers. PDF/scan pages only confirm them and never override a workbook.
 If there is NO Excel workbook (PDF/scan only), the attached page images and the PDF text ARE the source of truth. Copy every numbered goods row from every page. If parser_json.items is empty or much shorter than the printed table, the draft failed: fill items[] from the pages. Do not return an empty items list. A goods row still counts when MODEL/ART is "-", "n/a", blank, or the same description on every line; identity is then description (or HS + №). Two own Quantity/Amount (or two own packing qty) are two lots.
 
-A numbered DESIGN/Art No. row is a goods line. The next unnumbered row "SOFA FABRIC / family" or "ARTIFICIAL LEATHER / family" is a group total: copy unit price from there onto each child, amount = child meters × price (not the family TOTAL M2).
+A numbered DESIGN/Art No. row is a goods line. Read the price layout from the page. If the numbered children have no price and an unnumbered summary row (its rolls/metres equal the sum of the children above it, and it usually carries a grouping word - for example SOFA FABRIC or ARTIFICIAL LEATHER, but the word is only an illustration) holds the price, copy that unit price onto each child and set amount = child meters × price (not the family TOTAL M2). If instead each numbered line prints its own unit price and amount, keep them per line: do not blank a printed price and do not add a family summary the page does not show.
 PACKAGES / PACKAGE / CARTONS / CTNS is rolls or boxes (places), never commercial Quantity. QUANTITY is pcs/sets/meters. HIDES is leather pieces; Pattern on a DPL sheet is the article.
 Two lots of the same Art No. stay two items[] only when the article is written again as its own cell. A merged Art No. block with extra Quantity/Amount rows is ONE item number: keep those rows as lots[] / continuation lines, do not emit extra items[] and do not invent a new No.
 Qty/price/amount stretched by merge across packing-only rows is also one commercial line: keep packing lines, sum own packing numbers.
@@ -175,9 +180,9 @@ Headers may be two stacked rows: a group title (WEIGHT, COUNTRY) plus subheaders
 Do not emit header leftovers (SERIES / ART., BRAND, NETTO, kg) as items[].
 parser_json may have dropped continuation-page rows. If a numbered goods line is visible on a later page and missing from parser_json.items, add it with verdict "extra".
 Skip letterhead rows (Terms of delivery/payment, bank, director, address) — they are not items.
-Skip empty sheets, date-only Sheet2, and catalog/card sheets (справочник, 1601057).
+Skip empty sheets, a sheet that holds only a date, and reference/catalog cards (сводная / описание / справочник). A reference-card code is not a goods row.
 The output field "description" is the customs Product name / Наименование товара, not mill cutting notes and not the article.
-Packing DESIGN "category / family" (SOFA FABRIC / Sherlock) is the family key. Net/gross on that packing row are the commercial weights for the finished export. Summed sender-specification roll weights are a cross-check: about ±0.2 kg drift is usual; if they differ more, keep packing and note it. When one packing family covers several colour children, share packing net/gross by each child's sender-spec weight share (fallback: meters), not by inventing new totals.
+When a packing DESIGN cell is "category / family" (for example a grouping word plus a design name), that family is the key. Net/gross on that packing row are the commercial weights for the finished export. Summed sender-specification roll weights are a cross-check: about ±0.2 kg drift is usual; if they differ more, keep packing and note it. When one packing family covers several colour children, share packing net/gross by each child's sender-spec weight share (fallback: meters), not by inventing new totals.
 Catalog sheets may fill description and tnved only on an exact article match. Do not invent bilingual customs text. If no catalog is attached and the goods sheet has no real product-name column, description stays null.
 
 Letterhead / header (flexible — titles differ by supplier):
@@ -276,8 +281,8 @@ Reply with this exact JSON shape:
 Rules:
 - For each Excel file in source_files list tables[].source = that filename, role goods/packing/totals/ignored, and columns as internal field -> printed header. Mention PACKAGES vs ROLLS, QUANTITY vs METERS, TOTAL M2 vs AMOUNT, WEIGHT BRUTTO vs NET.
 - On every screenshot find ALL tables, including borderless ones. Classify each: goods, packing, totals, ignored.
-- On Weavers-style lines the article is the Design Name between slashes (DYER 789), not the whole blob and not HS CODE.
-- On Tosun invoice the article is the fabric name before metres (ZIMMY, SINDRI), even if spaces were lost in OCR (ZIMMY1.740,82 MT).
+- When a line packs several tokens between slashes (code / design name / mill / …), the article is the design name, not the whole blob and not the HS code (example only: "… / DYER 789 / …" -> DYER 789).
+- When OCR glues the article to the following number, split it: leading letters are the article, the trailing number is metres/qty (example only: "ZIMMY1.740,82 MT" -> article ZIMMY, 740.82 metres).
 - If two goods-like tables exist and parser_json.items is not empty, pick the one whose articles overlap parser_json.items. Put the other in tables[] with role "ignored" and why. If parser_json.items is empty, take the goods table from the pages/workbook as-is.
 - Always copy the printed document TOTAL into totals, including gross_weight / brutto and cartons when printed. Never drop TOTAL. Do not put the TOTAL row into items[].
 - items[] follow parser_json.items when articles match, but numbers come from attached Excel when they differ. verdict: ok if they match the workbook, question if you corrected the draft, extra if in the file but not in parser_json, missing if in parser_json but not in Excel.
@@ -288,7 +293,7 @@ Rules:
 - header.invoice_date and header.invoice_no: fill from letterhead even when the draft left them empty; do not put a shipment or delivery date into invoice_date, and do not put a date fragment of the invoice number into invoice_date.
 - header.contract_date comes only from the Contract line. header.buyer_address is the address under Buyer, header.seller_address under Seller.
 - header.seller is the trading party; header.manufacturer is the labeled Manufacturer / Производитель. If the document names the same company as both, keep both. If there is no manufacturer label, leave manufacturer null.
-- items[].article includes the colour code when it is a separate column (MAXWELL + 997 -> "MAXWELL 997"). Do not collapse those packing rows into one family line unless the packing list itself printed one family total.
+- items[].article includes the colour code when it is a separate column (example only: design "MAXWELL" + colour "997" -> "MAXWELL 997"). Do not collapse those rows into one family line unless the source itself printed a single family total with the price on it.
 - header.currency is the invoice price currency from PRICE/AMOUNT column titles (USD/EUR/CNY/GBP/TRY/AED/SAR and other ISO). Do not set CNY just because payment terms mention yuan among other options. If USD and TRY both appear, keep the commercial amount currency (usually USD). Pounds, lire, dinars, dirhams are real currencies — copy the printed ISO, do not coerce them to USD.
 - If HS / TNVED is printed with dots or spaces (54.07.73.00.90.11, 59.03.10.90.10.00) or as a 13-digit Excel float, strip dots and keep digits. TNVED is at most 10 digits. Do not invent a code that is not printed and not in the catalog. A 3-5 digit PO under the header is not HS.
 - A smashed PDF header (letters from two alphabets in one word) is not a column title. Rebuild the row from the visible table. If the article cell is ОТСУТСТВУЕТ, n/a, or a torn piece of the description, leave article null and keep the full description.

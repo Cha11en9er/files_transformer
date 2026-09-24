@@ -352,6 +352,15 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
     no = 1
     for fam in families:
         group_items = by_family[fam]
+        # A real family = a printed category (SOFA FABRIC / ARTIFICIAL LEATHER)
+        # over colour children, where the source prints the unit price only on the
+        # family row. Then children show colour + no price and a summary row carries
+        # price and the family total. Distinct SKUs that merely share a design token
+        # (MAXWELL 997 / 236, NERGIS 001 / 305) have no category prefix and their own
+        # printed price - keep each as its own priced line and emit no summary row,
+        # so the export never blanks a real per-position price.
+        prefix = _group_prefix(group_items[0], fabric)
+        is_family = bool(prefix)
         group_rolls = 0.0
         group_meters = 0.0
         group_qty = 0.0
@@ -375,6 +384,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
             unit = commercial.get("unit") or inv.get("unit") or packing.get("unit") or unit
             price = commercial.get("price") or inv.get("price") or price
             amount = _r2(commercial.get("amount"))
+            item_price = _as_float(commercial.get("price") or inv.get("price"))
             if fabric:
                 rows.append(
                     [
@@ -386,8 +396,8 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                         area,
                         meters,
                         unit or "meters",
-                        None,
-                        None,
+                        None if is_family else item_price,
+                        None if is_family else amount,
                     ]
                 )
             else:
@@ -410,11 +420,10 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
             group_amount += float(amount or 0)
             no += 1
         first = group_items[0]
-        prefix = _group_prefix(first, fabric)
         label_name = (first.get("article") or fam).split()[0] if fabric else (first.get("article") or "")
         group_design = f"{prefix}\n{label_name}".strip() if prefix else str(first.get("article") or "")
         group_amount = _r2(float(price) * group_meters) if fabric and price is not None else _r2(group_amount)
-        if fabric:
+        if fabric and is_family:
             rows.append(
                 [
                     None,
@@ -429,7 +438,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                     group_amount,
                 ]
             )
-        elif prefix:
+        elif not fabric and prefix:
             rows.append(
                 [
                     None,
