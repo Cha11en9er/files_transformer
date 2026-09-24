@@ -118,7 +118,8 @@ DISABLED_TOOLS = {
 
 SYSTEM_PROMPT = (
     "You extract and verify commercial invoice / packing list / specification data from Excel tables and from scans. "
-    "Original Excel workbooks may be attached as files. Those workbooks are the source of truth for numbers. "
+    "Each uploaded workbook is attached as JPEG screenshots of its sheets, and each PDF page as a JPEG. "
+    "parser_json is the text the parser already read from those same files. "
     "parser_json is a column-mapped draft: it already keeps numbered colour children (e.g. design + colour code) "
     "separate from their unnumbered family row, copies the family unit price onto each child, and computes "
     "amount = child meters × price. For net/gross it treats the packing list as the authority for the finished "
@@ -143,8 +144,8 @@ SYSTEM_PROMPT = (
     "shipment date with the invoice number, and do not take B/L / ETD / ETA dates as invoice_date. "
     "Customs description and TN VED usually come from a reference catalog (сводная / описание / справочник), "
     "not from an empty Annotation column; if the catalog is absent, leave description null and say so. "
-    "If Excel workbooks are attached they are the source of truth for numbers. "
-    "If the upload is PDF/scan only, the page images and PDF text are the source of truth: "
+    "Numbers in parser_json.context come from the workbooks. Page images confirm scans and never replace a workbook figure. "
+    "If the upload is PDF/scan only, the JPEG page images and the extracted text are the source of truth: "
     "copy every goods row from every page. A table may continue on later pages without a header. "
     "A goods row is any table body line with qty/price/amount/weight/packages, even when Art No. "
     "is blank, '-', 'n/a', or a description instead of a SKU. If parser_json.items is empty, "
@@ -154,11 +155,11 @@ SYSTEM_PROMPT = (
     "prices or quantities that are not visible in the attached Excel, images or parser_json."
 )
 
-USER_PROMPT_TEMPLATE = """You get a heuristic draft (parser_json), then original Excel files attached after this text, then optional PDF/scan pages.
+USER_PROMPT_TEMPLATE = """You get a heuristic draft (parser_json) and then JPEG screenshots: every Excel sheet of every uploaded workbook, and every PDF page. The files themselves are these images. Do not expect a raw xlsx or a raw PDF.
 
 parser_json is a DRAFT built by column synonyms. It can be wrong: TOTAL M2 / area copied into amount, mill notes like (15+30) or (A) copied into description, comma 10,4 read as 104, missing invoice_date from a free-form title, or net/gross shared by the wrong key. Do not trust it blindly.
 
-excel_attachments lists the original workbooks attached as binary files. Read those workbooks. They are the source of truth for EVERY numeric column, not only amount: qty, unit, price, amount, rolls/packages/cartons/boxes, meters, area, net_weight, gross_weight (WEIGHT BRUTTO / BRUTTO / G.W. / GROSS WEIGHT), volume, measurement, pcs_per_carton. If draft and workbook disagree, items[] must carry the workbook number and verdict "question" with notes starting with "excel:". If packing printed a brutto/gross and the draft left gross_weight null or 0, copy the printed number. If PACKAGE/CARTONS is a separate column from QUANTITY, do not put packages into qty.
+parser_json.context.excel is the workbook text. It is the source of truth for EVERY numeric column, not only amount: qty, unit, price, amount, rolls/packages/cartons/boxes, meters, area, net_weight, gross_weight (WEIGHT BRUTTO / BRUTTO / G.W. / GROSS WEIGHT), volume, measurement, pcs_per_carton. If draft and workbook disagree, items[] must carry the workbook number and verdict "question" with notes starting with "excel:". If packing printed a brutto/gross and the draft left gross_weight null or 0, copy the printed number. If PACKAGE/CARTONS is a separate column from QUANTITY, do not put packages into qty.
 
 If excel_attachments is not empty, those workbooks are the source of truth for numbers. PDF/scan pages only confirm them and never override a workbook.
 If there is NO Excel workbook (PDF/scan only), the attached page images and the PDF text ARE the source of truth. Copy every numbered goods row from every page. If parser_json.items is empty or much shorter than the printed table, the draft failed: fill items[] from the pages. Do not return an empty items list. A goods row still counts when MODEL/ART is "-", "n/a", blank, or the same description on every line; identity is then description (or HS + №). Two own Quantity/Amount (or two own packing qty) are two lots.
@@ -1252,8 +1253,9 @@ def review_with_opencode(
 
     prompt = build_user_prompt(snapshot)
     parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-    for path in excel_files:
-        parts.append(_binary_file_part(path))
+    # An xlsx sent as a file is rejected ("must be a valid PDF") and the
+    # provider then drops the page images too. Cell text from the workbook
+    # is already in the prompt. Images are extra pages of the same sheets.
     for page in vision_pages:
         parts.append(_file_part(page))
 
@@ -1283,6 +1285,10 @@ def review_with_opencode(
             reply.raise_for_status()
             raw_text = _assistant_text(reply.json())
             result["raw_text"] = raw_text
+            if "APIError" in raw_text or "invalid_parameter_error" in raw_text or "invalid_request_error" in raw_text:
+                result["status"] = "error"
+                result["error"] = raw_text[:500]
+                return result
             extracted = extract_json_payload(raw_text)
             result.update(normalize_model_payload(extracted))
             result["status"] = "ok"
