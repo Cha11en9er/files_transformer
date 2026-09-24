@@ -5,8 +5,12 @@ Not RAG over a vector store: a compact atlas of how goods lines look versus nois
 """
 
 DOCUMENT_SHAPES = """
-How source files look. EXAMPLES from other shipments, not the current job.
-Use them only to recognise layout. Copy numbers only from this shipment's Excel, images and parser_json.
+How source files CAN look. These are EXAMPLES from past shipments, not the current job and not a spec of where
+anything must sit. A new file may use other column words, another language, a different sheet count, merged or
+split headers, and may price per line or only on a family row. Never assume that a supplier name, a column
+position, or a family/category word (SOFA FABRIC, ARTIFICIAL LEATHER, Seçme Listesi, ...) from an example also
+appears in this file - decide every field from THIS file's own grid, images and parser_json. The examples
+calibrate recognition only; copy numbers solely from this shipment's Excel, images and parser_json.
 
 Languages mix freely (RU/EN/ZH/TR/IT and later others). Same field, different title:
   article = DESIGN / Art No. / Articul / Артикул / 货号 / Pattern / Ürün Kodu / Müşteri Kodu / ARTICLE
