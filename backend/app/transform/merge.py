@@ -193,7 +193,15 @@ def _aggregate_detail(rows: Iterable[Row]) -> dict[str, dict[str, Any]]:
         if not key:
             continue
         agg = out.setdefault(key, {"article": row.article, "rolls": 0})
-        agg["rolls"] += 1
+        own_places = row.fields.get("rolls")
+        if not isinstance(own_places, (int, float)):
+            own_places = row.fields.get("boxes")
+        if isinstance(own_places, (int, float)) and own_places > 0:
+            # Lot lines already print a place count - sum it.
+            agg["rolls"] = round(float(agg.get("rolls") or 0) + float(own_places), 6)
+        else:
+            # True per-roll detail: one grid row = one place.
+            agg["rolls"] = float(agg.get("rolls") or 0) + 1
         for f in ("meters", "area", "net_weight", "gross_weight"):
             v = row.fields.get(f)
             if isinstance(v, (int, float)):
@@ -350,7 +358,7 @@ def merge_documents(
             for it in cands:
                 it.sources.append(sheet.source + " (spec)")
                 if stamp_measures:
-                    for k in ("meters", "area", "width"):
+                    for k in ("meters", "area", "width", "rolls", "boxes"):
                         _prefer(it, k, data.get(k))
                 for k in ("hs_code", "customs_code", "description", "price", "color"):
                     if via_suffix and len(cands) > 1 and k == "color":
@@ -395,7 +403,7 @@ def merge_documents(
                 if row.fields.get("_group"):
                     _prefer(it, "_group", row.fields.get("_group"))
                 if row.lines:
-                    _merge_lines(it, row.lines)
+                    _merge_lines(it, row.lines, from_packing=True)
                 else:
                     _apply_packing_to_item(it, row.fields)
                 for k in _PACKING_FILL:
@@ -414,7 +422,7 @@ def merge_documents(
                 if category:
                     _prefer(it, "_group", category)
                 if row.lines:
-                    _merge_lines(it, row.lines)
+                    _merge_lines(it, row.lines, from_packing=True)
                 else:
                     _apply_packing_to_item(it, row.fields)
                 for k in _PACKING_FILL:
@@ -517,9 +525,23 @@ def _refresh_item_from_lines(it: CanonicalItem) -> None:
             it.fields[key] = round(sum(vals), 6)
 
 
-def _merge_lines(it: CanonicalItem, incoming: list[dict[str, Any]]) -> None:
+def _merge_lines(it: CanonicalItem, incoming: list[dict[str, Any]], *, from_packing: bool = False) -> None:
     if not incoming:
         return
+    if from_packing and it.lines:
+        # Packing is the authority for places/meters/weights. Drop measure
+        # echoes of the commercial qty (meters without rolls/weight) so they
+        # are not double-counted when packing lot lines are appended.
+        cleaned: list[dict[str, Any]] = []
+        for line in it.lines:
+            has_places = line.get("rolls") not in (None, "") or line.get("boxes") not in (None, "")
+            has_weight = line.get("net_weight") not in (None, "") or line.get("gross_weight") not in (None, "")
+            if not has_places and not has_weight:
+                for key in ("meters", "area", "net_weight", "gross_weight", "rolls", "boxes", "volume"):
+                    line.pop(key, None)
+            if any(v not in (None, "") for v in line.values()):
+                cleaned.append(line)
+        it.lines = cleaned
     if not it.lines:
         it.lines = [dict(line) for line in incoming]
         _refresh_item_from_lines(it)
@@ -551,6 +573,8 @@ def _merge_lines(it: CanonicalItem, incoming: list[dict[str, Any]]) -> None:
             if value in (None, ""):
                 continue
             if key in ("net_weight", "gross_weight", "volume", "boxes", "measurement", "pcs_per_carton"):
+                line[key] = value
+            elif from_packing and key in ("rolls", "meters", "area"):
                 line[key] = value
             elif line.get(key) in (None, ""):
                 line[key] = value

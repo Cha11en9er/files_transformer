@@ -1018,7 +1018,16 @@ def extract_sheet(
         blob = f"{ex.header_text} {sheet.name} {sheet.source}".lower()
         packing_hint = any(
             token in blob
-            for token in ("packing list", "packing", "упаковоч", "çeki", "ceki", "seçme listesi")
+            for token in (
+                "packing list",
+                "packing",
+                "plist",
+                "pack list",
+                "упаковоч",
+                "çeki",
+                "ceki",
+                "seçme listesi",
+            )
         )
         # One row per colour (own meters/price) is a commercial lot, not roll-detail.
         # Per-roll lists repeat one colour many times and usually have no price.
@@ -1028,9 +1037,23 @@ def extract_sheet(
             if str(row_obj.fields.get("color") or "").strip()
         }
         color_lots = len(colors) >= 2 and len(colors) >= nrows * 0.5
-        if color_lots or (packing_hint and priced_lots >= max(2, nrows // 3)):
+        # Borderless packing: each line already carries its own place count (>1).
+        # That is lot packing, not a Hangzhou-style one-roll-per-row detail sheet.
+        multi_place_lots = sum(
+            1
+            for row_obj in ex.rows
+            if isinstance(row_obj.fields.get("rolls"), (int, float))
+            and float(row_obj.fields["rolls"]) > 1
+        )
+        lot_packing = multi_place_lots >= max(2, nrows // 4)
+        if color_lots or lot_packing or (packing_hint and priced_lots >= max(2, nrows // 3)):
             ex.detail = False
-            if packing_hint and role != "catalog":
+            if (packing_hint or lot_packing) and role != "catalog":
+                ex.role = "packing"
+        elif packing_hint and not priced_lots:
+            # Packing without prices still stays packing, even when articles repeat.
+            ex.detail = False
+            if role != "catalog":
                 ex.role = "packing"
         else:
             ex.detail = True
