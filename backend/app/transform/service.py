@@ -556,7 +556,8 @@ def canonical_to_rows(items: list[CanonicalItem]) -> list[dict[str, Any]]:
         long_code = hs_digits(f.get("hs_code")) or hs_digits(f.get("customs_code"))
         tnved = tnved_digits(f.get("customs_code")) or tnved_digits(f.get("hs_code"))
         if long_code:
-            customs["hs_code"] = long_code[:13]
+            # Customer rule: код гармонизированной системы не длиннее 10 знаков, без точек.
+            customs["hs_code"] = long_code[:10]
         if tnved:
             customs["tnved_code"] = tnved[:10]
         if customs.get("tnved_code") and not customs.get("hs_code"):
