@@ -1136,6 +1136,29 @@ def export_currency_label(code: str | None, *, hangzhou_style: bool = False) -> 
     return normalized
 
 
+# Russian currency word for spec/price column headers ("Цена, Юань").
+_CCY_WORD_RU = {
+    "CNY": "Юань",
+    "RMB": "Юань",
+    "USD": "долл. США",
+    "EUR": "Евро",
+    "RUB": "руб.",
+    "TRY": "тур. лира",
+    "GBP": "фунт",
+}
+
+
+def export_currency_word_ru(code: str | None) -> str:
+    """Russian currency word for the specification price columns.
+
+    Falls back to the ISO code so a currency we do not have a word for still
+    shows the right money instead of a hardcoded «Юань»."""
+    normalized = normalize_currency_code(code)
+    if not normalized:
+        return "Юань"
+    return _CCY_WORD_RU.get(normalized, normalized)
+
+
 def enrich_header_from_goods(
     header: dict[str, Any] | None,
     items: list[Any] | None,

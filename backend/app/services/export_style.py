@@ -107,6 +107,7 @@ def style_data_table(
     cols: int,
     n_rows: int,
     headers: list[str] | None = None,
+    width_range: tuple[int, int] | None = None,
 ) -> None:
     if cols < 1 or n_rows < 1:
         return
@@ -129,7 +130,11 @@ def style_data_table(
         longest = max(longest, _cell_text_width(header))
         for r in range(header_row, last_row + 1):
             longest = max(longest, _cell_text_width(ws.cell(r, c).value))
-        ws.column_dimensions[letter].width = min(56, max(8, longest + 2))
+        if width_range is not None:
+            lo, hi = width_range
+            ws.column_dimensions[letter].width = min(hi, max(lo, longest + 2))
+        else:
+            ws.column_dimensions[letter].width = min(56, max(8, longest + 2))
     ws.auto_filter.ref = None
     ws.freeze_panes = None
 

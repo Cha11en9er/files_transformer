@@ -450,6 +450,7 @@ def _save_simple_book(path: Path, title: str, headers: list[str], rows: list[lis
         cols=len(headers),
         n_rows=1 + len(rows),
         headers=headers,
+        width_range=(10, 15),
     )
     unfreeze_workbook(wb)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -10,10 +10,12 @@ from typing import Any
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 
 from app.parsing.header_extract import (
     currency_from_sources,
     export_currency_label,
+    export_currency_word_ru,
     export_header_fields,
     manufacturer_from_sources,
 )
@@ -26,6 +28,8 @@ from app.services.profile_18233 import GROUP_PREFIXES, _design_family
 _KIT_RE = re.compile(r"(?<![0-9])(\d{2,4}-\d)(?![0-9])")
 _INVOICE_TOKEN_RE = re.compile(r"ZFRMB[\w.-]+", re.I)
 _PRICE_CCY_RE = re.compile(r"(UNIT PRICE|AMOUNT)\s*\(\s*[A-Z]{3}\s*\)", re.I)
+# Russian currency word inside a spec price header ("Цена ..., Юань").
+_CCY_WORD_RE = re.compile(r"долл\.?\s*США|Юань|юань|Евро|евро|USD|CNY|RMB|EUR|TRY|GBP")
 
 NUM_FMT_INT = "0"
 NUM_FMT_2 = "0.00"
@@ -89,36 +93,47 @@ ELEMENT_PACKING_HEADERS = [
     "NET WEIGHT/KG",
     "GROSS WEIGHT/KG",
 ]
-FABRIC_SPEC_HEADERS = [
-    "№",
-    "Q-Ty Rolls / Кол-во рулонов",
-    "Art./Артикул",
-    "Product name / Наименование товара",
-    "HS code / Код гармонизированной системы",
-    "Customs code / Таможенный код",
-    "Q-ty meters / Кол-во погонных метров",
-    "Widht, m / Ширина, м",
-    "Q-ty m2 / Кол-во кв.м",
-    "N.W, kg / Вес Нетто, кг",
-    "G.W, kg / Вес Брутто, кг",
-    "Price per 1 meter / Цена за 1 пог.метр, Юань",
-    "Total price / Цена, Юань",
-]
-ELEMENT_SPEC_HEADERS = [
-    "№",
-    "Q-Ty PACKAGES / Кол-во упаковок",
-    "Art./Артикул",
-    "Product name / Наименование товара",
-    "HS code / Код гармонизированной системы",
-    "Customs code / Таможенный код",
-    "Q-ty UNITS / Кол-во единиц",
-    "Unit/Единица измерения",
-    "Q-ty m2 / Кол-во кв.м",
-    "N.W, kg / Вес Нетто, кг",
-    "G.W, kg / Вес Брутто, кг",
-    "Price per unit / Цена за единицу, Юань",
-    "Total price / Цена, Юань",
-]
+def fabric_spec_headers(ccy: str = "CNY") -> list[str]:
+    word = export_currency_word_ru(ccy)
+    # Packages/rolls after description - easier to check art + name, then places.
+    return [
+        "№",
+        "Art./Артикул",
+        "Product name / Наименование товара",
+        "Q-Ty Rolls / Кол-во рулонов",
+        "HS code / Код гармонизированной системы",
+        "Customs code / Таможенный код",
+        "Q-ty meters / Кол-во погонных метров",
+        "Widht, m / Ширина, м",
+        "Q-ty m2 / Кол-во кв.м",
+        "N.W, kg / Вес Нетто, кг",
+        "G.W, kg / Вес Брутто, кг",
+        f"Price per 1 meter / Цена за 1 пог.метр, {word}",
+        f"Total price / Цена, {word}",
+    ]
+
+
+def element_spec_headers(ccy: str = "CNY") -> list[str]:
+    word = export_currency_word_ru(ccy)
+    return [
+        "№",
+        "Art./Артикул",
+        "Product name / Наименование товара",
+        "Q-Ty PACKAGES / Кол-во упаковок",
+        "HS code / Код гармонизированной системы",
+        "Customs code / Таможенный код",
+        "Q-ty UNITS / Кол-во единиц",
+        "Unit/Единица измерения",
+        "Q-ty m2 / Кол-во кв.м",
+        "N.W, kg / Вес Нетто, кг",
+        "G.W, kg / Вес Брутто, кг",
+        f"Price per unit / Цена за единицу, {word}",
+        f"Total price / Цена, {word}",
+    ]
+
+
+FABRIC_SPEC_HEADERS = fabric_spec_headers("CNY")
+ELEMENT_SPEC_HEADERS = element_spec_headers("CNY")
 
 
 def _as_float(value: Any) -> float | None:
@@ -515,9 +530,9 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
             rows.append(
                 [
                     int(idx),
-                    rolls,
                     article_with_color(item.get("article"), commercial.get("color")),
                     _product_description(item),
+                    rolls,
                     hs,
                     tnved,
                     meters,
@@ -533,9 +548,9 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
             rows.append(
                 [
                     int(idx),
-                    rolls,
                     article_with_color(item.get("article"), commercial.get("color")),
                     _product_description(item),
+                    rolls,
                     hs,
                     tnved,
                     qty,
@@ -558,9 +573,9 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
         rows.append(
             [
                 "Total/Итого:",
+                None,
+                None,
                 _count(sums["rolls"]),
-                None,
-                None,
                 None,
                 None,
                 _r2(sums["meters"]),
@@ -576,9 +591,9 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
         rows.append(
             [
                 "Total/Итого:",
+                None,
+                None,
                 _count(sums["rolls"]),
-                None,
-                None,
                 None,
                 None,
                 _count(sums["qty"]),
@@ -603,7 +618,7 @@ def preview_headers(
     return {
         "invoice": fabric_invoice_headers(ccy) if fabric else element_invoice_headers(ccy),
         "packing": FABRIC_PACKING_HEADERS if fabric else ELEMENT_PACKING_HEADERS,
-        "specification": FABRIC_SPEC_HEADERS if fabric else ELEMENT_SPEC_HEADERS,
+        "specification": fabric_spec_headers(ccy) if fabric else element_spec_headers(ccy),
     }
 
 
@@ -682,6 +697,31 @@ def _table_colmap(ws, header_row: int, max_col: int = 22) -> dict[str, int]:
     return mapping
 
 
+def _packages_after_description(ws, header_row: int, colmap: dict[str, int]) -> dict[str, int]:
+    """Put packages/rolls after product name. Hangzhou etalon had them before Art."""
+    rolls_col = colmap.get("rolls")
+    art_col = colmap.get("article")
+    desc_col = colmap.get("description")
+    if not (rolls_col and art_col and desc_col):
+        return colmap
+    if rolls_col > desc_col:
+        return colmap
+    if not (rolls_col < art_col < desc_col):
+        return colmap
+    titles = [ws.cell(header_row, c).value for c in (rolls_col, art_col, desc_col)]
+    # Rotate left: rolls, art, desc -> art, desc, rolls
+    for col, title in zip((rolls_col, art_col, desc_col), (titles[1], titles[2], titles[0])):
+        cell = ws.cell(header_row, col)
+        if isinstance(cell, MergedCell):
+            continue
+        cell.value = title
+    out = dict(colmap)
+    out["article"] = rolls_col
+    out["description"] = art_col
+    out["rolls"] = desc_col
+    return out
+
+
 def _prepare_data_block(ws, data_start: int, n_rows: int, total_cols: tuple[int, ...], extra_cols: int = 20) -> int:
     total_row = None
     for r in range(data_start, ws.max_row + 1):
@@ -728,6 +768,28 @@ def _fmt_for(field: str) -> str | None:
     return None
 
 
+def _style_table_header(ws, header_row: int, colmap: dict[str, int]) -> None:
+    """Customer edits: table-header titles bold, columns narrowed to 10-15."""
+    last_col = max(colmap.values(), default=0)
+    if last_col < 1:
+        return
+    for col in range(1, last_col + 1):
+        cell = ws.cell(header_row, col)
+        if isinstance(cell, MergedCell):
+            continue
+        base = cell.font or Font()
+        cell.font = Font(
+            name=base.name,
+            size=base.size,
+            bold=True,
+            color=base.color,
+        )
+    for col in range(1, last_col + 1):
+        letter = get_column_letter(col)
+        current = ws.column_dimensions[letter].width or 10
+        ws.column_dimensions[letter].width = min(15, max(10, current))
+
+
 def _write_mapped_row(ws, row: int, colmap: dict[str, int], values: dict[str, Any]) -> None:
     for field, value in values.items():
         col = colmap.get(field)
@@ -756,7 +818,8 @@ def _apply_letterhead(ws, header: dict[str, Any] | None, kit: str, header_row: i
     delivery_date = _header_value(header, "delivery_date")
     manufacturer = _header_value(header, "manufacturer")
     ccy_label = export_currency_label(_header_value(header, "currency") or "CNY", hangzhou_style=True)
-    for r in range(1, max(header_row, 22)):
+    ccy_word = export_currency_word_ru(_header_value(header, "currency") or "CNY")
+    for r in range(1, max(header_row, 22) + 1):
         for c in range(1, 16):
             val = ws.cell(r, c).value
             if val is None:
@@ -808,6 +871,8 @@ def _apply_letterhead(ws, header: dict[str, Any] | None, kit: str, header_row: i
                     lambda m: f"{m.group(1).upper()}({ccy_label})",
                     stripped,
                 )
+            elif "Цена" in stripped and _CCY_WORD_RE.search(stripped):
+                ws.cell(r, c).value = _CCY_WORD_RE.sub(ccy_word, stripped)
 
 
 def fill_specification_template(
@@ -825,13 +890,13 @@ def fill_specification_template(
     rows = spec_table_rows(products, fabric)
     header_row = _find_header_row(ws, "№", "ART", "PRODUCT") or 22
     data_start = header_row + 1
-    colmap = _table_colmap(ws, header_row)
+    colmap = _packages_after_description(ws, header_row, _table_colmap(ws, header_row))
     total_row = _prepare_data_block(ws, data_start, len(rows), (2, 1, colmap.get("no", 2)))
     field_order = [
         "no",
-        "rolls",
         "article",
         "description",
+        "rolls",
         "hs_code",
         "tnved_code",
         "meters" if fabric else "qty",
@@ -877,36 +942,48 @@ def fill_specification_template(
         # total already written as last data row
         pass
     _apply_letterhead(ws, header, kit, header_row)
+    _style_table_header(ws, header_row, colmap)
 
     if len(wb.sheetnames) > 1:
         desc_ws = wb[wb.sheetnames[1]]
-        d_start = 13
+        d_header = None
         for r in range(1, 20):
-            if str(desc_ws.cell(r, 4).value or "").lower().startswith("art"):
-                d_start = r + 1
+            if str(desc_ws.cell(r, 4).value or "").lower().startswith("art") or str(
+                desc_ws.cell(r, 3).value or ""
+            ).lower().startswith("art"):
+                d_header = r
                 break
+        if d_header is None:
+            d_header = 12
+        d_colmap = _packages_after_description(desc_ws, d_header, _table_colmap(desc_ws, d_header))
+        d_start = d_header + 1
         _clear_block(desc_ws, d_start, d_start + max(40, len(products) + 2), 2, 15)
         for idx, item in enumerate(products, start=1):
             row = d_start + idx - 1
             commercial = item.get("commercial_data") or {}
             packing = item.get("packing_data") or {}
             customs = item.get("customs_data") or {}
-            _set_cell(desc_ws, row, 2, int(idx), NUM_FMT_INT)
-            _set_cell(desc_ws, row, 3, _count(packing.get("rolls")), NUM_FMT_INT)
-            _set_cell(desc_ws, row, 4, item.get("article"))
-            _set_cell(desc_ws, row, 5, _product_description(item))
-            _set_cell(desc_ws, row, 6, customs.get("hs_code"))
-            _set_cell(desc_ws, row, 7, customs.get("tnved_code") or customs.get("hs_code"))
+            values = {
+                "no": int(idx),
+                "article": item.get("article"),
+                "description": _product_description(item),
+                "rolls": _count(packing.get("rolls")),
+                "hs_code": customs.get("hs_code"),
+                "tnved_code": customs.get("tnved_code") or customs.get("hs_code"),
+            }
             if fabric:
-                _set_cell(desc_ws, row, 8, _r2(packing.get("meters")), NUM_FMT_2)
+                values["meters"] = _r2(packing.get("meters"))
+                values["width"] = packing.get("width")
             else:
-                _set_cell(desc_ws, row, 8, _count(commercial.get("qty")), NUM_FMT_INT)
-            _set_cell(desc_ws, row, 9, packing.get("width") if fabric else commercial.get("unit"), NUM_FMT_2 if fabric else None)
-            _set_cell(desc_ws, row, 10, _r3(packing.get("area")), NUM_FMT_3)
-            _set_cell(desc_ws, row, 11, _r2(packing.get("net_weight")), NUM_FMT_2)
-            _set_cell(desc_ws, row, 12, _r2(packing.get("gross_weight")), NUM_FMT_2)
-            _set_cell(desc_ws, row, 13, _as_float(commercial.get("price")), NUM_FMT_2)
-            _set_cell(desc_ws, row, 14, _r2(commercial.get("amount")), NUM_FMT_2)
+                values["qty"] = _count(commercial.get("qty"))
+                values["unit"] = commercial.get("unit")
+            values["area"] = _r3(packing.get("area"))
+            values["net_weight"] = _r2(packing.get("net_weight"))
+            values["gross_weight"] = _r2(packing.get("gross_weight"))
+            values["price"] = _as_float(commercial.get("price"))
+            values["amount"] = _r2(commercial.get("amount"))
+            _write_mapped_row(desc_ws, row, d_colmap, values)
+        _style_table_header(desc_ws, d_header, d_colmap)
 
     unfreeze_workbook(wb)
     wb.save(output)
@@ -943,6 +1020,7 @@ def fill_invoice_template(
             cell = ws.cell(data_start + offset, colmap.get("design", 2))
             cell.font = Font(bold=True)
     _apply_letterhead(ws, header, kit, header_row)
+    _style_table_header(ws, header_row, colmap)
     unfreeze_workbook(wb)
     wb.save(output)
     return output
@@ -977,6 +1055,7 @@ def fill_packing_template(
             values["design"] = None
         _write_mapped_row(ws, data_start + offset, colmap, values)
     _apply_letterhead(ws, header, kit, header_row)
+    _style_table_header(ws, header_row, colmap)
     unfreeze_workbook(wb)
     wb.save(output)
     return output
