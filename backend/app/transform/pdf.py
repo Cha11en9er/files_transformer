@@ -175,13 +175,9 @@ def _read_pdfplumber(path: str) -> PdfReadResult | None:
                 page_text = (page.extract_text() or "").strip()
                 if page_text:
                     texts.append(page_text)
-                tables = _best_tables(page)
-                if tables:
-                    page_tables.append((i + 1, tables[0]))
-                elif page_text:
-                    grid = _grid_from_text(page_text)
-                    if len(grid) >= 3:
-                        page_tables.append((i + 1, grid))
+                grid = _page_goods_grid(page, page_text)
+                if grid:
+                    page_tables.append((i + 1, grid))
     except Exception:  # noqa: BLE001
         if not texts and not page_tables:
             return None
@@ -300,6 +296,96 @@ def _table_is_weak(grid: list[list[object]]) -> bool:
     return numeric_rows < 2
 
 
+def _table_is_fragmented(grid: list[list[object]]) -> bool:
+    """Broken pdfplumber grids: many 1-2 letter cells, no header hints."""
+    if not grid:
+        return True
+    sample = grid[: min(20, len(grid))]
+    cells = [_cell_text(c) for row in sample for c in row if _cell_text(c)]
+    if len(cells) < 8:
+        return False
+    short = sum(1 for text in cells if len(text) <= 2)
+    if short >= max(8, int(len(cells) * 0.22)):
+        return True
+    header_hits = max((row_header_score(row) for row in sample[:6]), default=0)
+    return header_hits < 2 and short >= 6
+
+
+_PACKING_HINT = re.compile(
+    r"(?i)(customer\s*name|design\b|colorway|roll\s*quantity|net\s*weight|gross\s*weight|"
+    r"packing\s*list|total\s*package)"
+)
+_PACKING_TAIL = re.compile(
+    r"(?P<rolls>\d{1,3})\s+"
+    r"(?P<meters>\d{1,5}[.,]\d{2})\s+"
+    r"(?P<nw>\d{1,5}[.,]\d{2})\s+"
+    r"(?P<gw>\d{1,5}[.,]\d{2})\s*$"
+)
+_PACKING_ARTICLE = re.compile(r"([A-Za-z][A-Za-z0-9]*)\s*(\d{2,4})")
+_PACKING_ARTICLE_SKIP = frozenset({"order", "new", "po", "export", "list", "page", "no", "date"})
+
+
+def packing_grid_from_text(text: str) -> list[list[object]]:
+    """Borderless packing list (Design / Customer Name / rolls / m / nw / gw) → grid.
+
+    Used when pdfplumber returns a fragmented letterhead table and extract_text
+    still has one goods line per row.
+    """
+    if not text or not _PACKING_HINT.search(text):
+        return []
+    rows: list[list[object]] = [
+        ["Customer Name", "Rolls", "Meters", "Net Weight", "Gross Weight"],
+    ]
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.upper().startswith("TOTAL"):
+            continue
+        tail = _PACKING_TAIL.search(line)
+        if not tail:
+            continue
+        head = line[: tail.start()].strip()
+        arts = list(_PACKING_ARTICLE.finditer(head))
+        while arts and arts[-1].group(1).lower() in _PACKING_ARTICLE_SKIP:
+            arts.pop()
+        if not arts:
+            continue
+        token, number = arts[-1].group(1), arts[-1].group(2)
+        article = f"{token} {number}"
+        rolls = parse_number(tail.group("rolls"))
+        meters = parse_number(tail.group("meters"))
+        nw = parse_number(tail.group("nw"))
+        gw = parse_number(tail.group("gw"))
+        if rolls is None or meters is None:
+            continue
+        rows.append([article, rolls, meters, nw, gw])
+    return rows if len(rows) >= 3 else []
+
+
+def _page_goods_grid(page, page_text: str) -> list[list[object]] | None:
+    """Pick the strongest rectangular goods table from plumber vs text recovery."""
+    tables = _best_tables(page)
+    plumber_grid = tables[0] if tables else None
+    pack = packing_grid_from_text(page_text) if page_text else []
+    text_grid = _grid_from_text(page_text) if page_text else []
+
+    plumber_ok = bool(
+        plumber_grid
+        and not _table_is_weak(plumber_grid)
+        and not _table_is_fragmented(plumber_grid)
+    )
+    if plumber_ok:
+        return plumber_grid
+    if len(pack) >= 3:
+        return pack
+    if len(text_grid) >= 3 and not _table_is_weak(text_grid):
+        return text_grid
+    if plumber_grid and not _table_is_weak(plumber_grid):
+        return plumber_grid
+    if len(text_grid) >= 3:
+        return text_grid
+    return plumber_grid
+
+
 def goods_grid_from_blob(text: str) -> list[list[object]]:
     """Invoice-as-letter / slash-line PDF text → a rectangular goods table."""
     if not text or len(text) < 20:
@@ -368,12 +454,16 @@ def goods_grid_from_blob(text: str) -> list[list[object]]:
 
 
 def _maybe_add_blob_sheet(name: str, sheets: list[Sheet], text: str) -> list[Sheet]:
+    pack = packing_grid_from_text(text)
     blob = goods_grid_from_blob(text)
-    if len(blob) < 2:
+    candidate = pack if len(pack) >= len(blob) else blob
+    if len(candidate) < 2:
         return sheets
-    weak = not sheets or all(_table_is_weak(s.grid) for s in sheets)
+    weak = not sheets or all(
+        _table_is_weak(s.grid) or _table_is_fragmented(s.grid) for s in sheets
+    )
     if not weak:
         return sheets
-    extra = Sheet(name="text", grid=blob, source=name)
-    # Prefer the blob table when plumber only found a totals footer.
-    return [extra, *[s for s in sheets if not _table_is_weak(s.grid)]]
+    extra = Sheet(name="text", grid=candidate, source=name)
+    # Prefer the recovered table when plumber only found a letterhead / footer.
+    return [extra, *[s for s in sheets if not _table_is_weak(s.grid) and not _table_is_fragmented(s.grid)]]
