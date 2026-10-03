@@ -24,6 +24,28 @@ requires_docs = pytest.mark.skipif(not DOCS.exists(), reason="documents/ tree no
 # pure logic
 # --------------------------------------------------------------------------- #
 
+def test_wide_empty_dimension_does_not_become_the_grid():
+    from openpyxl import Workbook
+    from openpyxl.cell.cell import Cell
+    import tempfile
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "DPL"
+    sheet["A1"] = "DESIGN"
+    sheet["B1"] = "QTY"
+    sheet["A2"] = "ITEM"
+    sheet["B2"] = 10
+    sheet._cells[(2, 16384)] = Cell(sheet, row=2, column=16384, value=None)
+    dest = Path(tempfile.mkdtemp()) / "wide.xlsx"
+    book.save(dest)
+    sheets = read_workbook(str(dest))
+    assert len(sheets) == 1
+    assert sheets[0].ncols == 2
+    assert sheets[0].grid[1][0] == "ITEM"
+    assert sheets[0].grid[1][1] == 10
+
+
 def test_match_key_normalizes_names():
     assert match_key("MO SHO-01") == match_key("MOSHO-01") == "MOSHO01"
     assert match_key("VA-01") == match_key("VA01") == "VA01"
