@@ -153,6 +153,7 @@ def analyze(folder):
         if producer and not lot.get("producer"):
             lot["producer"] = producer
     proforma_nos = _proforma_nos(documents)
+    stated = _stated_totals(documents)
     return {
         "documents": [
             {
@@ -186,7 +187,23 @@ def analyze(folder):
         "seller_address": seller_address,
         "buyer_address": buyer_address,
         "columns": list(LOT_FIELDS),
+        "stated": stated,
     }
+
+
+def _stated_totals(documents):
+    """Итог берётся, только если документы называют одно число. Два разных итога не выбираются."""
+    merged = {}
+    for doc in documents:
+        for key, value in (doc.get("stated") or {}).items():
+            if value is None:
+                continue
+            current = merged.get(key)
+            if current is None and key not in merged:
+                merged[key] = value
+            elif current is None or abs(current - value) > 0.05:
+                merged[key] = None
+    return {key: value for key, value in merged.items() if value is not None}
 
 
 def _pick(documents, role, prefer_pdf):

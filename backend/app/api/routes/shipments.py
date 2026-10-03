@@ -322,6 +322,50 @@ def _complete_18233_kit(saved_paths: list[Path]) -> tuple[list[Path], list[str]]
     return completed, notes
 
 
+_FLAG_RU = {
+    "hs_conflict": "два кода рядом, оба оставлены",
+    "manufacturer_conflict": "в документах разный производитель",
+    "delivery_conflict": "два разных условия поставки",
+    "weight_conflict": "два пакинга с разным весом",
+    "packages_conflict": "места в документах разошлись",
+    "unit_conflict": "подпись единицы разошлась",
+    "foreign_document": "в комплекте чужой лист",
+}
+
+
+def _stated_for_review(stated: dict[str, Any]) -> dict[str, Any]:
+    pieces = stated.get("pieces")
+    return {
+        "qty": pieces,
+        "meters": pieces,
+        "rolls": stated.get("packages"),
+        "amount": stated.get("amount"),
+        "net_weight": stated.get("net"),
+        "gross_weight": stated.get("gross"),
+        "area": stated.get("area"),
+    }
+
+
+def _totals_differ(excel, stated: dict[str, Any]) -> bool:
+    pairs = (
+        ("rolls", "rolls"),
+        ("meters", "meters"),
+        ("qty", "qty"),
+        ("amount", "amount"),
+        ("net_weight", "net_weight"),
+        ("gross_weight", "gross_weight"),
+        ("area", "area"),
+    )
+    for left, right in pairs:
+        file_value = stated.get(right)
+        table_value = getattr(excel, left, None)
+        if file_value is None or table_value is None:
+            continue
+        if abs(float(file_value) - float(table_value)) > 0.05:
+            return True
+    return False
+
+
 router = APIRouter(prefix="/api/v1/shipments", tags=["shipments"])
 
 
@@ -530,16 +574,17 @@ def _iter_create_events(
             )
             yield {"event": "file", "filename": display, "status": "ok", "message": message}
         for flag in draft.get("flags") or []:
+            message = _FLAG_RU.get(str(flag), str(flag))
             file_outs.append(
                 _make_file_out(
                     filename="сверка",
                     doc_type=None,
                     ocr_confidence=None,
                     parse_status="review",
-                    parse_message=str(flag),
+                    parse_message=message,
                 )
             )
-            yield {"event": "file", "filename": "сверка", "status": "review", "message": str(flag)}
+            yield {"event": "file", "filename": "сверка", "status": "review", "message": message}
         if review_dict.get("error"):
             file_outs.append(
                 _make_file_out(
@@ -555,6 +600,9 @@ def _iter_create_events(
         excel_totals = compute_excel_totals(items)
         header_fields = enrich_header_from_goods(header_fields, items)
         review_dict["excel_totals"] = excel_totals.model_dump()
+        stated_totals = _stated_for_review(draft.get("stated") or {})
+        review_dict["totals"] = stated_totals
+        review_dict["totals_mismatch"] = _totals_differ(excel_totals, stated_totals)
         review_dict["context"] = review_files(list(draft.get("documents") or []), reconciled)
         review_dict["items"] = []
         model_review = ModelReviewOut.model_validate(review_dict)

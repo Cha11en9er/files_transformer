@@ -324,12 +324,14 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
             if _filled(lot.get(source)):
                 packing[target] = lot.get(source)
         customs: dict[str, Any] = {}
-        if _filled(lot.get("hs")):
-            customs["hs_code"] = str(lot.get("hs"))
-        if _filled(lot.get("hs_alt")):
-            customs["tnved_code"] = str(lot.get("hs_alt"))
-        elif _filled(lot.get("hs")):
-            customs["tnved_code"] = str(lot.get("hs"))
+        hs = _plain_code(lot.get("hs"))
+        hs_alt = _plain_code(lot.get("hs_alt"))
+        if _filled(hs):
+            customs["hs_code"] = hs
+        if _filled(hs_alt):
+            customs["tnved_code"] = hs_alt
+        elif _filled(hs):
+            customs["tnved_code"] = hs
         if desc:
             customs["description"] = desc
         if desc_en:
@@ -345,8 +347,6 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
             errors.append(_flag("rolls", "Места в документах разошлись, одно число не выбрано."))
         if lot.get("unit_conflict"):
             errors.append(_flag("qty", "Подпись единицы разошлась, количество не пересчитано."))
-        if "hs_conflict" in flags and _filled(lot.get("hs")) and _filled(lot.get("hs_alt")):
-            errors.append(_flag("hs_code", "Два кода рядом, один не выбирается."))
         rows.append(
             {
                 "article": article,
@@ -360,6 +360,17 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
             }
         )
     return rows
+
+
+def _plain_code(value: Any) -> str:
+    """Код в таблице без точек. 54.07.73.00.90.11 и 540773009011 — одно и то же написание."""
+    text = " ".join(str(value or "").split())
+    if text.count(".") < 2:
+        return text
+    digits = re.sub(r"\D", "", text)
+    if 6 <= len(digits) <= 13 and re.fullmatch(r"[\d.\s]+", text):
+        return digits
+    return text
 
 
 def _flag(field_name: str, message: str) -> dict[str, Any]:
