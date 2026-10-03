@@ -12,6 +12,7 @@ from app.services.prepare_site import (
     apply_verdict,
     filled_base_columns,
     is_reference_name,
+    lots_to_rows,
     needs_second_model,
     split_uploads,
 )
@@ -70,6 +71,18 @@ def test_grok_variant_is_not_part_of_the_model_id() -> None:
     provider, model_id, variant = _model_parts("openrouter/x-ai/grok-4.7")
     assert model_id == "x-ai/grok-4.7"
     assert variant is None
+
+
+def test_hs_is_digits_without_dots() -> None:
+    rows = lots_to_rows(
+        [_lot(vendor="BLOOM", hs="54.07.73.00.90.11", hs_alt="5407699000", pieces=49)],
+        ["hs_conflict"],
+    )
+    customs = rows[0]["customs_data"]
+    assert customs["hs_code"] == "540773009011"
+    assert customs["tnved_code"] == "5407699000"
+    assert "." not in customs["hs_code"]
+    assert rows[0]["validation_errors"] == []
 
 
 def test_reference_file_stays_out_of_goods() -> None:

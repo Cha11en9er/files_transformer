@@ -931,9 +931,10 @@ function sumField(items, getter) {
   return any ? total : null;
 }
 
-function fillExcelTotals(items) {
+function fillExcelTotals(items, review) {
   const row = $("#items-totals-row");
   if (!row) return;
+  const stated = review?.totals || {};
   const values = {
     rolls: sumField(items, (item) => item.packing_data?.rolls ?? item.packing_data?.boxes),
     meters: sumField(items, (item) => item.packing_data?.meters ?? item.commercial_data?.qty),
@@ -942,10 +943,32 @@ function fillExcelTotals(items) {
     gross_weight: sumField(items, (item) => item.packing_data?.gross_weight),
     amount: sumField(items, (item) => item.commercial_data?.amount),
   };
+  const fileKey = {
+    rolls: "rolls",
+    meters: "meters",
+    area: "area",
+    net_weight: "net_weight",
+    gross_weight: "gross_weight",
+    amount: "amount",
+  };
   row.querySelectorAll("[data-total]").forEach((cell) => {
     const key = cell.getAttribute("data-total");
     const value = values[key];
-    cell.textContent = key === "amount" ? formatMoney(value) : formatNum(value, key === "rolls" ? 0 : 2);
+    const fmt = key === "amount" ? formatMoney : (n) => formatNum(n, key === "rolls" ? 0 : 2);
+    cell.textContent = fmt(value);
+    const fileValue = stated[fileKey[key]];
+    const fileNum = Number(fileValue);
+    const tableNum = Number(value);
+    const differs =
+      value != null &&
+      value !== "" &&
+      fileValue != null &&
+      fileValue !== "" &&
+      Number.isFinite(fileNum) &&
+      Number.isFinite(tableNum) &&
+      Math.abs(fileNum - tableNum) > 0.05;
+    cell.classList.toggle("sev-RED", differs);
+    cell.title = differs ? `в файле ${fmt(fileNum)}, в таблице ${fmt(tableNum)}` : "";
   });
 }
 
@@ -1369,9 +1392,10 @@ function renderWorkspace() {
     else if (clickable) statusHint = " · таблица";
     span.title = f.parse_message || (clickable ? "Открыть, как распознался файл" : "");
     span.setAttribute("aria-controls", "review-dialog");
-    const modelFail = String(f.filename || "") === "модель" && f.parse_message;
-    if (modelFail) {
-      span.textContent = `модель - ${String(f.parse_message).replace(/\s+/g, " ").slice(0, 180)}`;
+    const named = String(f.filename || "");
+    const showMessage = (named === "модель" || named === "сверка") && f.parse_message;
+    if (showMessage) {
+      span.textContent = `${named} - ${String(f.parse_message).replace(/\s+/g, " ").slice(0, 180)}`;
     } else {
       span.textContent = `${f.filename} - ${typeRu}${ocrHint}${statusHint}`;
     }
@@ -1442,7 +1466,7 @@ function renderWorkspace() {
     `;
     tbody.appendChild(tr);
   });
-  fillExcelTotals(ws.items || []);
+  fillExcelTotals(ws.items || [], ws.model_review);
 }
 
 function toggleLongCell(td, open) {

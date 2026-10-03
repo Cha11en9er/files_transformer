@@ -28,6 +28,7 @@ from prepare_transform_code.numbers import (
 def read_pdf(path):
     pages = []
     found_lines = []
+    stated = {}
     inherited = None
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -41,16 +42,18 @@ def read_pdf(path):
                 for table in page.find_tables() or []:
                     data = table.extract() or []
                     tables.append(data)
-                    page_lines, inherited = _table_lines(
+                    page_lines, inherited, page_stated = _table_lines(
                         data, _row_boxes(table), words, table.bbox, inherited
                     )
                     page_found.extend(page_lines)
+                    stated = _merge_stated(stated, page_stated)
                 if not page_found:
                     page_found = _borderless(words)
             finally:
                 _COMMA_IS_DECIMAL.reset(comma_token)
                 _DOT_IS_DECIMAL.reset(dot_token)
             found_lines.extend(page_found)
+            stated = _merge_stated(stated, stated_from_text(text))
             pages.append(
                 {
                     "rotation": page.rotation or 0,
@@ -87,6 +90,7 @@ def read_pdf(path):
         "roles": roles,
         "currency": currency_of(text),
         "lines": lines,
+        "stated": {key: value for key, value in stated.items() if value is not None},
         "tables": [table for page in pages for table in page["tables"]],
     }
 
@@ -174,9 +178,9 @@ def _table_lines(table, boxes, words, table_box, inherited):
             break
     if header_idx is None:
         if not inherited or not table or not _same_width(table, inherited):
-            return [], inherited
+            return [], inherited, {}
         if any(is_stop_label(cell) for cell in table[0] if cell):
-            return [], inherited
+            return [], inherited, _stated_from_row(table[0], inherited)
         mapping = dict(inherited)
         cursor = 0
     else:
@@ -201,11 +205,13 @@ def _table_lines(table, boxes, words, table_box, inherited):
                 aliases[col].append(name)
         cursor += 1
     lines = []
+    stated = {}
     for offset, row in enumerate(table[cursor:]):
         row = undouble_row(row)
         if is_header_row(row):
             continue
         if any(is_stop_label(cell) for cell in row if cell):
+            stated = _merge_stated(stated, _stated_from_row(row, mapping))
             break
         line = Line(source="pdf")
         shared = _shared_columns(mapping)
@@ -266,7 +272,7 @@ def _table_lines(table, boxes, words, table_box, inherited):
             continue
         if measured or named:
             lines.append(line)
-    return lines, mapping
+    return lines, mapping, stated
 
 
 def _same_width(table, mapping):
@@ -399,13 +405,96 @@ def _header_continuation(row):
     mapped = _map_row(row)
     if not mapped:
         return False
+    if any(is_stop_label(cell) for cell in row if cell):
+        return False
+    # Слова единицы и вида места рядом с названием и числом — строка товара, не вторая шапка.
+    if _goods_name(row) and any(re.search(r"\d", str(cell or "")) for cell in row):
+        return False
     if any(cell and len(str(cell)) > 40 for cell in row):
         return False
-    # Одна подпись в строке с числами — вид упаковки или размер, не вторая строка шапки.
     labels = [name for name in mapped if not str(name).startswith("_")]
     if len(labels) < 2 and any(re.search(r"\d", str(cell or "")) for cell in row):
         return False
-    return not any(is_stop_label(cell) for cell in row if cell)
+    return True
+
+
+def _goods_name(row):
+    for cell in row:
+        text = " ".join(str(cell or "").replace("\n", " ").split())
+        if len(text) <= 8 or column_of(text):
+            continue
+        if re.search(r"[A-Za-zА-Яа-яЁё]", text):
+            return True
+    return False
+
+
+def _stated_from_row(row, mapping):
+    line = Line(source="pdf")
+    for name, col in mapping.items():
+        if name.startswith("_") or not isinstance(col, int) or col >= len(row):
+            continue
+        assign_cell(line, name, row[col], header_is_package=(mapping.get("packages") == col))
+    out = {}
+    for source, target in (
+        ("pieces", "pieces"),
+        ("packages", "packages"),
+        ("amount", "amount"),
+        ("net", "net"),
+        ("gross", "gross"),
+        ("area", "area"),
+    ):
+        value = getattr(line, source)
+        if value is not None:
+            out[target] = value
+    return out
+
+
+def stated_from_text(text):
+    """Итог, который остался под таблицей и в сетку клеток не попал."""
+    out = {}
+    weight = re.search(
+        r"total\s+weight\s*:?\s*([\d.,]+)\s*kgs?\s*net\s*/\s*([\d.,]+)\s*kgs?\s*gross",
+        text or "",
+        re.I,
+    )
+    if weight:
+        net = parse_number(weight.group(1))
+        gross = parse_number(weight.group(2))
+        if net is not None:
+            out["net"] = net
+        if gross is not None:
+            out["gross"] = gross
+    for line in (text or "").splitlines():
+        match = re.fullmatch(
+            r"\s*([\d][\d.,]*)\s+met(?:er|re)s?\s+rolls?\s+([\d][\d.,]*)\s+([\d][\d.,]*)\s*",
+            line,
+            re.I,
+        )
+        if not match:
+            continue
+        pieces = parse_number(match.group(1))
+        packages = parse_number(match.group(2))
+        amount = parse_number(match.group(3))
+        if pieces is not None:
+            out["pieces"] = pieces
+        if packages is not None:
+            out["packages"] = packages
+        if amount is not None:
+            out["amount"] = amount
+    return out
+
+
+def _merge_stated(left, right):
+    out = dict(left or {})
+    for key, value in (right or {}).items():
+        if value is None:
+            continue
+        current = out.get(key)
+        if current is None:
+            out[key] = value
+        elif abs(current - value) > 0.05:
+            out[key] = None
+    return out
 
 
 def _borderless(words):

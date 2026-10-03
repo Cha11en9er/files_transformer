@@ -12,6 +12,32 @@ def load(name):
     return analyze(ROOT / name)
 
 
+class HeaderContinuationTest(unittest.TestCase):
+    def test_unit_word_next_to_a_name_is_a_goods_row(self):
+        from prepare_transform_code.pdfdoc import _header_continuation, stated_from_text
+
+        row = [
+            "110.60",
+            "METERS",
+            "BLOOM (BLOOM) QUALITY UPHOLSTERY FABRIC",
+            "54.07.73.00.90.11",
+            "ROLLS",
+            "3",
+            "12.38",
+            "1,369.23",
+        ]
+        self.assertFalse(_header_continuation(row))
+        stated = stated_from_text(
+            "3,654.50 METERS ROLLS 101 41,431.38\n"
+            "TOTAL WEIGHT : 3,047.000 KGS NET / 3,122.500 KGS GROSS\n"
+        )
+        self.assertAlmostEqual(stated["pieces"], 3654.50)
+        self.assertAlmostEqual(stated["packages"], 101)
+        self.assertAlmostEqual(stated["amount"], 41431.38)
+        self.assertAlmostEqual(stated["net"], 3047)
+        self.assertAlmostEqual(stated["gross"], 3122.5)
+
+
 class NumbersTest(unittest.TestCase):
     def test_money_formats(self):
         self.assertEqual(parse_number("US$55,000.00"), 55000)
