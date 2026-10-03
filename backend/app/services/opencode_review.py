@@ -1218,15 +1218,30 @@ def _file_part(page: VisionPage) -> dict[str, Any]:
     }
 
 
+VERDICT_SYSTEM = (
+    "Следуй правилам в сообщении пользователя. Ответ — один JSON без пояснения вокруг. "
+    "Число, которого нет в черновике и на страницах, не выдумывай."
+)
+
+
+def _model_parts(model: str) -> tuple[str, str]:
+    provider, _, model_id = (model or "").partition("/")
+    if not model_id:
+        return "opencode", provider or "qwen3.5-plus"
+    return provider, model_id
+
+
 def review_with_opencode(
     *,
     snapshot: dict[str, Any],
     pages: list[VisionPage] | None = None,
     image_paths: list[Path] | None = None,
     excel_paths: list[Path] | None = None,
+    user_prompt: str | None = None,
+    model_override: str | None = None,
 ) -> dict[str, Any]:
     cfg = settings()
-    model_name = cfg["model"]
+    model_name = (model_override or cfg["model"]).strip()
     vision_pages = list(pages or [])
     if not vision_pages and image_paths:
         vision_pages = [VisionPage(path=path, source_name=path.name, page=None) for path in image_paths]
@@ -1255,9 +1270,11 @@ def review_with_opencode(
     if not cfg["enabled"]:
         result["error"] = "OpenCode отключён (OPENCODE_ENABLED=0)"
         return result
-    before_billing = fetch_openrouter_billing() if cfg["provider_id"] == "openrouter" else _empty_billing()
+    provider_id, model_id = _model_parts(model_name)
+    before_billing = fetch_openrouter_billing() if provider_id == "openrouter" else _empty_billing()
 
-    prompt = build_user_prompt(snapshot)
+    prompt = user_prompt if user_prompt is not None else build_user_prompt(snapshot)
+    system_prompt = VERDICT_SYSTEM if user_prompt is not None else SYSTEM_PROMPT
     parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     # An xlsx sent as a file is rejected ("must be a valid PDF") and the
     # provider then drops the page images too. Cell text from the workbook
@@ -1285,8 +1302,8 @@ def review_with_opencode(
             reply = client.post(
                 f"/session/{encoded_id}/message",
                 json={
-                    "system": SYSTEM_PROMPT,
-                    "model": {"providerID": cfg["provider_id"], "modelID": cfg["model_id"]},
+                    "system": system_prompt,
+                    "model": {"providerID": provider_id, "modelID": model_id},
                     "tools": DISABLED_TOOLS,
                     "parts": parts,
                 },
@@ -1299,6 +1316,15 @@ def review_with_opencode(
                 result["error"] = raw_text[:500]
                 return result
             extracted = extract_json_payload(raw_text)
+            if user_prompt is not None:
+                payload = extracted if isinstance(extracted, dict) else {}
+                result["payload"] = payload
+                header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
+                result["header"] = header
+                result["status"] = "ok" if payload else "error"
+                if not payload:
+                    result["error"] = "Модель не вернула JSON"
+                return result
             result.update(normalize_model_payload(extracted))
             result["status"] = "ok"
             return result
@@ -1315,7 +1341,7 @@ def review_with_opencode(
             result["raw_text"] = result["error"]
         return result
     finally:
-        if cfg["provider_id"] == "openrouter":
+        if provider_id == "openrouter":
             after = fetch_openrouter_billing()
             cost = _usage_delta(before_billing, after)
             if result.get("status") == "ok" and cost == 0:
