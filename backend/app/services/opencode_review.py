@@ -655,7 +655,7 @@ def ping_opencode(prompt: str | None = None) -> dict[str, Any]:
                 result["title"] = "Нет баланса Zen" if result["status"] == "credits" else "Модель вернула ошибку"
                 result["detail"] = text
                 return _with_billing(result)
-            raw_text = _assistant_text(reply.json()) or raw_body
+            raw_text = _verdict_text(reply.json()) or raw_body
             if _looks_like_credits(raw_text):
                 result["status"] = "credits"
                 result["title"] = "Нет баланса Zen"
@@ -1164,6 +1164,48 @@ def normalize_model_payload(raw: Any) -> dict[str, Any]:
     }
 
 
+def _verdict_text(payload: Any) -> str:
+    """Текст ответа. Если JSON только в рассуждении, его тоже берём: иначе вызов оплачен, а вердикта нет."""
+    answer = _assistant_text(payload)
+    if _json_in(answer):
+        return answer
+    thought = _part_text(payload, {"reasoning", "thinking"})
+    if _json_in(thought):
+        return thought
+    return answer or thought
+
+
+def _json_in(text: str) -> bool:
+    try:
+        extract_json_payload(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _part_text(payload: Any, kinds: set[str]) -> str:
+    if isinstance(payload, list):
+        for item in reversed(payload):
+            text = _part_text(item, kinds)
+            if text:
+                return text
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    chunks: list[str] = []
+    for part in payload.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        if str(part.get("type") or "") in kinds and part.get("text"):
+            chunks.append(str(part["text"]))
+    if chunks:
+        return "\n".join(chunks).strip()
+    inner = payload.get("message") or payload.get("data")
+    if inner and inner is not payload:
+        return _part_text(inner, kinds)
+    return ""
+
+
 def _assistant_text(payload: Any) -> str:
     if isinstance(payload, list):
         for item in reversed(payload):
@@ -1322,7 +1364,7 @@ def review_with_opencode(
                 json=message,
             )
             reply.raise_for_status()
-            raw_text = _assistant_text(reply.json())
+            raw_text = _verdict_text(reply.json())
             result["raw_text"] = raw_text
             if "APIError" in raw_text or "invalid_parameter_error" in raw_text or "invalid_request_error" in raw_text:
                 result["status"] = "error"

@@ -238,9 +238,36 @@ def _lines(rows):
             continue
         if _blank_charge(line):
             continue
+        if lines and _package_part(line, lines[-1]):
+            _add_measures(lines[-1], line)
+            continue
         if useful or (line.vendor and line.description):
             lines.append(line)
     return fold_parts(lines)
+
+
+def _package_part(line, previous):
+    """Строка без своего количества и цены, тот же артикул или пустой, — укладка лота выше."""
+    if line.pieces is not None or line.price is not None or line.amount is not None:
+        return False
+    if not any(getattr(line, name) is not None for name in ("packages", "net", "gross", "volume")):
+        return False
+    if line.vendor and previous.vendor and _same_vendor(line.vendor, previous.vendor):
+        return True
+    return not line.vendor
+
+
+def _same_vendor(left, right):
+    return re.sub(r"[^a-z0-9]+", "", str(left).lower()) == re.sub(r"[^a-z0-9]+", "", str(right).lower())
+
+
+def _add_measures(head, part):
+    for name in ("packages", "net", "gross", "volume"):
+        value = getattr(part, name)
+        if value is None:
+            continue
+        current = getattr(head, name)
+        setattr(head, name, value if current is None else current + value)
 
 
 def _same_code(left, right):
@@ -470,7 +497,8 @@ def _xls(path):
 
 
 def _fill_merges(rows, merges):
-    """Пустая клетка под значением в той же колонке слитого диапазона его получает. В соседнюю колонку значение не переносится."""
+    """Пустая клетка под текстом в той же колонке слитого диапазона его получает.
+    Число вниз не копируется: количество и вес, закрывающие несколько строк, не становятся числом каждой из них."""
     for rlo, rhi, clo, chi in merges:
         if rhi - rlo < 2:
             continue
@@ -483,7 +511,7 @@ def _fill_merges(rows, merges):
                 if c < len(row) and row[c] not in (None, ""):
                     source = row[c]
                     break
-            if source in (None, ""):
+            if source in (None, "") or _pure_number(source):
                 continue
             for r in range(rlo, rhi):
                 if r >= len(rows):
@@ -493,3 +521,14 @@ def _fill_merges(rows, merges):
                     row.append(None)
                 if c < len(row) and row[c] in (None, ""):
                     row[c] = source
+
+
+def _pure_number(value):
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return True
+    text = str(value).strip()
+    if not text or re.search(r"[A-Za-zА-Яа-яЁё]", text):
+        return False
+    return parse_number(text) is not None
