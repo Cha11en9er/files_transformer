@@ -78,6 +78,20 @@ def _sniff(path: str) -> str:
     return "xlsx"
 
 
+def _used_size(ws):
+    """Последняя клетка со значением. max_column у Excel бывает 16384, хотя товар в первых колонках."""
+    last_row = 0
+    last_col = 0
+    for (row, col), cell in getattr(ws, "_cells", {}).items():
+        if cell.value in (None, ""):
+            continue
+        if row > last_row:
+            last_row = row
+        if col > last_col:
+            last_col = col
+    return last_row, last_col
+
+
 def _read_xlsx(path: str) -> list[Sheet]:
     from openpyxl import load_workbook
 
@@ -88,11 +102,16 @@ def _read_xlsx(path: str) -> list[Sheet]:
     sheets: list[Sheet] = []
     try:
         for ws in wb.worksheets:
-            max_row = ws.max_row or 0
-            max_col = ws.max_column or 0
+            max_row, max_col = _used_size(ws)
             if not max_row or not max_col:
                 continue
-            grid = [[ws.cell(r, c).value for c in range(1, max_col + 1)] for r in range(1, max_row + 1)]
+            grid = []
+            for row in range(1, max_row + 1):
+                line = []
+                for col in range(1, max_col + 1):
+                    cell = ws._cells.get((row, col))
+                    line.append(cell.value if cell is not None else None)
+                grid.append(line)
             ranges = [
                 (m.min_row - 1, m.min_col - 1, m.max_row - 1, m.max_col - 1)
                 for m in ws.merged_cells.ranges
