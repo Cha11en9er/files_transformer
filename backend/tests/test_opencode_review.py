@@ -23,6 +23,7 @@ from app.services.opencode_review import (
     _extract_openrouter_key,
     _model_label,
     _usage_delta,
+    _verdict_text,
 )
 from app.services.pdf_pages import VisionPage
 from app.services.scan_reconcile import apply_scan_review, compute_excel_totals
@@ -635,4 +636,16 @@ def test_apply_scan_pdf_only_appends_continuation_article() -> None:
     assert len(items) == 2
     added = next(row for row in items if row.article == "67004")
     assert added.commercial_data["qty"] == 262
+
+
+def test_json_in_reasoning_is_the_verdict() -> None:
+    payload = {
+        "parts": [
+            {"type": "reasoning", "text": '{"lots": [{"index": 0, "action": "split", "fields": {"parts": []}}]}'},
+            {"type": "text", "text": "ещё смотрю лист"},
+        ]
+    }
+    text = _verdict_text(payload)
+    parsed = extract_json_payload(text)
+    assert parsed["lots"][0]["action"] == "split"
 

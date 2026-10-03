@@ -1516,6 +1516,97 @@ class BestwayWayTest(unittest.TestCase):
         self.assertAlmostEqual(sum(lot["amount"] for lot in goods), 37775.75, places=2)
 
 
+class MergedMeasureTest(unittest.TestCase):
+    def test_merged_quantity_is_one_lot_and_shared_weight_stays_once(self):
+        import tempfile
+
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Invoice and Packing list"
+        ws["A1"] = "Invoice and Packing list"
+        for col, name in enumerate(
+            (
+                "Art No.",
+                "Color",
+                "Quantity",
+                "Unit",
+                "Price (CNY)",
+                "Amount (CNY)",
+                "Gross Wt. (kg)",
+                "Net Wt. (kg)",
+                "Cartons",
+                "Volume (m3)",
+            ),
+            1,
+        ):
+            ws.cell(2, col, name)
+        ws["A3"] = "D680"
+        ws["B3"] = "Black"
+        ws["C3"] = 20
+        ws["D3"] = "sets"
+        ws["E3"] = 163.4
+        ws["F3"] = 3268
+        ws["G3"] = 33.5
+        ws["H3"] = 32.5
+        ws["I3"] = 2
+        ws["J3"] = 0.04
+        ws["B4"] = "PC"
+        ws["G4"] = 19.5
+        ws["H4"] = 18.5
+        ws["I4"] = 2
+        ws["J4"] = 0.02
+        ws["G5"] = 116
+        ws["H5"] = 112
+        ws["I5"] = 4
+        ws["J5"] = 0.5
+        ws.merge_cells("A3:A5")
+        ws.merge_cells("C3:C5")
+        ws.merge_cells("D3:D5")
+        ws.merge_cells("E3:E5")
+        ws.merge_cells("F3:F5")
+        ws["A6"] = "A519"
+        ws["C6"] = 70
+        ws["D6"] = "sets"
+        ws["E6"] = 178.2
+        ws["F6"] = 12474
+        ws["G6"] = 425
+        ws["H6"] = 370
+        ws["I6"] = 2
+        ws["J6"] = 2.48
+        for row, art, qty, price, amount in (
+            (7, "A711", 10, 160.2, 1602),
+            (8, "A402S", 10, 106.95, 1069.5),
+            (9, "A402", 10, 108.1, 1081),
+        ):
+            ws.cell(row, 1, art)
+            ws.cell(row, 3, qty)
+            ws.cell(row, 4, "sets")
+            ws.cell(row, 5, price)
+            ws.cell(row, 6, amount)
+        ws.merge_cells("G6:G9")
+        ws.merge_cells("H6:H9")
+        ws.merge_cells("I6:I9")
+        ws.merge_cells("J6:J9")
+        dest = Path(tempfile.mkdtemp())
+        wb.save(dest / "sheet.xlsx")
+        lots = {lot["vendor"]: lot for lot in analyze(dest)["lots"]}
+        self.assertEqual(set(lots), {"D680", "A519", "A711", "A402S", "A402"})
+        d680 = lots["D680"]
+        self.assertEqual(d680["pieces"], 20)
+        self.assertAlmostEqual(d680["amount"], 3268)
+        self.assertAlmostEqual(d680["packages"], 8)
+        self.assertAlmostEqual(d680["net"], 163)
+        self.assertAlmostEqual(d680["gross"], 169)
+        self.assertAlmostEqual(d680["volume"], 0.56)
+        self.assertEqual(lots["A519"]["packages"], 2)
+        self.assertAlmostEqual(lots["A519"]["net"], 370)
+        self.assertIsNone(lots["A711"]["packages"])
+        self.assertIsNone(lots["A711"]["net"])
+        self.assertIsNone(lots["A402"]["gross"])
+
+
 def _only(folder, names):
     import shutil
     import tempfile

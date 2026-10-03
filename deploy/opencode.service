@@ -9,7 +9,7 @@ WorkingDirectory=/opt/files_transformer
 EnvironmentFile=-/opt/files_transformer/backend/.env
 Environment=HOME=/root
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:/root/.opencode/bin:/root/.local/bin
-Environment=OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=8000
+Environment=OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=128000
 ExecStart=/usr/bin/env opencode serve --hostname 127.0.0.1 --port 4096
 Restart=always
 RestartSec=3
