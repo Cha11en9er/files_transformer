@@ -455,16 +455,50 @@ def _iter_create_events(
 
         yield {"event": "progress", "current": total, "total": total, "filename": "сверка позиций", "stage": "reconcile"}
 
+        def _while_busy(message: str, fn):
+            """Пока функция читает файл, в поток уходит строка раз в 12 секунд. Иначе прокси рвёт молчащее соединение."""
+            box: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+            def _call() -> None:
+                try:
+                    box.put(("ok", fn()))
+                except Exception as exc:  # noqa: BLE001 — surface to stream consumer
+                    box.put(("err", exc))
+
+            worker = threading.Thread(target=_call, name="parse-busy", daemon=True)
+            worker.start()
+            waited = 0
+            while worker.is_alive():
+                worker.join(timeout=12.0)
+                if worker.is_alive():
+                    waited += 12
+                    yield {
+                        "event": "progress",
+                        "current": total,
+                        "total": total,
+                        "filename": message,
+                        "stage": "reconcile",
+                        "message": f"{message} ({waited} с)",
+                    }
+            status, payload = box.get()
+            if status == "err":
+                raise payload
+            return payload
+
         goods, references = split_uploads(saved, catalog_names)
-        draft = read_goods(goods)
+        draft = yield from _while_busy("Чтение файлов", lambda: read_goods(goods))
         catalog = load_catalogs(references)
         prompt = verdict_prompt(draft)
         lots = goods_lots(draft)
         vision_dir = tmp_dir / "vision"
-        try:
-            vision_pages = collect_vision_images([path for path, _name in goods], vision_dir)
-        except Exception:
-            vision_pages = []
+
+        def _photos() -> list:
+            try:
+                return collect_vision_images([path for path, _name in goods], vision_dir)
+            except Exception:
+                return []
+
+        vision_pages = yield from _while_busy("Фото страниц", _photos)
         first_model = model_spec(1)
         second_model = model_spec(2)
         model_label = first_model or "модель"
