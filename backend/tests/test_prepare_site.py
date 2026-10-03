@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.services.opencode_review import _model_parts
 from app.services.prepare_site import (
     apply_verdict,
     filled_base_columns,
@@ -59,6 +60,16 @@ def test_fix_does_not_wipe_a_number_with_empty() -> None:
     out = apply_verdict(draft, payload)
     assert out[0]["pieces"] == 12
     assert out[0]["price"] == 1.5
+
+
+def test_grok_variant_is_not_part_of_the_model_id() -> None:
+    provider, model_id, variant = _model_parts("openrouter/x-ai/grok-4.7:high")
+    assert provider == "openrouter"
+    assert model_id == "x-ai/grok-4.7"
+    assert variant == "high"
+    provider, model_id, variant = _model_parts("openrouter/x-ai/grok-4.7")
+    assert model_id == "x-ai/grok-4.7"
+    assert variant is None
 
 
 def test_reference_file_stays_out_of_goods() -> None:

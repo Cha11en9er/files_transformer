@@ -83,9 +83,10 @@ def _kit_label(items: list[dict[str, Any]], header: dict[str, Any] | None) -> st
     if kit:
         return kit
     inv = str((header or {}).get("invoice_no") or "")
-    if inv:
+    # Хвост после дефиса — код комплекта (626-1). Номер без дефиса комплектом не является.
+    if "-" in inv:
         tail = inv.split("-")[-1].strip()
-        if tail and tail.lower() != "all":
+        if tail and tail.lower() != "all" and tail != inv:
             return tail
     return ""
 

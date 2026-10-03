@@ -233,6 +233,20 @@ def undouble_row(row):
     return [undouble_text(cell) if isinstance(cell, str) else cell for cell in row]
 
 
+def collapse_overprint(text):
+    """Буква напечатана несколько раз: BBBBiiii + две ll → Bill. Цифры не трогать."""
+
+    def shorten(match):
+        letter = match.group(1)
+        run = len(match.group(0))
+        for factor in (4, 3, 2):
+            if run >= factor and run % factor == 0:
+                return letter * (run // factor)
+        return letter
+
+    return re.sub(r"([^\W\d_])\1{3,}", shorten, text or "", flags=re.UNICODE)
+
+
 def collapse_letter_spacing(text):
     """Схлопнуть ряд одиночных символов: «C I 2 4» → «CI24». Обычные слова не трогать."""
     parts = text.split()

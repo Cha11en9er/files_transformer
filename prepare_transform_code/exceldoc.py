@@ -370,6 +370,15 @@ def _num_token(number):
     return f"{number:.2f}".rstrip("0").rstrip(".")
 
 
+def _bare_measurement(cell):
+    """Measurement без CBM — габарит коробки. Volume и Measurement (CBM) — объём строки."""
+    raw = " ".join(str(cell or "").lower().replace("\n", " ").split())
+    text = " ".join(re.sub(r"\([^)]*\)", " ", raw).split())
+    if not re.fullmatch(r"measure(?:ment)?", text.replace(" ", "")):
+        return False
+    return re.search(r"cbm|m3|м3|куб", raw) is None
+
+
 def _header(rows):
     best = None
     best_score = 0
@@ -397,6 +406,8 @@ def _header(rows):
                     mapped["model"] = col
                 continue
             if name in mapped:
+                if name == "volume" and _bare_measurement(row[mapped["volume"]]) and not _bare_measurement(cell):
+                    mapped["volume"] = col
                 continue
             mapped[name] = col
             score += 2 if name in {"description", "qty", "vendor", "price"} else 1

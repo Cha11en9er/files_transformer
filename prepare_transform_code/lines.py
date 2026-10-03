@@ -225,6 +225,8 @@ def assign_cell(line, name, value, header_is_package=False):
         fill_qty(line, value, header_is_package=True)
         return
     if name in {"price", "amount", "gross", "net", "net_primary", "volume", "area", "width", "gsm", "gross_with_pallet", "unit_net"}:
+        if name == "volume" and isinstance(value, str) and re.search(r"\d\s*[*x×]\s*\d", value):
+            return
         number = parse_number(value)
         if number is not None and getattr(line, name) is None:
             setattr(line, name, number)
@@ -236,6 +238,12 @@ def fill_qty(line, text, header_is_package=False):
     text = str(text).replace("\n", " ").strip()
     if not text or text.startswith("="):
         return
+    # Код из 8–12 цифр и количество через пробел — два поля. Пробел тут не тысячи.
+    stuck = re.search(r"(?<!\d)(\d{8,12})\s+(\d{1,7}(?:[.,]\d+)?)", text)
+    if stuck:
+        if not line.hs:
+            line.hs = stuck.group(1)
+        text = (text[: stuck.start()] + " " + stuck.group(2) + text[stuck.end() :]).strip()
     line.qty_text = (line.qty_text + " " + text).strip()
     packs = package_count(text)
     if packs is not None:

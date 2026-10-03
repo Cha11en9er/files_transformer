@@ -490,6 +490,7 @@ def _iter_create_events(
             if second.get("status") == "ok":
                 lots = apply_verdict(goods_lots(draft), second.get("payload"))
                 review_dict = second
+        shutil.rmtree(vision_dir, ignore_errors=True)
         fill_from_catalog(lots, catalog)
         header_fields = header_from_draft(draft, lots)
         if review_dict.get("status") == "ok":
