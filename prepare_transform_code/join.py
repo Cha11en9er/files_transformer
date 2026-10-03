@@ -247,6 +247,10 @@ def _score(left, right):
     right_models = {code for code in right.anchors() if code.startswith("model:")}
     if left_models and left_models & right_models:
         score += 80
+    left_label = _article_label(left)
+    right_label = _article_label(right)
+    if left_label and left_label == right_label:
+        score += 100
     left_desc = _desc(left)
     right_desc = _desc(right)
     if left_desc and right_desc:
@@ -398,7 +402,13 @@ def _overlay(lots, spec_lines):
         if found is None:
             continue
         spec = spec_lines[found]
-        if _vendors(probe) and _vendors(spec) and not _vendor_hit(list(_vendors(probe)), list(_vendors(spec))):
+        same_name = _article_label(probe) and _article_label(probe) == _article_label(spec)
+        if (
+            not same_name
+            and _vendors(probe)
+            and _vendors(spec)
+            and not _vendor_hit(list(_vendors(probe)), list(_vendors(spec)))
+        ):
             continue
         if probe.pieces is not None and spec.pieces is not None and abs(probe.pieces - spec.pieces) > 0.05:
             continue
@@ -660,6 +670,44 @@ def _family_token(text):
     return ""
 
 
+def _name_words(text):
+    return re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", str(text or ""))
+
+
+def _same_family(left, right):
+    """«Velvet LUX 03» и «SOFA FABRIC Velvet LUX», «Lazy Silver» и «SOFA FABRIC Lazy» — одно семейство."""
+    left_words = _name_words(left)
+    right_words = _name_words(right)
+    if not left_words or not right_words:
+        return False
+    return _tail_opens(left_words, right_words) or _tail_opens(right_words, left_words)
+
+
+def _tail_opens(summary, design):
+    head = [word.casefold() for word in design]
+    tail = [word.casefold() for word in summary]
+    if len(head) >= 2 and head[-1].isdigit():
+        head = head[:-1]
+    if not head or not tail:
+        return False
+    for size in range(min(len(tail), len(head)), 0, -1):
+        if tail[-size:] != head[:size]:
+            continue
+        if size == 1 and tail[-1] in {"fabric", "sofa", "textile"}:
+            continue
+        return True
+    return False
+
+
+def _article_label(line):
+    """Одно и то же имя дизайна: на инвойсе в модели, в спецификации в артикуле."""
+    for value in (line.vendor, line.model):
+        text = " ".join(str(value or "").split()).casefold()
+        if text:
+            return text
+    return ""
+
+
 def _collapse_price_bands(lines):
     """Строка без своего номера, которая суммирует дизайны над ней и несёт цену, — не лот."""
     kept = []
@@ -677,12 +725,12 @@ def _collapse_price_bands(lines):
 def _is_price_band(line, band):
     if line.price is None or not band:
         return False
-    token = _family_token(line.model or line.description)
-    if not token:
+    name = line.model or line.description
+    if not _name_words(name):
         return False
     if any(item.price is not None for item in band):
         return False
-    if any(_family_token(item.model or item.description) != token for item in band):
+    if any(not _same_family(name, item.model or item.description) for item in band):
         return False
     packs = [item.packages for item in band]
     pieces = [item.pieces for item in band]
@@ -722,13 +770,13 @@ def _money(value):
 
 def _packing_family(line, others, used):
     """Пакинг семейства клеится к каждому дизайну. Общий вес остаётся на строке семейства."""
-    token = _family_token(line.model or line.description)
-    if not token:
+    name = line.model or line.description
+    if not _name_words(name):
         return None
     hits = [
         index
         for index, other in enumerate(others)
-        if _family_token(other.model or other.description) == token
+        if _same_family(name, other.model or other.description)
     ]
     if len(hits) != 1:
         return None
@@ -754,7 +802,7 @@ def _fill_family_name(lot, packing):
     family_name = " ".join(str(packing.model or packing.description or "").split())
     if not family_name or family_name == lot.get("model"):
         return
-    if _family_token(family_name) != _family_token(lot.get("model")):
+    if not _same_family(family_name, lot.get("model") or ""):
         return
     lot["description"] = family_name
 
