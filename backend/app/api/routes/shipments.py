@@ -9,6 +9,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 import zipfile
 from collections.abc import Iterator
@@ -456,7 +457,16 @@ def _iter_create_events(
         yield {"event": "progress", "current": total, "total": total, "filename": "сверка позиций", "stage": "reconcile"}
 
         def _while_busy(message: str, fn):
-            """Пока функция читает файл, в поток уходит строка раз в 12 секунд. Иначе прокси рвёт молчащее соединение."""
+            """Шаг виден сразу. Пока функция работает, раз в 12 секунд уходит пульс, иначе прокси рвёт молчащее соединение."""
+            started = time.monotonic()
+            yield {
+                "event": "progress",
+                "current": total,
+                "total": total,
+                "filename": message,
+                "stage": "reconcile",
+                "message": message,
+            }
             box: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
             def _call() -> None:
@@ -483,6 +493,15 @@ def _iter_create_events(
             status, payload = box.get()
             if status == "err":
                 raise payload
+            elapsed = max(0, round(time.monotonic() - started))
+            yield {
+                "event": "progress",
+                "current": total,
+                "total": total,
+                "filename": message,
+                "stage": "reconcile",
+                "message": f"{message} ({elapsed} с)",
+            }
             return payload
 
         goods, references = split_uploads(saved, catalog_names)
@@ -499,6 +518,14 @@ def _iter_create_events(
                 return []
 
         vision_pages = yield from _while_busy("Фото страниц", _photos)
+        yield {
+            "event": "progress",
+            "current": total,
+            "total": total,
+            "filename": "Фото страниц",
+            "stage": "reconcile",
+            "message": f"Фото страниц, {len(vision_pages)} кадров",
+        }
         first_model = model_spec(1)
         second_model = model_spec(2)
         model_label = first_model or "модель"

@@ -592,7 +592,14 @@ const pipeline = {
     this.index = 0;
     this.finished = false;
     this.failed = false;
-    this.steps = PIPELINE.map((step) => ({ ...step, state: "wait", started: 0, ended: 0 }));
+    this.steps = PIPELINE.map((step) => ({
+      ...step,
+      state: "wait",
+      started: 0,
+      ended: 0,
+      serverSeconds: null,
+      detail: "",
+    }));
     const error = $("#parse-error");
     error.textContent = "";
     error.classList.add("hidden");
@@ -605,9 +612,15 @@ const pipeline = {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   },
-  reach(id) {
+  reach(id, extra) {
     const next = this.steps.findIndex((step) => step.id === id);
-    if (next < 0 || (next <= this.index && this.steps[this.index].state === "run" && next === this.index)) {
+    const seconds = extra && Number.isFinite(extra.seconds) ? extra.seconds : null;
+    const detail = extra?.detail || "";
+    if (next < 0) return;
+    if (next === this.index && this.steps[this.index].state === "run") {
+      const current = this.steps[this.index];
+      if (seconds != null) current.serverSeconds = seconds;
+      if (detail) current.detail = detail;
       this.paint(false);
       return;
     }
@@ -626,6 +639,8 @@ const pipeline = {
     const step = this.steps[next];
     step.state = "run";
     step.started = step.started || now;
+    if (seconds != null) step.serverSeconds = seconds;
+    if (detail) step.detail = detail;
     this.paint(true);
   },
   complete() {
@@ -669,9 +684,14 @@ const pipeline = {
     return { start: this.index - 1, length: 3, highlight: 1 };
   },
   timeLabel(step, idleText) {
-    if (step.state === "run" && step.started) return `идёт ${formatStepSeconds(Date.now() - step.started)}`;
-    if ((step.state === "done" || step.state === "fail") && step.started) {
-      return formatStepSeconds((step.ended || Date.now()) - step.started);
+    const note = step.detail ? ` · ${step.detail}` : "";
+    if (step.state === "run" && step.started) {
+      return `идёт ${formatStepSeconds(Date.now() - step.started)}${note}`;
+    }
+    if ((step.state === "done" || step.state === "fail") && (step.started || step.serverSeconds != null)) {
+      const client = step.started ? (step.ended || Date.now()) - step.started : 0;
+      const server = step.serverSeconds != null ? step.serverSeconds * 1000 : 0;
+      return `${formatStepSeconds(Math.max(client, server))}${note}`;
     }
     if (step.state === "skip") return idleText === "" ? "не было" : "";
     return idleText || "";
@@ -744,6 +764,16 @@ const pipeline = {
   },
 };
 
+function progressSeconds(message) {
+  const match = String(message || "").match(/\((\d+)\s*с\)/);
+  return match ? Number(match[1]) : null;
+}
+
+function progressFrames(message) {
+  const match = String(message || "").match(/(\d+)\s*кадр/);
+  return match ? `${match[1]} кадров` : "";
+}
+
 function pipelineStep(filename, stage, message) {
   const text = `${filename || ""} ${message || ""}`.toLowerCase();
   if (stage === "model" || text.includes("вердикт") || text.includes("модель")) return "verdict";
@@ -779,7 +809,12 @@ async function processShipment() {
     const created = await parseUploadStream(fd, {
       onProgress(_current, _total, filename, extra) {
         const id = pipelineStep(filename, extra?.stage, extra?.message);
-        if (id) pipeline.reach(id);
+        if (id) {
+          pipeline.reach(id, {
+            seconds: progressSeconds(extra?.message),
+            detail: progressFrames(extra?.message),
+          });
+        }
       },
       onFile() {
         pipeline.reach("assemble");
