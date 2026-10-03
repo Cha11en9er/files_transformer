@@ -776,7 +776,7 @@ def _apply_roll_weights(lots, spec_lines, packing_lines):
     for lot in lots:
         key = _design_key(lot.get("model") or lot.get("description"))
         rows = grouped.get(key) or []
-        if len(rows) < 2:
+        if not rows:
             continue
         meters = sum(row.pieces or 0 for row in rows)
         if lot.get("pieces") is None or abs(meters - lot["pieces"]) > 0.05:
@@ -793,9 +793,9 @@ def _apply_roll_weights(lots, spec_lines, packing_lines):
         if packing is not None and packing.gross is not None and abs(sum(grosses) - packing.gross) > 0.02:
             continue
         for (lot, rows), net, gross in zip(group, nets, grosses):
-            if lot.get("net") is None:
+            if lot.get("net") is None and any(row.net is not None for row in rows):
                 lot["net"] = net
-            if lot.get("gross") is None:
+            if lot.get("gross") is None and any(row.gross is not None for row in rows):
                 lot["gross"] = gross
             widths = {row.width for row in rows if row.width is not None}
             if lot.get("width") is None and len(widths) == 1:

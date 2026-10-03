@@ -280,6 +280,7 @@ def part_key(line):
 
 def fold_parts(lines):
     """Строки одного изделия без своего количества и своей цены — части, не отдельные лоты."""
+    lines = _drop_description_echoes(lines)
     folded = []
     index = 0
     while index < len(lines):
@@ -297,6 +298,41 @@ def fold_parts(lines):
         folded.append(_collapse_group(group))
         index = cursor
     return folded
+
+
+def _drop_description_echoes(lines):
+    """Строка без своей цены, с тем же количеством и суммой, чьё имя содержит артикул верхней, — её описание."""
+    kept = []
+    for line in lines:
+        if kept and _description_echo(line, kept[-1]):
+            _attach_echo(kept[-1], line)
+            continue
+        kept.append(line)
+    return kept
+
+
+def _description_echo(line, previous):
+    if line.freight or previous.freight:
+        return False
+    if line.price is not None or previous.price is None:
+        return False
+    if line.pieces is None or previous.pieces is None or abs(line.pieces - previous.pieces) > 0.05:
+        return False
+    if line.amount is None or previous.amount is None or abs(line.amount - previous.amount) > 0.05:
+        return False
+    return _name_wraps(line.model or line.description, previous.model or previous.description)
+
+
+def _name_wraps(outer, inner):
+    outer = " ".join(str(outer or "").split()).casefold()
+    inner = " ".join(str(inner or "").split()).casefold()
+    return len(inner) >= 3 and bool(outer) and outer != inner and inner in outer
+
+
+def _attach_echo(head, echo):
+    text = " ".join(str(echo.model or echo.description or "").split())
+    if text and not head.description:
+        head.description = text
 
 
 def _can_fold(group):
