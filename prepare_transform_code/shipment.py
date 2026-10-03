@@ -406,6 +406,7 @@ def _delivery(text):
         for match in re.finditer(label, text or "", re.I):
             value = " ".join(match.group(1).split())
             value = re.split(r"(?i)\b(?:shipment|payment|manufacturer|origin)\b", value)[0].strip(" .:")
+            value = _trim_delivery_company(value)
             if value and not _same_term(value, found):
                 found.append(value)
     for match in re.finditer(
@@ -414,6 +415,7 @@ def _delivery(text):
         re.I,
     ):
         value = " ".join(match.group(1).split())
+        value = _trim_delivery_company(value)
         if value and not _same_term(value, found):
             found.append(value)
     if not found:
@@ -423,10 +425,27 @@ def _delivery(text):
     return " / ".join(found), True
 
 
+def _trim_delivery_company(value):
+    """Название фирмы в конце строки базиса — не условие поставки."""
+    return re.sub(
+        r"\s+[A-Z][A-Z0-9 .'/,&-]{6,}(?:LTD|LLC|INC|GMBH)\.?\s*$",
+        "",
+        str(value or ""),
+    ).strip(" ,/")
+
+
+def _term_code(value):
+    head = re.split(r"[\s/.(]", str(value or "").strip(), maxsplit=1)[0].upper()
+    compact = re.sub(r"[^A-Z]", "", head)
+    if compact in {"EXW", "EXWORK", "EXWORKS"}:
+        return "EXW"
+    return compact or head
+
+
 def _same_term(value, found):
-    head = re.split(r"[\s/.(]", value, maxsplit=1)[0].upper()
+    head = _term_code(value)
     for item in found:
-        other = re.split(r"[\s/.(]", item, maxsplit=1)[0].upper()
+        other = _term_code(item)
         if head == other or head in item.upper() or other in value.upper():
             return True
     return False

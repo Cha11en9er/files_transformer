@@ -377,6 +377,59 @@ def _next_party_value(lines, index, party):
     return _cut_other_party(lines[cursor][:160], party).strip(" /")
 
 
+def _paired_labels(line):
+    """«Buyer: Seller:» на одной строке. Имена идут следом в том же порядке."""
+    low = line.lower()
+    hits = []
+    for role, words in _PARTY:
+        match = next(
+            (found_at for word in words if (found_at := re.search(rf"(?<!\w){re.escape(word)}(?!\w)", low, re.I))),
+            None,
+        )
+        if not match or re.match(r"^['’]s\b", line[match.end() :], re.I):
+            continue
+        hits.append((match.start(), role))
+    hits.sort()
+    roles = []
+    for _start, role in hits:
+        if role not in roles:
+            roles.append(role)
+    if len(roles) < 2:
+        return None
+    tail = line
+    for role in roles:
+        for word in dict(_PARTY)[role]:
+            tail = re.sub(rf"(?i)(?<!\w){re.escape(word)}(?!\w)\s*:?", " ", tail)
+    if re.sub(r"[\s:./\-]+", "", tail):
+        return None
+    return roles
+
+
+def _split_companies(line):
+    """Две фирмы в одной строке: левая колонка кончилась на LLC, справа другая фирма."""
+    marks = list(
+        re.finditer(
+            r"(?i)\b(?:llc|ltd|limited|inc|gmbh|ооо|ао|зао|co\.,?\s*ltd)\b\.?",
+            line,
+        )
+    )
+    if len(marks) < 2:
+        return None
+    cut = marks[0].end()
+    left = line[:cut].strip(" ,")
+    right = line[cut:].strip(" ,")
+    translated = re.match(
+        r"^(?:/\s*)(?![A-Za-z])(?:.+?)(?:ооо|ао|зао)\b\.?\s*",
+        right,
+        re.I,
+    )
+    if translated:
+        right = right[translated.end() :].strip(" ,/")
+    if not left or not right:
+        return None
+    return left, right
+
+
 def _row_label(line):
     """Подпись стороны. Опечатка CONSINGNEE — та же подпись получателя, не имя."""
     role = _bare_role(line)
@@ -438,6 +491,15 @@ def party_after(text):
 def _fill_parties(lines, found, alias):
     index = 0
     while index < len(lines):
+        paired = _paired_labels(lines[index])
+        if paired and index + 1 < len(lines):
+            names = _split_companies(lines[index + 1])
+            if names and not _row_label(lines[index + 1]):
+                for role, name in zip(paired, names):
+                    if role not in found and name:
+                        found[role] = _dedupe_side_by_side(_trim_party(name))
+                index += 2
+                continue
         role = _row_label(lines[index])
         nxt = _row_label(lines[index + 1]) if role and index + 1 < len(lines) else None
         if role and nxt and nxt != role:

@@ -95,6 +95,24 @@ class LanguageTest(unittest.TestCase):
         self.assertIn("ОКТЯБРЬ", same_line["buyer"])
         self.assertIn("YANTAI", same_line["seller"])
         self.assertNotIn("Продавец", same_line["buyer"])
+        columns = party_after(
+            "Buyer: Seller:\n"
+            "“SM REGIONTEKSTIL'” LLC HANGZHOU ZHONGFANG TEXTILE IMP./EXP. CO., LTD."
+        )
+        self.assertIn("REGIONTEKSTIL", columns["buyer"])
+        self.assertNotIn("HANGZHOU", columns["buyer"])
+        self.assertIn("HANGZHOU", columns["seller"])
+        self.assertNotIn("REGIONTEKSTIL", columns["seller"])
+        bilingual = party_after(
+            "Buyer/Покупатель: Seller / Продавец:\n"
+            "“SM REGIONTEKSTIL'” LLC / “СМ Регионтекстиль” ООО HANGZHOU ZHONGFANG TEXTILE IMP./EXP. CO., LTD."
+        )
+        self.assertIn("REGIONTEKSTIL", bilingual["buyer"])
+        self.assertNotIn("HANGZHOU", bilingual["buyer"])
+        self.assertIn("HANGZHOU", bilingual["seller"])
+        self.assertNotIn("REGIONTEKSTIL", bilingual["seller"])
+        self.assertNotIn("Регион", bilingual["seller"])
+        self.assertTrue(bilingual["seller"].startswith("HANGZHOU"))
         self.assertEqual(column_of("Код изделия"), "vendor")
         self.assertEqual(column_of("Item Code"), "vendor")
         self.assertEqual(column_of("Цвет /Тип покрытия"), "finish")
@@ -1318,6 +1336,47 @@ class FabricFamilyTest(unittest.TestCase):
         self.assertAlmostEqual(sum(lot["net"] for lot in goods), 6026.26, places=2)
         self.assertAlmostEqual(sum(lot["amount"] for lot in goods), 188362.5, places=2)
         self.assertAlmostEqual(sum(lot["gross"] for lot in goods), 6299.99, places=2)
+
+
+class FamilyPriceBandTest(unittest.TestCase):
+    def test_color_rows_take_the_family_price_and_the_spec_weight(self):
+        from prepare_transform_code.join import build_lots
+        from prepare_transform_code.lines import Line
+
+        invoice = [
+            Line(model="Velvet LUX 03", pieces=201.4, packages=4, area=285.988, width=1.42, hs="5801320000", unit="meters"),
+            Line(model="Velvet LUX 32", pieces=200.4, packages=4, area=284.568, width=1.42, hs="5801320000", unit="meters"),
+            Line(model="Velvet LUX 78", pieces=205.3, packages=4, area=291.526, width=1.42, hs="5801320000", unit="meters"),
+            Line(model="SOFA FABRIC Velvet LUX", pieces=607.1, packages=12, price=21.67, amount=13155.86, area=862.082, width=1.42, hs="5801320000", unit="meters"),
+            Line(model="Lazy Silver", pieces=517.8, packages=11, area=735.276, width=1.42, hs="5801330000", unit="meters"),
+            Line(model="SOFA FABRIC Lazy", pieces=517.8, packages=11, price=15.18, amount=7860.2, area=735.276, width=1.42, hs="5801330000", unit="meters"),
+            Line(model="Marseille Linen", pieces=2044.3, packages=40, area=2902.906, width=1.42, hs="5801360000", unit="meters"),
+            Line(model="SOFA FABRIC Marseille", pieces=2044.3, packages=40, price=20.37, amount=41642.39, area=2902.906, width=1.42, hs="5801360000", unit="meters"),
+        ]
+        packing = [
+            Line(model="SOFA FABRIC Velvet LUX", pieces=607.1, packages=12, net=279.27, gross=291.0),
+            Line(model="SOFA FABRIC Lazy", pieces=517.8, packages=11, net=258.9, gross=270.0),
+            Line(model="SOFA FABRIC Marseille", pieces=2044.3, packages=40, net=1226.58, gross=1271.0),
+        ]
+        spec = [
+            Line(vendor="Velvet LUX 03", description="Upholstery fabric, velvet", pieces=201.4, packages=4, net=92.64, gross=96.55, hs="5801320000"),
+            Line(vendor="Velvet LUX 32", pieces=200.4, packages=4, net=92.19, gross=96.1, hs="5801320000"),
+            Line(vendor="Velvet LUX 78", pieces=205.3, packages=4, net=94.44, gross=98.35, hs="5801320000"),
+            Line(vendor="Lazy Silver", pieces=517.8, packages=11, net=258.9, gross=270.0, hs="5801330000"),
+            Line(vendor="Marseille Linen", pieces=2044.3, packages=40, net=1226.58, gross=1271.0, hs="5801360000"),
+        ]
+        lots, _freights = build_lots(invoice, packing, spec)
+        self.assertEqual([lot["model"] for lot in lots], ["Velvet LUX 03", "Velvet LUX 32", "Velvet LUX 78", "Lazy Silver", "Marseille Linen"])
+        velvet = lots[:3]
+        self.assertEqual([lot["price"] for lot in velvet], [21.67, 21.67, 21.67])
+        self.assertAlmostEqual(sum(lot["amount"] for lot in velvet), 13155.86, places=2)
+        self.assertAlmostEqual(sum(lot["net"] for lot in velvet), 279.27, places=2)
+        self.assertAlmostEqual(sum(lot["gross"] for lot in velvet), 291.0, places=2)
+        self.assertEqual(lots[0]["description"], "SOFA FABRIC Velvet LUX // Upholstery fabric, velvet")
+        self.assertAlmostEqual(lots[3]["price"], 15.18)
+        self.assertAlmostEqual(lots[3]["net"], 258.9)
+        self.assertAlmostEqual(lots[4]["amount"], 41642.39)
+        self.assertAlmostEqual(lots[4]["gross"], 1271.0)
 
 
 class UpholsteryRollsTest(unittest.TestCase):
