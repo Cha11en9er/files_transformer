@@ -564,6 +564,196 @@ dropzoneWrap?.addEventListener("drop", async (e) => {
   addPendingFiles(files);
 });
 
+const PIPELINE = [
+  { id: "receive", title: "Приём файлов" },
+  { id: "reconcile", title: "Сверка позиций" },
+  { id: "read", title: "Чтение документов" },
+  { id: "photos", title: "Фото страниц" },
+  { id: "verdict", title: "Вердикт модели" },
+  { id: "assemble", title: "Сборка таблицы" },
+  { id: "done", title: "Распознавание выполнено" },
+];
+
+function formatStepSeconds(ms) {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  if (sec < 60) return `${sec} с`;
+  const min = Math.floor(sec / 60);
+  const rest = sec % 60;
+  return rest ? `${min} мин ${rest} с` : `${min} мин`;
+}
+
+const pipeline = {
+  index: 0,
+  timer: null,
+  finished: false,
+  failed: false,
+  steps: [],
+  reset() {
+    this.index = 0;
+    this.finished = false;
+    this.failed = false;
+    this.steps = PIPELINE.map((step) => ({ ...step, state: "wait", started: 0, ended: 0 }));
+    const error = $("#parse-error");
+    error.textContent = "";
+    error.classList.add("hidden");
+    $("#parse-progress").classList.remove("hidden");
+    $("#parse-progress-fill").style.width = "0%";
+    this.reach("receive");
+    this.timer = setInterval(() => this.paint(false), 1000);
+  },
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  },
+  reach(id) {
+    const next = this.steps.findIndex((step) => step.id === id);
+    if (next < 0 || (next <= this.index && this.steps[this.index].state === "run" && next === this.index)) {
+      this.paint(false);
+      return;
+    }
+    if (next < this.index) return;
+    const now = Date.now();
+    const current = this.steps[this.index];
+    if (current && current.state === "run") {
+      current.ended = now;
+      current.state = "done";
+    }
+    for (let i = this.index + 1; i < next; i += 1) {
+      const skipped = this.steps[i];
+      if (skipped.state === "wait") skipped.state = "skip";
+    }
+    this.index = next;
+    const step = this.steps[next];
+    step.state = "run";
+    step.started = step.started || now;
+    this.paint(true);
+  },
+  complete() {
+    const now = Date.now();
+    const last = this.steps.length - 1;
+    this.steps.forEach((step, i) => {
+      if (step.state === "done" || step.state === "skip" || step.state === "fail") return;
+      if (step.state === "wait" && i !== last) {
+        step.state = "skip";
+        return;
+      }
+      if (!step.started) step.started = now;
+      step.ended = now;
+      step.state = "done";
+    });
+    this.index = last;
+    this.finished = true;
+    this.stop();
+    this.paint(true);
+  },
+  fail(message) {
+    const step = this.steps[this.index];
+    if (step && step.state === "run") {
+      step.ended = Date.now();
+      step.state = "fail";
+    }
+    this.failed = true;
+    this.stop();
+    const error = $("#parse-error");
+    error.textContent = message;
+    error.classList.remove("hidden");
+    const rail = $("#step-rail");
+    if (rail) rail.dataset.index = "";
+    this.paint(false);
+  },
+  windowOf() {
+    const last = this.steps.length - 1;
+    if (this.finished || this.index >= last) return { start: last, length: 1, highlight: 0 };
+    if (this.index === last - 1) return { start: this.index, length: 2, highlight: 0 };
+    if (this.index <= 1) return { start: 0, length: 3, highlight: this.index };
+    return { start: this.index - 1, length: 3, highlight: 1 };
+  },
+  timeLabel(step, idleText) {
+    if (step.state === "run" && step.started) return `идёт ${formatStepSeconds(Date.now() - step.started)}`;
+    if ((step.state === "done" || step.state === "fail") && step.started) {
+      return formatStepSeconds((step.ended || Date.now()) - step.started);
+    }
+    if (step.state === "skip") return idleText === "" ? "не было" : "";
+    return idleText || "";
+  },
+  paint(animate) {
+    const rail = $("#step-rail");
+    if (!rail) return;
+    const view = this.windowOf();
+    const same = !animate
+      && rail.dataset.start === String(view.start)
+      && rail.dataset.count === String(view.length)
+      && rail.dataset.index === String(this.index);
+    if (same) {
+      this.refreshTimes();
+      return;
+    }
+    const prev = rail.dataset.start;
+    this.paintToken = (this.paintToken || 0) + 1;
+    const token = this.paintToken;
+    rail.dataset.start = String(view.start);
+    rail.dataset.count = String(view.length);
+    rail.dataset.index = String(this.index);
+    const slice = this.steps.slice(view.start, view.start + view.length);
+    const html = slice.map((step, slot) => {
+      const tone = step.state === "fail"
+        ? "is-fail"
+        : slot === view.highlight
+          ? "is-current"
+          : this.steps.indexOf(step) < this.index
+            ? "is-past"
+            : "is-next";
+      const time = this.timeLabel(step);
+      return `<div class="step-chip ${tone}" data-step="${step.id}"><span class="step-name">${escapeHtml(step.title)}</span><span class="step-time">${
+        time ? escapeHtml(time) : ""
+      }</span></div>`;
+    }).join("");
+    const denom = Math.max(1, this.steps.length - 1);
+    const pct = this.finished ? 100 : Math.round((this.index / denom) * 100);
+    const slide = animate && prev !== undefined && prev !== "" && Number(view.start) > Number(prev);
+    const apply = () => {
+      rail.classList.remove("is-leaving", "is-forward");
+      rail.innerHTML = html;
+      if (slide) {
+        void rail.offsetWidth;
+        rail.classList.add("is-forward");
+      }
+      this.refreshTimes();
+      $("#parse-progress-fill").style.width = `${pct}%`;
+    };
+    if (slide && rail.childElementCount) {
+      rail.classList.add("is-leaving");
+      window.setTimeout(() => {
+        if (token !== this.paintToken) return;
+        apply();
+      }, 200);
+      return;
+    }
+    apply();
+  },
+  refreshTimes() {
+    this.steps.forEach((step) => {
+      const chip = document.querySelector(`.step-chip[data-step="${step.id}"] .step-time`);
+      if (chip) chip.textContent = this.timeLabel(step);
+    });
+    const pop = $("#step-popover");
+    pop.innerHTML = this.steps.map((step) => {
+      const time = this.timeLabel(step, "");
+      return `<div class="step-row is-${step.state}"><span>${escapeHtml(step.title)}</span><span>${escapeHtml(time)}</span></div>`;
+    }).join("");
+  },
+};
+
+function pipelineStep(filename, stage, message) {
+  const text = `${filename || ""} ${message || ""}`.toLowerCase();
+  if (stage === "model" || text.includes("вердикт") || text.includes("модель")) return "verdict";
+  if (text.includes("фото")) return "photos";
+  if (text.includes("чтени")) return "read";
+  if (text.includes("сверк")) return "reconcile";
+  if (stage === "parse") return "receive";
+  return "";
+}
+
 async function processShipment() {
   if (processing || state.sessionLocked) return;
   if (!state.pendingFiles.length) {
@@ -583,57 +773,21 @@ async function processShipment() {
     if (extraFiles.has(f)) fd.append("extra_files", f, name);
     else fd.append("files", f, name);
   });
-  const progressWrap = $("#parse-progress");
-  const fill = $("#parse-progress-fill");
-  const label = $("#parse-progress-label");
-  const log = $("#parse-file-log");
-  progressWrap.classList.remove("hidden");
-  fill.style.width = "0%";
-  log.innerHTML = "";
-  $("#upload-status").textContent = `Обработка ${fileCountLabel(state.pendingFiles.length)}…`;
+  $("#upload-status").textContent = "";
+  pipeline.reset();
   try {
     const created = await parseUploadStream(fd, {
-      onProgress(current, total, filename, extra) {
-        const pct = total ? Math.round((current / total) * 100) : 0;
-        fill.style.width = `${pct}%`;
-        const message = extra?.message;
-        const stage = extra?.stage;
-        if (message) {
-          label.textContent = extra?.stage === "model" ? "идет вердикт" : message;
-        } else if (stage === "model") {
-          label.textContent = "идет вердикт";
-        } else if (stage === "reconcile") {
-          label.textContent = "Сверка позиций";
-        } else {
-          label.textContent = filename
-            ? `Файл ${current} из ${total}: ${filename}`
-            : `Файл ${current} из ${total}`;
-        }
-        $("#upload-status").textContent = label.textContent;
-        if (stage === "model") {
-          const exists = [...log.querySelectorAll("li")].some((li) => li.dataset.verdict === "1");
-          if (!exists) {
-            const li = document.createElement("li");
-            li.className = "model";
-            li.dataset.verdict = "1";
-            li.textContent = "идет вердикт";
-            log.appendChild(li);
-          }
-        }
+      onProgress(_current, _total, filename, extra) {
+        const id = pipelineStep(filename, extra?.stage, extra?.message);
+        if (id) pipeline.reach(id);
       },
-      onFile(filename, status, message) {
-        const li = document.createElement("li");
-        li.className = status || "";
-        if (status === "skipped") {
-          li.textContent = `Пропущен: ${filename}${message ? ` (${message})` : ""}`;
-        } else if (status === "review") {
-          li.textContent = message ? `${filename}: ${message}` : `Нужна проверка: ${filename}`;
-        } else {
-          li.textContent = message || `файл ${filename} обработан кодом`;
-        }
-        log.appendChild(li);
+      onFile() {
+        pipeline.reach("assemble");
       },
     });
+    pipeline.reach("assemble");
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    pipeline.complete();
     state.shipmentId = created.id;
     state.workspace = created;
     applyShipmentTitle(created.title, { force: true });
@@ -643,28 +797,12 @@ async function processShipment() {
       `Готово: ${created.item_count} позиций из ${created.files?.length || state.pendingFiles.length} файлов` +
       (skipped ? `, пропущено: ${skipped}` : "") +
       `, замечаний: ${created.warning_count}. Чтобы обработать другой комплект, обновите страницу.`;
-    fill.style.width = "100%";
-    const reviewOk = created.model_review?.status === "ok";
-    label.textContent = reviewOk ? "идет вердикт" : "Сверка завершена";
-    if (reviewOk) {
-      (created.files || [])
-        .filter((f) => f.parse_status === "ok" && f.filename && f.filename !== "сверка")
-        .forEach((f) => {
-          const n = String(f.parse_message || "").match(/нашлось\s+(\d+)/i)?.[1]
-            || String(created.item_count || "");
-          const li = document.createElement("li");
-          li.className = "model";
-          li.textContent = `файл ${f.filename} обработан моделью, нашлось ${n} позиций`;
-          log.appendChild(li);
-        });
-    }
     setSessionLocked(true, { busy: false, buttonLabel: "Обработано" });
     renderWorkspace();
     showToast("Обработка прошла успешно", { kind: "ok", ms: 4000 });
   } catch (err) {
-    $("#upload-status").textContent = `Ошибка: ${humanizeClientError(err.message)}`;
+    pipeline.fail(`Ошибка: ${humanizeClientError(err.message)}`);
     setSessionLocked(false, { busy: false, buttonLabel: "Обработать" });
-    showToast(`Ошибка обработки: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5200 });
   }
 }
 

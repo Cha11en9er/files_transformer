@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=38" />
+  <link rel="stylesheet" href="/assets/styles.css?v=39" />
 </head>
 <body>
   <div class="app">
@@ -67,9 +67,14 @@
         </div>
         <p id="kit-check" class="status"></p>
         <div class="parse-progress hidden" id="parse-progress">
+          <div class="step-carousel" id="step-carousel">
+            <div class="step-viewport">
+              <div class="step-rail" id="step-rail" data-count="3"></div>
+            </div>
+            <div class="step-popover" id="step-popover"></div>
+          </div>
           <div class="parse-progress-track"><span id="parse-progress-fill"></span></div>
-          <p id="parse-progress-label" class="status"></p>
-          <ul id="parse-file-log"></ul>
+          <p id="parse-error" class="parse-error hidden"></p>
         </div>
         <div class="form-actions">
           <button type="submit" class="btn primary" id="btn-process">Обработать</button>
@@ -218,6 +223,6 @@
 
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
-  <script src="/assets/app.js?v=50"></script>
+  <script src="/assets/app.js?v=51"></script>
 </body>
 </html>
