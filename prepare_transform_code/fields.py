@@ -12,8 +12,8 @@ COLUMNS = (
     ("qty", ("q-ty items", "q/ty pairs", "quantity(mts)", "quantity (mts)", "qty(m)", "net meters", "net metres", "net meter", "net metre", "net mt", "goods pcs", "mal adedi", "кол-во пар", "кол-во штук", "кол-во шт", "количество")),
     ("price", ("unit price", "price per", "price for pair", "price for unit", "eur unit", "цена за пару", "цена за ед", "цена за шт", "unitprice")),
     ("amount", ("gesamtpreis", "total price", "total amount", "total value", "eur item", "amount", "стоимость", "общая стоимость")),
-    ("gross", ("w/o pallet", "without pallet", "без паллет", "gross weight", "gesamtgewicht", "total g. weight", "total kg", "gross kg", "итого вес брутто", "g.w", "gw", "брутто", "brutto", "brut")),
-    ("net", ("net weight", "total n. weight", "total nett", "итого вес нетто", "net kg", "n.w", "nw", "нетто", "netto", "nett")),
+    ("gross", ("w/o pallet", "without pallet", "без паллет", "gross weight", "gross wt", "gesamtgewicht", "total g. weight", "total kg", "gross kg", "итого вес брутто", "g.w", "gw", "брутто", "brutto", "brut")),
+    ("net", ("net weight", "net wt", "total n. weight", "total nett", "итого вес нетто", "net kg", "n.w", "nw", "нетто", "netto", "nett")),
     ("volume", ("measurement", "volume", "cbm", "м куб", "m3")),
     ("area", ("q-ty m2", "qty m2", "sqm", "sq.m", "mt2", "м2", "кв.м", "кв м", "кв. м", "m2")),
     ("vendor", ("item number", "item code", "item no", "quality code", "vendor code", "код изделия", "cat,#", "cat.#", "article", "artikel", "articulo", "articolo", "artigo", "артикул", "маркировка", "货号", "art nr", "art.")),
@@ -47,7 +47,8 @@ _ROLE_MARKS = (
 )
 
 def column_of(header):
-    text = collapse_letter_spacing(" ".join(str(header or "").lower().replace("\n", " ").split()))
+    raw = " ".join(str(header or "").lower().replace("\n", " ").split())
+    text = collapse_letter_spacing(raw)
     text = " ".join(re.sub(r"\([^)]*\)", " ", text).split())
     text = _glue_broken_label(text)
     text = text.replace("weigth", "weight").replace("widht", "width")
@@ -78,7 +79,10 @@ def column_of(header):
     }
     if text in exact:
         return exact[text]
-    # CBM/CTN — объём одной коробки. Итог строки — MEASUREMENT.
+    # Art No. — артикул. «part no» сюда не входит: перед art стоит буква.
+    if re.search(r"(?<![a-z])art\.?\s*no\.?\b", text):
+        return "vendor"
+    # CBM/CTN — объём одной коробки. Итог строки — MEASUREMENT или Volume.
     if text.replace(" ", "") in {"measurement", "measure"} or "cbm" in text:
         if any(mark in text for mark in ("/ctn", "per ctn", "/carton", "per carton")):
             return None
@@ -288,12 +292,13 @@ def _legal_tail(line):
 
 def _trim_party(value):
     """Дата и адрес на той же строке, что имя, в имя не входят."""
-    return re.split(
+    text = re.split(
         r"\s+(?:date|address|адрес|contract|контракт|the\s+delivery\s+basis|delivery\s+basis|terms\s+of\s+delivery|базис\s+поставки|inn|kpp|ogrn|огрн|инн|кпп|bank|банк|swift|tel)\b\s*:?",
         value,
         maxsplit=1,
         flags=re.I,
     )[0].strip(" ,")
+    return text.lstrip(";").strip()
 
 
 def _cut_other_party(value, role):
@@ -379,7 +384,16 @@ def _row_label(line):
         return role
     head = re.split(r"[/:]", str(line or ""), maxsplit=1)[0]
     token = re.sub(r"[\s.]+", "", head.lower()).strip(":")
-    if token in {"recipient", "consignee", "consingnee", "получатель", "грузополучатель"}:
+    if token in {
+        "recipient",
+        "consignee",
+        "consingnee",
+        "shipto",
+        "deliverto",
+        "deliveryto",
+        "получатель",
+        "грузополучатель",
+    }:
         return "consignee"
     return None
 

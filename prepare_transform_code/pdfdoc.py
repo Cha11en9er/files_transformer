@@ -16,6 +16,7 @@ from prepare_transform_code.numbers import (
     _COMMA_IS_DECIMAL,
     _DOT_IS_DECIMAL,
     collapse_letter_spacing,
+    collapse_overprint,
     comma_is_decimal,
     currency_of,
     dot_is_decimal,
@@ -30,7 +31,7 @@ def read_pdf(path):
     inherited = None
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
-            text = page.extract_text() or ""
+            text = collapse_overprint(page.extract_text() or "")
             words = page.extract_words() or []
             tables = []
             page_found = []

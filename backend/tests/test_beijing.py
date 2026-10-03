@@ -173,6 +173,13 @@ def test_export_preview_uses_invoice_no_when_title_blank() -> None:
     assert custom.json()["files"][0]["filename"].startswith("Моя поставка")
 
 
+def test_invoice_without_a_hyphen_is_not_repeated_in_the_filename() -> None:
+    from app.services.export import _kit_label
+
+    assert _kit_label([], {"invoice_no": "WI12026000000968"}) == ""
+    assert _kit_label([], {"invoice_no": "ZFRMB26148-626-1"}) == "626-1"
+
+
 def test_beijing_export_filename_and_table_borders(tmp_path: Path) -> None:
     from app.services.export_style import safe_export_stem
 

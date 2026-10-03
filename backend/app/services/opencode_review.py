@@ -1224,11 +1224,21 @@ VERDICT_SYSTEM = (
 )
 
 
-def _model_parts(model: str) -> tuple[str, str]:
-    provider, _, model_id = (model or "").partition("/")
+_EFFORT = {"low", "medium", "high", "xhigh"}
+
+
+def _model_parts(model: str) -> tuple[str, str, str | None]:
+    """openrouter/x-ai/grok-4.7:high → провайдер, id модели, вариант. Default в запрос не кладётся."""
+    raw = (model or "").strip()
+    variant = None
+    head, sep, tail = raw.rpartition(":")
+    if sep and tail.lower() in _EFFORT and "/" in head:
+        raw = head
+        variant = tail.lower()
+    provider, _, model_id = raw.partition("/")
     if not model_id:
-        return "opencode", provider or "qwen3.5-plus"
-    return provider, model_id
+        return "opencode", provider or "qwen3.5-plus", variant
+    return provider, model_id, variant
 
 
 def review_with_opencode(
@@ -1270,7 +1280,7 @@ def review_with_opencode(
     if not cfg["enabled"]:
         result["error"] = "OpenCode отключён (OPENCODE_ENABLED=0)"
         return result
-    provider_id, model_id = _model_parts(model_name)
+    provider_id, model_id, variant = _model_parts(model_name)
     before_billing = fetch_openrouter_billing() if provider_id == "openrouter" else _empty_billing()
 
     prompt = user_prompt if user_prompt is not None else build_user_prompt(snapshot)
@@ -1299,14 +1309,17 @@ def review_with_opencode(
             if not session_id:
                 raise RuntimeError(f"нет id сессии: {body}")
             encoded_id = quote(str(session_id), safe="")
+            message: dict[str, Any] = {
+                "system": system_prompt,
+                "model": {"providerID": provider_id, "modelID": model_id},
+                "tools": DISABLED_TOOLS,
+                "parts": parts,
+            }
+            if variant:
+                message["variant"] = variant
             reply = client.post(
                 f"/session/{encoded_id}/message",
-                json={
-                    "system": system_prompt,
-                    "model": {"providerID": provider_id, "modelID": model_id},
-                    "tools": DISABLED_TOOLS,
-                    "parts": parts,
-                },
+                json=message,
             )
             reply.raise_for_status()
             raw_text = _assistant_text(reply.json())

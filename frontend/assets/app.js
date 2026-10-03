@@ -1369,7 +1369,12 @@ function renderWorkspace() {
     else if (clickable) statusHint = " · таблица";
     span.title = f.parse_message || (clickable ? "Открыть, как распознался файл" : "");
     span.setAttribute("aria-controls", "review-dialog");
-    span.textContent = `${f.filename} - ${typeRu}${ocrHint}${statusHint}`;
+    const modelFail = String(f.filename || "") === "модель" && f.parse_message;
+    if (modelFail) {
+      span.textContent = `модель - ${String(f.parse_message).replace(/\s+/g, " ").slice(0, 180)}`;
+    } else {
+      span.textContent = `${f.filename} - ${typeRu}${ocrHint}${statusHint}`;
+    }
     if (clickable) {
       span.addEventListener("click", (event) => {
         event.preventDefault();

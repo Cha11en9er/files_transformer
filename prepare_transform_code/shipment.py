@@ -135,11 +135,18 @@ def analyze(folder):
         letterhead = _letterhead_seller(plain)
         if letterhead:
             parties["seller"] = letterhead
+    if not parties.get("buyer"):
+        addressed = _to_company(plain)
+        if addressed:
+            parties["buyer"] = addressed
     origin = _one_label(plain, r"(?:country\s+of\s+origin|origin(?:\s+of\s+goods)?)\s*:") or _of_origin(plain)
     producer = _one_label(plain, r"(?:manufacturer|manufactured(?:\s+by)?|производитель|произведено)\s*:")
     seller_address, buyer_address = _address_blocks(plain)
     if not buyer_address:
         buyer_address = _party_continuation(plain, parties.get("buyer") or "")
+    ship_to = _ship_to_address(plain)
+    if ship_to and not buyer_address:
+        buyer_address = ship_to
     for lot in lots:
         if origin and not lot.get("origin"):
             lot["origin"] = origin
@@ -377,6 +384,7 @@ def _delivery(text):
     for label in (
         r"terms of delivery(?:\s*/[^:\n]{0,40})?\s*:\s*([^\n]+)",
         r"delivery terms\s*:\s*([^\n]+)",
+        r"inco\s*terms\s*:?\s*([^\n]+)",
     ):
         for match in re.finditer(label, text or "", re.I):
             value = " ".join(match.group(1).split())
@@ -500,6 +508,20 @@ def _party_side(line):
     return "seller"
 
 
+def _to_company(text):
+    """«TO: компания» в шапке — покупатель, если слова Buyer нет. Два разных имени не выбирать."""
+    found = []
+    for match in re.finditer(r"(?m)^\s*TO\s*:\s*(.+)$", text or "", re.I):
+        value = " ".join(match.group(1).split()).strip(" .")
+        if not re.search(r"\b(LLC|LTD|GMBH|INC|CO\.|COMPANY|ООО|АО|ЗАО)\b", value, re.I) and '"' not in value:
+            continue
+        if value not in found:
+            found.append(value)
+    if len(found) == 1:
+        return found[0]
+    return ""
+
+
 def _letterhead_seller(text):
     """Фирма над COMMERCIAL INVOICE, если слова Seller нет."""
     company = re.compile(r"\b(LTD|LIMITED|GMBH|LLC|INC|COMPANY)\b", re.I)
@@ -529,19 +551,67 @@ def _party_continuation(text, name):
     if start is None:
         return ""
     stop = re.compile(
-        r"\b(contract|invoice|inv\.?\s*no|date\s*:|packing\s+list|commercial|specification|ex[\s\-]*works?|exw|fob|fca)\b",
+        r"\b(contract|invoice|inv\.?\s*no|date\s*:|packing\s+list|commercial|specification|ex[\s\-]*works?|exw|fob|fca|ship\s*to|bill\s*to|inco\s*terms|sales\s*terms|payment)\b",
         re.I,
     )
     kept = []
     for line in lines[start:]:
         if stop.search(line) or re.match(r"^(seller|buyer|no\.?)\b", line, re.I):
             break
+        glued = _glue_wrap(kept[-1], line) if kept else None
+        if glued is not None:
+            kept[-1] = glued
+            continue
         if re.search(r"\d", line) and ("," in line or re.search(r"\b(ogrn|tin|inn|kpp)\b", line, re.I)):
             kept.append(line)
             continue
         if kept:
             break
     return "\n".join(kept)
+
+
+def _glue_wrap(prev, line):
+    """Перенос «Krasnogorsk c» + «ity» и последняя буква «RUSSI» + «A»."""
+    if re.fullmatch(r"[A-Za-zА-Яа-яЁё]", line or ""):
+        return prev + line
+    last = prev.split()[-1] if prev.split() else ""
+    match = re.match(r"([a-zа-яё]{1,6})(?=[,\s]|$)", line or "")
+    if len(last) == 1 and last.isalpha() and match:
+        return prev + match.group(1) + line[match.end() :]
+    return None
+
+
+def _ship_to_address(text):
+    """Куда везут: строки с индексом под Ship To. Левая колонка (Inco Terms) — не адрес."""
+    lines = [" ".join(line.split()) for line in str(text or "").splitlines() if line.strip()]
+    label = re.compile(r"(?i)\bship\s*to\b\s*:?\s*(.*)$")
+    skip = re.compile(r"(?i)^(bill\s*to|ship\s*to|seller|buyer|inco|sales|payment|contract|invoice|commercial)\b")
+    for index, line in enumerate(lines):
+        match = label.search(line)
+        if not match:
+            continue
+        chunks = []
+        tail = match.group(1).strip(" :.")
+        if re.search(r"\d{4,}", tail):
+            chunks.append(tail)
+        for nxt in lines[index + 1 : index + 12]:
+            if skip.search(nxt):
+                continue
+            glued = _glue_wrap(chunks[-1], nxt) if chunks else None
+            if glued is not None:
+                chunks[-1] = glued
+                continue
+            if not chunks and (re.search(r"\d{4,}", nxt) or ("," in nxt and re.search(r"\d", nxt))):
+                chunks.append(nxt)
+                continue
+            if chunks and re.match(r"^[a-zа-яё]", nxt or ""):
+                chunks[-1] = f"{chunks[-1]} {nxt}"
+                continue
+            if chunks:
+                break
+        if chunks:
+            return " ".join(chunks)
+    return ""
 
 
 def _contract(text):
@@ -574,6 +644,13 @@ def _contract(text):
             continue
         if any(ch.isdigit() for ch in token) or "-" in token:
             return token
+    spaced = re.search(
+        r"(?:CONTRACT|CONTRAT)\s*(?:NO|NR|NUMBER|#|№|N[°º])?\.?\s*:?\s*(\d{1,6})\s+([A-Z][A-Z0-9./\-]+)",
+        folded,
+        re.I,
+    )
+    if spaced:
+        return f"{spaced.group(1)} {spaced.group(2)}"
     return None
 
 
