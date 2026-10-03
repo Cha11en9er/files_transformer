@@ -25,7 +25,7 @@ from app.models.enums import (
     ProfileType,
     ShipmentStatus,
 )
-from app.parsing.header_extract import enrich_header_from_goods, export_header_fields, extract_header_fields, merge_header_fields
+from app.parsing.header_extract import enrich_header_from_goods, export_header_fields
 from app.parsing.pdf_extractor import sniff_kind
 from app.parsing.pipeline import parse_upload
 from app.parsing.schemas import ParsedDocument
@@ -39,10 +39,24 @@ from app.schemas.api import (
     ShipmentCreateResponse,
     ValidationErrorOut,
 )
-from app.services.opencode_review import compact_parser_snapshot, review_with_opencode, to_jsonable
+from app.services.opencode_review import review_with_opencode
 from app.services.pdf_pages import collect_vision_images
-from app.services.scan_reconcile import apply_scan_review, compute_excel_totals
-from app.services.catalog import CatalogIndex
+from app.services.prepare_site import (
+    apply_verdict,
+    fill_from_catalog,
+    goods_lots,
+    header_from_draft,
+    load_catalogs,
+    lots_to_rows,
+    model_spec,
+    needs_second_model,
+    overlay_model_header,
+    read_goods,
+    review_files,
+    split_uploads,
+    verdict_prompt,
+)
+from app.services.scan_reconcile import compute_excel_totals
 from app.services.export import build_export_preview, export_18233, export_beijing
 from app.services.export_18233_templates import export_18233_from_templates
 from app.services.export_style import resolve_shipment_title, safe_export_stem
@@ -381,11 +395,7 @@ def _iter_create_events(
 ) -> Iterator[dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="parse_") as tmp:
         tmp_dir = Path(tmp)
-        parsed_docs = []
-        catalog: CatalogIndex | None = None
         file_outs: list[FileOut] = []
-        usable_paths: list[Path] = []
-        saved_paths: list[Path] = []
         skipped_count = 0
         header_fields: dict[str, Any] = {}
         active_profile = profile_type
@@ -395,169 +405,157 @@ def _iter_create_events(
         saved: list[tuple[str, str]] = []
         for index, upload in enumerate(incoming, start=1):
             path = _write_upload(tmp_dir, upload)
-            saved_paths.append(path)
             display_name = Path((upload.filename or path.name).replace("\\", "/")).name
             saved.append((str(path), display_name))
             yield {"event": "progress", "current": index, "total": total, "filename": display_name, "stage": "parse"}
 
         yield {"event": "progress", "current": total, "total": total, "filename": "сверка позиций", "stage": "reconcile"}
 
-        # Universal transformer: read every file, map columns, merge by article.
-        # Profile is auto-detected from the goods; parsing itself is profile-agnostic.
-        result = transform_paths(saved, catalog_names=catalog_names)
-        for outcome in result.files:
-            if outcome.status == "skipped":
-                skipped_count += 1
-            else:
-                match = next((p for p in saved_paths if p.name == outcome.filename), None)
-                if match is not None:
-                    usable_paths.append(match)
-            file_outs.append(
-                _make_file_out(
-                    filename=outcome.filename,
-                    doc_type=_guess_doc_type(outcome.filename, None),
-                    ocr_confidence=None,
-                    parse_status=outcome.status,
-                    parse_message=outcome.message,
-                )
-            )
-            yield {
-                "event": "file",
-                "filename": outcome.filename,
-                "status": outcome.status,
-                "message": outcome.message,
-            }
-
-        for warning in result.warnings:
-            file_outs.append(
-                _make_file_out(
-                    filename="сверка",
-                    doc_type=None,
-                    ocr_confidence=None,
-                    parse_status="review",
-                    parse_message=warning,
-                )
-            )
-            yield {"event": "file", "filename": "сверка", "status": "review", "message": warning}
-
-        reconciled: list[dict[str, Any]] = canonical_to_rows(result.items)
-        parsed_docs = result.sources
-        # Export layout is the profile the operator picked. Auto-detect only
-        # fills result.profile for diagnostics; it must not switch 18233 <-> Beijing.
-
-        items = _items_from_rows(reconciled)
-        excel_totals = compute_excel_totals(items)
-        header_fields = merge_header_fields(result.header or {}, header_fields)
-        header_fields = enrich_header_from_goods(header_fields, items)
-
-        model_names: list[str] = []
-        pdf_names: list[str] = []
-        for path in usable_paths:
-            suffix = path.suffix.lower()
-            if suffix in {".xlsx", ".xls", ".xlsm"}:
-                if "сводная" in path.name.lower() or "справочник" in path.name.lower():
-                    continue
-                model_names.append(path.name)
-            elif suffix == ".pdf":
-                pdf_names.append(path.name)
-        if model_names:
-            model_label = ", ".join(model_names)
-            model_message = "Модель читает Excel: " + model_label
-        elif pdf_names:
-            model_label = ", ".join(pdf_names)
-            model_message = "Модель читает PDF: " + model_label
-        else:
-            model_label = "собранные таблицы"
-            model_message = "Модель проверяет собранные таблицы"
+        goods, references = split_uploads(saved, catalog_names)
+        draft = read_goods(goods)
+        catalog = load_catalogs(references)
+        prompt = verdict_prompt(draft)
+        lots = goods_lots(draft)
+        vision_dir = tmp_dir / "vision"
+        try:
+            vision_pages = collect_vision_images([path for path, _name in goods], vision_dir)
+        except Exception:
+            vision_pages = []
+        first_model = model_spec(1)
+        second_model = model_spec(2)
+        model_label = first_model or "модель"
         yield {
             "event": "progress",
             "current": total,
             "total": total,
             "filename": model_label,
             "stage": "model",
-            "message": model_message,
+            "message": "Модель проверяет черновик",
         }
-        vision_dir = tmp_dir / "vision"
-        try:
-            vision_pages = collect_vision_images(saved_paths, vision_dir)
-        except Exception:
-            vision_pages = []
-        if vision_pages:
-            seen_pdf: list[str] = []
-            for page in vision_pages:
-                label = f"{page.source_name}" + (f" стр. {page.page}" if page.page else "")
-                if label not in seen_pdf:
-                    seen_pdf.append(label)
+
+        def _ask(spec: str) -> dict[str, Any]:
+            box: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+            def _call() -> None:
+                try:
+                    box.put(
+                        (
+                            "ok",
+                            review_with_opencode(
+                                snapshot={"title": title or "shipment", "context": {"excel": [], "pdfs": []}},
+                                pages=vision_pages,
+                                user_prompt=prompt,
+                                model_override=spec or None,
+                            ),
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001 — surface to stream consumer
+                    box.put(("err", exc))
+
+            worker = threading.Thread(target=_call, name="opencode-verdict", daemon=True)
+            worker.start()
+            waited = 0
+            while worker.is_alive():
+                worker.join(timeout=12.0)
+                if worker.is_alive():
+                    waited += 12
+                    yield {
+                        "event": "progress",
+                        "current": total,
+                        "total": total,
+                        "filename": spec or "модель",
+                        "stage": "model",
+                        "message": f"Модель всё ещё отвечает ({waited} с)",
+                    }
+            status, payload = box.get()
+            if status == "err":
+                raise payload
+            return payload
+
+        review_dict: dict[str, Any] = {"status": "skipped", "model": first_model, "error": None}
+        if first_model:
+            review_dict = yield from _ask(first_model)
+            if review_dict.get("status") == "ok":
+                lots = apply_verdict(goods_lots(draft), review_dict.get("payload"))
+        if second_model and needs_second_model(lots):
             yield {
                 "event": "progress",
                 "current": total,
                 "total": total,
-                "filename": ", ".join(seen_pdf),
+                "filename": second_model,
                 "stage": "model",
-                "message": "Модель смотрит страницы: " + ", ".join(seen_pdf),
+                "message": "В таблице заполнено мало столбцов, смотрит вторая модель",
             }
-        yield {
-            "event": "progress",
-            "current": total,
-            "total": total,
-            "filename": (model_names + [p.source_name for p in vision_pages])[0] if (model_names or vision_pages) else "модель",
-            "stage": "model",
-            "message": "Модель анализирует файлы, ожидание ответа",
-        }
-        snapshot = compact_parser_snapshot(
-            title=title,
-            profile_type=active_profile.value,
-            files=[f.model_dump(mode="json") for f in file_outs],
-            header_fields=header_fields,
-            items=[item.model_dump(mode="json") for item in items],
-            parsed_docs=parsed_docs,
-            pages=vision_pages,
-            excel_totals=excel_totals.model_dump(),
-        )
-        # Keep the NDJSON stream alive while OpenCode thinks — silent gaps
-        # of 1–3 minutes get killed by proxies/browsers as "network error".
-        review_box: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
-
-        def _call_model() -> None:
-            try:
-                review_box.put(
-                    (
-                        "ok",
-                        review_with_opencode(
-                            snapshot=snapshot,
-                            pages=vision_pages,
-                            excel_paths=usable_paths,
-                        ),
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001 — surface to stream consumer
-                review_box.put(("err", exc))
-
-        worker = threading.Thread(target=_call_model, name="opencode-review", daemon=True)
-        worker.start()
-        waited = 0
-        while worker.is_alive():
-            worker.join(timeout=12.0)
-            if worker.is_alive():
-                waited += 12
-                yield {
-                    "event": "progress",
-                    "current": total,
-                    "total": total,
-                    "filename": "модель",
-                    "stage": "model",
-                    "message": f"Модель всё ещё отвечает ({waited} с)",
-                }
-        review_status, review_payload = review_box.get()
-        if review_status == "err":
-            raise review_payload
-        review_dict = review_payload
-        review_dict["excel_totals"] = excel_totals.model_dump()
+            second = yield from _ask(second_model)
+            if second.get("status") == "ok":
+                lots = apply_verdict(goods_lots(draft), second.get("payload"))
+                review_dict = second
+        fill_from_catalog(lots, catalog)
+        header_fields = header_from_draft(draft, lots)
         if review_dict.get("status") == "ok":
-            review_dict = apply_scan_review(items, review_dict)
-            header_fields = merge_header_fields(header_fields, review_dict.get("header") or {})
-            header_fields = enrich_header_from_goods(header_fields, items)
-        review_dict["context"] = snapshot.get("context") or {"excel": [], "pdfs": []}
+            header_fields = overlay_model_header(header_fields, review_dict.get("payload"))
+        reconciled = lots_to_rows(lots, list(draft.get("flags") or []))
+        found = len(reconciled)
+        role_type = {
+            "invoice": DocType.INVOICE,
+            "packing": DocType.PACKING_LIST,
+            "specification": DocType.SPECIFICATION,
+            "proforma": DocType.INVOICE,
+        }
+        for doc in draft.get("documents") or []:
+            name = str(doc.get("name") or "")
+            role = str(doc.get("role") or "")
+            message = f"нашлось {found} позиций"
+            file_outs.append(
+                _make_file_out(
+                    filename=name,
+                    doc_type=role_type.get(role) or _guess_doc_type(name, None),
+                    ocr_confidence=None,
+                    parse_status="ok",
+                    parse_message=message,
+                )
+            )
+            yield {"event": "file", "filename": name, "status": "ok", "message": message}
+        for _path, display in references:
+            message = "справочник, в строки поставки не входит"
+            file_outs.append(
+                _make_file_out(
+                    filename=display,
+                    doc_type=DocType.CATALOG,
+                    ocr_confidence=None,
+                    parse_status="ok",
+                    parse_message=message,
+                )
+            )
+            yield {"event": "file", "filename": display, "status": "ok", "message": message}
+        for flag in draft.get("flags") or []:
+            file_outs.append(
+                _make_file_out(
+                    filename="сверка",
+                    doc_type=None,
+                    ocr_confidence=None,
+                    parse_status="review",
+                    parse_message=str(flag),
+                )
+            )
+            yield {"event": "file", "filename": "сверка", "status": "review", "message": str(flag)}
+        if review_dict.get("error"):
+            file_outs.append(
+                _make_file_out(
+                    filename="модель",
+                    doc_type=None,
+                    ocr_confidence=None,
+                    parse_status="review",
+                    parse_message=str(review_dict.get("error")),
+                )
+            )
+
+        items = _items_from_rows(reconciled)
+        excel_totals = compute_excel_totals(items)
+        header_fields = enrich_header_from_goods(header_fields, items)
+        review_dict["excel_totals"] = excel_totals.model_dump()
+        review_dict["context"] = review_files(list(draft.get("documents") or []), reconciled)
+        review_dict["items"] = []
         model_review = ModelReviewOut.model_validate(review_dict)
 
         warning_count = sum(

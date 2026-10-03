@@ -4,15 +4,27 @@ from pathlib import Path
 
 from prepare_transform_code.exceldoc import read_excel
 from prepare_transform_code.join import build_lots
-from prepare_transform_code.numbers import collapse_letter_spacing, currency_of
+from prepare_transform_code.fields import LOT_FIELDS, party_after
+from prepare_transform_code.numbers import collapse_letter_spacing, currencies_of, currency_of, goods_currency
 from prepare_transform_code.pdfdoc import read_pdf
 
 _INVOICE_NO = re.compile(
-    r"INVOICE\s*NO\.?\s*:?\s*([A-Z0-9][A-Z0-9./\-]{2,})",
+    r"(?:INV(?:OICE)?\s*\.?\s*(?:NO|NR|NUMBER)\.?(?:\s+AND\s+DATE)?|(?:NO|NR)\.?\s*INVOICE|(?<![A-Z])INVOICE\s*:)\s*:?\s*([A-Z0-9][A-Z0-9./\-]{2,})",
     re.I,
 )
 _CONTRACT = re.compile(
-    r"CONTRACT\s*(?:NO|NR|NUMBER|#)?\.?\s*:?\s*([A-Z0-9][A-Z0-9./\-]{2,})",
+    r"(?:CONTRACT|CONTRAT)\s*(?:NO|NR|NUMBER|#|№|N[°º])?\.?\s*:?\s*([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9./\-]{2,})",
+    re.I,
+)
+_CONTRACT_SKIP = {"your", "date", "the", "and", "for", "from", "page", "reference"}
+_INVOICE_LABEL = re.compile(r"inv(?:oice)?\s*\.?\s*(?:no|nr|number|n[°º])", re.I)
+_NO_BEFORE_TITLE = re.compile(
+    r"No\s*:\s*([A-Z]{2,}(?:\s*[-/]\s*[A-Z0-9]+)+(?:\s+REG)?).{0,160}INVOICE",
+    re.I | re.S,
+)
+_ORDER_LABEL = re.compile(r"order[\s\-]*number", re.I)
+_ORDER = re.compile(
+    r"\bORDERS?\s*:?\s*([A-Z0-9][A-Z0-9_./\-]{4,})",
     re.I,
 )
 
@@ -22,7 +34,9 @@ def analyze(folder):
     paths = [
         path
         for path in sorted(folder.iterdir(), key=lambda item: item.name.lower())
-        if path.is_file() and path.suffix.lower() in {".pdf", ".xls", ".xlsx", ".xlsm"}
+        if path.is_file()
+        and not path.name.startswith("~$")
+        and path.suffix.lower() in {".pdf", ".xls", ".xlsx", ".xlsm", ".jpg", ".jpeg", ".png"}
     ]
     documents = []
     seen = {}
@@ -45,30 +59,99 @@ def analyze(folder):
             doc = read_pdf(path)
             doc["name"] = path.name
             documents.append(doc)
+        elif path.suffix.lower() in {".jpg", ".jpeg", ".png"}:
+            documents.append(
+                {
+                    "kind": "image",
+                    "name": path.name,
+                    "role": "image",
+                    "lines": [],
+                    "text": "",
+                    "readable": False,
+                    "currency": None,
+                }
+            )
         else:
             for sheet in read_excel(path):
                 sheet["name"] = f"{path.name} / {sheet['sheet']}"
                 documents.append(sheet)
 
     invoice = _pick(documents, "invoice", prefer_pdf=True)
+    if invoice is None:
+        invoice = _pick(documents, "proforma", prefer_pdf=True)
     specification = _pick(documents, "specification", prefer_pdf=False)
-    packings = [doc for doc in documents if doc["role"] == "packing" and doc["lines"]]
+    packings = [doc for doc in documents if _is_role(doc, "packing") and doc["lines"]]
     weight_conflict = len(packings) > 1 and _weights_differ(packings)
-    packing_lines = [] if weight_conflict or not packings else packings[0]["lines"]
+    packing_lines = []
+    if not weight_conflict:
+        for doc in packings:
+            packing_lines.extend(doc["lines"])
     base = invoice["lines"] if invoice else (specification["lines"] if specification else [])
-    lots, freights = build_lots(base, packing_lines)
-    text = "\n".join(doc.get("text") or "" for doc in documents)
-    text = collapse_letter_spacing(text)
+    spec_lines = []
+    if invoice is not None and specification is not None and specification is not invoice:
+        spec_lines = list(specification["lines"])
+    foreign = _companions(documents, invoice, specification, base, spec_lines)
+    lots, freights = build_lots(base, packing_lines, spec_lines)
+    flags = []
+    if weight_conflict:
+        flags.append("weight_conflict")
+    if foreign:
+        flags.append("foreign_document")
+    if any(lot.get("unit_conflict") for lot in lots):
+        flags.append("unit_conflict")
+    if any(lot.get("hs_alt") for lot in lots):
+        flags.append("hs_conflict")
+    if any(lot.get("packages_conflict") for lot in lots):
+        flags.append("packages_conflict")
+    header_docs = [doc for doc in documents if _counts_for_header(doc, _header_anchors(documents))]
+    plain = "\n".join((doc.get("raw_text") or doc.get("text") or "") for doc in header_docs)
+    text = collapse_letter_spacing(plain)
+    delivery, delivery_conflict = _delivery(plain)
+    if delivery_conflict:
+        flags.append("delivery_conflict")
+    if len(_label_hits(plain, r"(?:manufacturer|manufactured(?:\s+by)?|производитель|произведено)\s*:")) > 1:
+        flags.append("manufacturer_conflict")
     currencies = [
         doc.get("currency")
-        for doc in documents
-        if doc.get("currency") and doc.get("readable", True) and doc["role"] != "duplicate"
+        for doc in header_docs
+        if doc.get("currency") and doc.get("readable", True)
     ]
+    all_currencies = []
+    for code in currencies + currencies_of(text):
+        if code not in all_currencies:
+            all_currencies.append(code)
+    invoice_nos = _labeled_numbers(plain, _INVOICE_LABEL)
+    invoice_no = _first(_INVOICE_NO, text)
+    if invoice_no and invoice_no not in invoice_nos:
+        invoice_nos.insert(0, invoice_no)
+    elif invoice_no is None and invoice_nos:
+        invoice_no = invoice_nos[0]
+    if invoice_no is None:
+        invoice_no = _first(_NO_BEFORE_TITLE, text)
+        if invoice_no and invoice_no not in invoice_nos:
+            invoice_nos.insert(0, invoice_no)
+    parties = party_after(plain)
+    if not parties.get("seller"):
+        letterhead = _letterhead_seller(plain)
+        if letterhead:
+            parties["seller"] = letterhead
+    origin = _one_label(plain, r"(?:country\s+of\s+origin|origin(?:\s+of\s+goods)?)\s*:") or _of_origin(plain)
+    producer = _one_label(plain, r"(?:manufacturer|manufactured(?:\s+by)?|производитель|произведено)\s*:")
+    seller_address, buyer_address = _address_blocks(plain)
+    if not buyer_address:
+        buyer_address = _party_continuation(plain, parties.get("buyer") or "")
+    for lot in lots:
+        if origin and not lot.get("origin"):
+            lot["origin"] = origin
+        if producer and not lot.get("producer"):
+            lot["producer"] = producer
+    proforma_nos = _proforma_nos(documents)
     return {
         "documents": [
             {
                 "name": doc["name"],
                 "role": doc["role"],
+                "roles": doc.get("roles") or ([doc["role"]] if doc.get("role") else []),
                 "duplicate_of": doc.get("duplicate_of"),
                 "line_count": len(doc.get("lines") or []),
             }
@@ -76,30 +159,141 @@ def analyze(folder):
         ],
         "lots": lots,
         "freights": [_plain(line) for line in freights],
-        "flags": ["weight_conflict"] if weight_conflict else [],
-        "currency": currencies[0] if currencies else currency_of(text),
-        "invoice_no": _first(_INVOICE_NO, text),
-        "contract": _first(_CONTRACT, text),
+        "flags": flags,
+        "currency": goods_currency(text) or (currencies[0] if currencies else currency_of(text)),
+        "currencies": all_currencies,
+        "invoice_no": invoice_no,
+        "invoice_nos": invoice_nos,
+        "proforma_no": proforma_nos[0] if proforma_nos else None,
+        "proforma_nos": proforma_nos,
+        "order_no": _order_no(text),
+        "order_nos": _labeled_numbers(plain, _ORDER_LABEL),
+        "contract": _contract(plain),
+        "contract_date": _contract_date(plain),
+        "invoice_date": _labeled_date(plain),
+        "delivery": delivery,
+        "container": _container(plain),
+        "director": _director(plain),
+        "seller": parties.get("seller", ""),
+        "buyer": parties.get("buyer", ""),
+        "seller_address": seller_address,
+        "buyer_address": buyer_address,
+        "columns": list(LOT_FIELDS),
     }
 
 
 def _pick(documents, role, prefer_pdf):
-    found = [doc for doc in documents if doc["role"] == role and doc.get("lines")]
+    found = [doc for doc in documents if _is_role(doc, role) and doc.get("lines")]
     if not found:
         return None
+    primary = [doc for doc in found if doc.get("role") == role]
+    pool = primary or found
     if prefer_pdf:
-        pdfs = [doc for doc in found if doc.get("kind") == "pdf"]
+        pdfs = [doc for doc in pool if doc.get("kind") == "pdf"]
         if pdfs:
             return pdfs[0]
-    return max(found, key=lambda doc: len(doc["lines"]))
+    return max(pool, key=lambda doc: len(doc["lines"]))
+
+
+def _is_role(doc, role):
+    """Файл с двумя заголовками входит в обе роли. Строки при этом одни."""
+    if doc.get("role") == role:
+        return True
+    return role in (doc.get("roles") or [])
+
+
+def _companions(documents, invoice, specification, base, spec_lines):
+    """Второй документ той же поставки дописывает пустые поля. Чужие артикулы лотами не становятся."""
+    base_vendors = _vendor_set(base)
+    used = {id(invoice), id(specification)}
+    foreign = False
+    for doc in documents:
+        if id(doc) in used or doc.get("role") in {
+            "packing", "duplicate", "draft", "gtd_form", "customs_appendix", "image", "scan",
+        }:
+            continue
+        lines = [line for line in doc.get("lines") or [] if not line.freight]
+        theirs = _vendor_set(lines)
+        if not theirs or not base_vendors:
+            continue
+        if theirs <= base_vendors:
+            spec_lines.extend(lines)
+            continue
+        if not (theirs & base_vendors):
+            foreign = True
+    return foreign
+
+
+def _vendor_set(lines):
+    return {(line.vendor or "").strip().casefold() for line in lines or [] if (line.vendor or "").strip()}
+
+
+def _header_anchors(documents):
+    """Артикулы строк, которые уже разобраны. По ним чужой лист без строк в шапку не входит."""
+    anchors = set()
+    for doc in documents:
+        if doc.get("role") == "duplicate":
+            continue
+        if doc.get("role") == "unknown" and not doc.get("lines"):
+            continue
+        for line in doc.get("lines") or []:
+            vendor = (getattr(line, "vendor", None) or "").strip()
+            if len(vendor) >= 4:
+                anchors.add(vendor)
+    return anchors
+
+
+def _counts_for_header(doc, anchors):
+    """Лист без строк и без артикула этой поставки в шапку, номер и валюту не входит."""
+    if doc.get("role") == "duplicate":
+        return False
+    if doc.get("role") == "unknown" and not doc.get("lines"):
+        if not anchors:
+            return True
+        text = doc.get("raw_text") or doc.get("text") or ""
+        return any(anchor in text for anchor in anchors)
+    return True
+
+
+_PROFORMA_NO = re.compile(r"\bNO\.?\s*:?\s*([A-Z]{1,8}\d{3,}[A-Z0-9./\-]*)", re.I)
+
+
+def _proforma_nos(documents):
+    found = []
+    for doc in documents:
+        if doc.get("role") != "proforma":
+            continue
+        for match in _PROFORMA_NO.finditer(doc.get("text") or ""):
+            token = match.group(1).strip(".:")
+            if token not in found:
+                found.append(token)
+    return found
 
 
 def _weights_differ(packings):
+    """Один и тот же список строк с двумя итогами — конфликт. Части по машинам — не он."""
     totals = []
+    piece_sets = []
+    vendor_sets = []
     for doc in packings:
-        gross = sum(line.gross or 0 for line in doc["lines"] if not line.measure_group)
-        totals.append(round(gross, 2))
-    return len(set(totals)) > 1
+        goods = [line for line in doc["lines"] if not line.freight and not line.measure_group]
+        totals.append(round(sum(line.gross or 0 for line in goods), 2))
+        piece_sets.append(
+            tuple(sorted(None if line.pieces is None else round(line.pieces, 3) for line in goods))
+        )
+        vendors = tuple(
+            sorted(
+                ((line.vendor or "").strip(), None if line.pieces is None else round(line.pieces, 3))
+                for line in goods
+                if (line.vendor or "").strip()
+            )
+        )
+        vendor_sets.append(vendors)
+    if len(set(totals)) <= 1:
+        return False
+    same_list = len(set(piece_sets)) == 1 and all(len(item) >= 2 for item in piece_sets)
+    same_articles = all(vendor_sets) and len(set(vendor_sets)) == 1
+    return same_list or same_articles
 
 
 def _first(pattern, text):
@@ -112,6 +306,391 @@ def _first(pattern, text):
     token = match.group(1)
     token = re.split(r"(DATE|ISSUE|CONTRACT|FROM|TO)", token, maxsplit=1)[0]
     return token.strip(".:")
+
+
+def _order_no(text):
+    folded = collapse_letter_spacing(text or "")
+    for match in _ORDER.finditer(folded):
+        token = match.group(1)
+        token = re.split(r"(DATE|ISSUE|CONTRACT|FROM|TO)", token, maxsplit=1)[0]
+        token = token.strip(".:")
+        if re.fullmatch(r"\d+(?:\.\d+)+", token):
+            continue
+        if any(ch.isdigit() for ch in token):
+            return token
+    return None
+
+
+def _labeled_date(text):
+    match = re.search(
+        r"(?m)^\s*DATE\s*:\s*(\d{2}[./]\d{2}[./]\d{4}|[A-Za-z]{3,9}\.?\s*\d{1,2},\s*\d{4})",
+        text or "",
+        re.I,
+    )
+    if match:
+        return " ".join(match.group(1).split())
+    match = re.search(
+        r"INVOICE\s*(?:NO|NR|NUMBER)?\.?(?:\s+AND\s+DATE)?\s*:?\s*[A-Z0-9][A-Z0-9./\-]*\s*[-–]\s*(\d{2}[./]\d{2}[./]\d{4})",
+        text or "",
+        re.I,
+    )
+    if match:
+        return match.group(1)
+    return _title_date(text)
+
+
+def _title_date(text):
+    """Дата на строке спецификации после «от». Подпись DATE и дата инвойса этим не затираются."""
+    lines = str(text or "").splitlines()
+    for index, line in enumerate(lines):
+        window = " ".join(lines[max(0, index - 2) : index + 1])
+        if not re.search(r"specification|спецификация", window, re.I):
+            continue
+        found = re.search(r"\bот\s+(\d{2}[./]\d{2}[./]\d{4})", line)
+        if found:
+            return found.group(1)
+    return ""
+
+
+def _contract_date(text):
+    match = re.search(
+        r"(?:CONTRACT|CONTRAT)\s*(?:NO|NR|NUMBER)?\.?\s*:?\s*\S+\s+dd\s+(\d{2}[./]\d{2}[./]\d{4})",
+        text or "",
+        re.I,
+    )
+    if match:
+        return match.group(1)
+    for line in str(text or "").splitlines():
+        if not re.search(r"\b(?:contract|contrat|контракт)", line, re.I):
+            continue
+        found = re.search(
+            r"(\d{2}[./]\d{2}[./]\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})",
+            line,
+        )
+        if found:
+            return " ".join(found.group(1).split())
+    return ""
+
+
+def _delivery(text):
+    found = []
+    for label in (
+        r"terms of delivery(?:\s*/[^:\n]{0,40})?\s*:\s*([^\n]+)",
+        r"delivery terms\s*:\s*([^\n]+)",
+    ):
+        for match in re.finditer(label, text or "", re.I):
+            value = " ".join(match.group(1).split())
+            value = re.split(r"(?i)\b(?:shipment|payment|manufacturer|origin)\b", value)[0].strip(" .:")
+            if value and not _same_term(value, found):
+                found.append(value)
+    for match in re.finditer(
+        r"(?m)^\s*((?:EX[\s\-]*WORKS?|EXW|FOB|FCA|CIF|CFR|CPT|CIP|DAP|DDP|DPU)\b[^\n]{0,40})",
+        text or "",
+        re.I,
+    ):
+        value = " ".join(match.group(1).split())
+        if value and not _same_term(value, found):
+            found.append(value)
+    if not found:
+        return "", False
+    if len(found) == 1:
+        return found[0], False
+    return " / ".join(found), True
+
+
+def _same_term(value, found):
+    head = re.split(r"[\s/.(]", value, maxsplit=1)[0].upper()
+    for item in found:
+        other = re.split(r"[\s/.(]", item, maxsplit=1)[0].upper()
+        if head == other or head in item.upper() or other in value.upper():
+            return True
+    return False
+
+
+def _container(text):
+    """Номер контейнера без пробела. «By truck» сюда не входит."""
+    match = re.search(r"CONTAINER\s*:\s*([A-Z0-9]{4,})", text or "")
+    return match.group(1) if match else ""
+
+
+def _director(text):
+    match = re.search(r"Director\s*:\s*(Mr\.?\s+[A-Za-z][A-Za-z .'\-]{2,40})", text or "")
+    if not match:
+        return ""
+    return " ".join(match.group(1).split())
+
+
+def _address_blocks(text):
+    """Адрес после подписи своей стороны. Без подписи первая клетка Address — продавец, вторая другая — покупатель."""
+    lines = [" ".join(line.split()) for line in str(text or "").splitlines() if line.strip()]
+    pending = []
+    assigned = {"seller": "", "buyer": ""}
+    fallback = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        side = _party_side(line)
+        if side and _ADDRESS_VALUE.match(line) is None:
+            pending.append(side)
+            index += 1
+            continue
+        match = _ADDRESS_VALUE.match(line)
+        if match is None:
+            index += 1
+            continue
+        value = _postal_address(match.group(1) or "")
+        if not value and index + 1 < len(lines):
+            nxt = lines[index + 1]
+            if nxt and _party_side(nxt) is None and _ADDRESS_VALUE.match(nxt) is None:
+                value = nxt
+                index += 1
+        if value and value not in fallback:
+            fallback.append(value)
+            if pending:
+                owner = pending.pop(0)
+                if not assigned[owner]:
+                    assigned[owner] = value
+        index += 1
+    if assigned["seller"] or assigned["buyer"]:
+        seller = _longer_address(assigned["seller"], fallback)
+        buyer = _longer_address(assigned["buyer"], fallback)
+        if not seller:
+            seller = next((item for item in fallback if item != buyer), "")
+        return seller, buyer
+    return (fallback[0] if fallback else "", fallback[1] if len(fallback) > 1 else "")
+
+
+def _postal_address(value):
+    """Повтор Address и банк на той же строке в почтовый адрес не входят. Второй адрес сбоку — другая сторона."""
+    text = re.sub(r"(?i)^(?:address|адрес)\s*:\s*", "", " ".join(str(value or "").split()))
+    text = re.split(
+        r"(?i)\b(?:address|адрес|bank|банк|inn|инн|kpp|кпп|contract|контракт|invoice|swift|account)\b",
+        text,
+        maxsplit=1,
+    )[0]
+    return text.strip(" ,;.")
+
+
+def _longer_address(value, fallback):
+    """Короткий обрывок той же строки уступает адресу, где дом и комната уже есть."""
+    best = value or ""
+    for item in fallback:
+        if best and item.startswith(best) and len(item) > len(best):
+            best = item
+        elif item and best.startswith(item) and len(best) > len(item):
+            continue
+    return best
+
+
+_ADDRESS_VALUE = re.compile(
+    r"(?i)^(?:address|адрес)\b(?:\s+of\s+location\s+and\s+post\s+address)?\s*/?\s*[^:]{0,40}:\s*(.*)$"
+)
+
+
+def _party_side(line):
+    if re.match(r"(?i)^(seller|buyer)['’]s\b", line or ""):
+        return None
+    match = re.match(r"(?i)^(buyer|покупатель|importer|seller|продавец|exporter)\b", line or "")
+    if not match:
+        return None
+    if len(line) > 48 and ":" not in line[:40]:
+        return None
+    if match.group(1).lower() in {"buyer", "покупатель", "importer"}:
+        return "buyer"
+    return "seller"
+
+
+def _letterhead_seller(text):
+    """Фирма над COMMERCIAL INVOICE, если слова Seller нет."""
+    company = re.compile(r"\b(LTD|LIMITED|GMBH|LLC|INC|COMPANY)\b", re.I)
+    title = re.compile(r"\b(COMMERCIAL\s+INVOICE|PACKING\s+LIST|SPECIFICATION|INVOICE)\b", re.I)
+    picked = ""
+    for line in str(text or "").splitlines():
+        line = " ".join(line.split())
+        if not line:
+            continue
+        if title.search(line) and not re.search(r"\.(?:xls|xlsx|xlsm|pdf)\b", line, re.I):
+            break
+        if company.search(line) and not re.search(r"\bbuyer\b", line, re.I):
+            picked = line
+    return picked
+
+
+def _party_continuation(text, name):
+    """Строки сразу под именем покупателя, пока не началась следующая подпись."""
+    if not name:
+        return ""
+    lines = [" ".join(line.split()) for line in str(text or "").splitlines() if line.strip()]
+    start = None
+    for index, line in enumerate(lines):
+        if name in line:
+            start = index + 1
+            break
+    if start is None:
+        return ""
+    stop = re.compile(
+        r"\b(contract|invoice|inv\.?\s*no|date\s*:|packing\s+list|commercial|specification|ex[\s\-]*works?|exw|fob|fca)\b",
+        re.I,
+    )
+    kept = []
+    for line in lines[start:]:
+        if stop.search(line) or re.match(r"^(seller|buyer|no\.?)\b", line, re.I):
+            break
+        if re.search(r"\d", line) and ("," in line or re.search(r"\b(ogrn|tin|inn|kpp)\b", line, re.I)):
+            kept.append(line)
+            continue
+        if kept:
+            break
+    return "\n".join(kept)
+
+
+def _contract(text):
+    folded = (text or "").replace("\uff1a", ":")
+    for found in _CONTRACT.finditer(folded):
+        token = found.group(1).strip(" .")
+        token = re.split(r"(?i)(?<=\d)(?:dated|date)", token, maxsplit=1)[0].strip(".:")
+        token = re.split(r"(DATE|ISSUE|CONTRACT|FROM|TO)", token, maxsplit=1)[0].strip(".:")
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}|\d{2}[./]\d{2}[./]\d{4}", token):
+            continue
+        if token.lower() in _CONTRACT_SKIP:
+            continue
+        if any(ch.isdigit() for ch in token) or "-" in token:
+            return token
+    for found in re.finditer(
+        r"контракт\w*\s*(?:№|N[oо])\.?\s*([A-Za-z0-9][A-Za-z0-9./\-]*)",
+        folded,
+        re.I,
+    ):
+        return found.group(1)
+    # Номер после двуязычной подписи: слово contract, хвост до двоеточия, затем номер.
+    for found in re.finditer(
+        r"(?:contract|контракт\w*)(?:\s*/\s*[^:\n]{0,80})?\s*:\s*([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9./\-]+)",
+        folded,
+        re.I,
+    ):
+        token = found.group(1).strip(" .")
+        token = re.split(r"(DATE|ISSUE|CONTRACT|FROM|TO)", token, maxsplit=1)[0].strip(".:")
+        if token.lower() in _CONTRACT_SKIP:
+            continue
+        if any(ch.isdigit() for ch in token) or "-" in token:
+            return token
+    return None
+
+
+def _of_origin(text):
+    """«of Turkish Origin» и «ALL TURKISH ORIGIN» без подписи country of origin. Два разных слова не выбираем."""
+    skip = {"goods", "country", "their", "from", "place", "date", "this", "that"}
+    found = []
+    for match in re.finditer(r"\b([A-Za-z]{4,})\s+origin\b", text or "", re.I):
+        word = match.group(1)
+        if word.lower() in skip:
+            continue
+        if word.casefold() not in {item.casefold() for item in found}:
+            found.append(word)
+    if len(found) == 1:
+        return found[0]
+    return ""
+
+
+def _labeled_numbers(text, label):
+    """Номера с подписи и со следующей короткой строки. Длинная строка товара сюда не входит."""
+    found = []
+    lines = str(text or "").splitlines()
+    for index, line in enumerate(lines):
+        if not label.search(line):
+            continue
+        blob = line
+        tail = ""
+        if index + 1 < len(lines) and len(lines[index + 1]) <= 80:
+            tail = lines[index + 1]
+        for number in _plain_numbers(blob):
+            if number not in found and len(found) < 8:
+                found.append(number)
+        # Следующая строка может держать номер и дату. Индекс перед названием города — не номер.
+        for match in re.finditer(r"\b\d{5,12}\b", tail):
+            after = tail[match.end() :]
+            before = tail[: match.start()]
+            if re.match(r"\s*,\s*[A-Za-zА-Яа-яЁё]", after):
+                continue
+            if re.match(r"-\d", after) or re.search(r"\d-$", before):
+                continue
+            number = match.group()
+            if number not in found and len(found) < 8:
+                found.append(number)
+    return found
+
+
+def _plain_numbers(text):
+    """Кусок номера через дефис отдельно не хранится. В клетке это один номер."""
+    found = []
+    for match in re.finditer(r"\b\d{5,12}\b", text):
+        after = text[match.end() :]
+        before = text[: match.start()]
+        if re.match(r"-\d", after) or re.search(r"\d-$", before):
+            continue
+        found.append(match.group())
+    return found
+
+
+_LABEL_ECHO = {
+    "country", "of", "origin", "страна", "происхождения", "происхождение",
+    "manufacturer", "производитель", "произведено",
+}
+
+
+def _one_label(text, label):
+    """Одна подпись на всю поставку. Два разных значения не выбираем."""
+    found = _label_hits(text, label)
+    if len(found) == 1:
+        return found[0]
+    return ""
+
+
+def _label_hits(text, label):
+    found = []
+    source = text or ""
+    for match in re.finditer(label, source, re.I):
+        tail = _label_value(source, match.end())
+        if tail and tail not in found:
+            found.append(tail[:120])
+    return found
+
+
+def _label_value(text, end):
+    """Хвост подписи на том же языке пропускаем. Короткое значение может быть строкой ниже."""
+    rest = text[end:]
+    lines = re.split(r"[\r\n]", rest)
+    tail = re.sub(r"^[\s:./\-]+", "", lines[0]).strip(" .")
+    if tail and not _echo(tail):
+        return _strip_repeated_label(tail)
+    if len(lines) < 2:
+        return ""
+    nxt = lines[1].strip(" .")
+    if not nxt or len(nxt) > 80 or _echo(nxt) or ":" in nxt:
+        return ""
+    return nxt
+
+
+_REPEATED_LABEL = re.compile(
+    r"(?:country\s+of\s+origin|страна\s+происхождения(?:\s+товара)?)",
+    re.I,
+)
+
+
+def _strip_repeated_label(tail):
+    """«TURKEY / СТРАНА ПРОИСХОЖДЕНИЯ ТОВАРА: ТУРЦИЯ» — повтор подписи не страна."""
+    match = _REPEATED_LABEL.search(tail)
+    if not match:
+        return tail
+    left = tail[: match.start()].strip(" /.:")
+    right = re.sub(r"^[\s:./\-]+", "", tail[match.end() :]).strip(" .")
+    parts = [part for part in (left, right) if part]
+    return " / ".join(parts) if parts else tail
+
+
+def _echo(tail):
+    words = re.findall(r"[A-Za-zА-Яа-яЁё]+", tail.lower())
+    return bool(words) and all(word in _LABEL_ECHO for word in words)
 
 
 def _plain(line):
