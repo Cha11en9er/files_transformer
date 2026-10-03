@@ -1607,6 +1607,88 @@ class MergedMeasureTest(unittest.TestCase):
         self.assertIsNone(lots["A402"]["gross"])
 
 
+class DescriptionEchoTest(unittest.TestCase):
+    def test_echo_row_is_the_description_and_one_spec_row_keeps_its_weight(self):
+        import tempfile
+
+        from openpyxl import Workbook
+
+        dest = Path(tempfile.mkdtemp())
+        invoice = Workbook()
+        sheet = invoice.active
+        sheet.title = "Invoice"
+        sheet["A1"] = "COMMERCIAL INVOICE"
+        for col, name in enumerate(
+            ("NO.", "DESIGN", "H.S. CODE", "PACKAGES", "QUANTITY", "UNIT M/PC", "UNIT PRICE(RMB)", "AMOUNT(RMB)"),
+            1,
+        ):
+            sheet.cell(3, col, name)
+        sheet["A4"] = 1
+        sheet["B4"] = "Профиль О-30"
+        sheet["C4"] = 3926909090
+        sheet["D4"] = 3
+        sheet["E4"] = 18000
+        sheet["F4"] = "M"
+        sheet["G4"] = 0.13
+        sheet["H4"] = 2340
+        sheet["B5"] = "Мебельный профиль Профиль О-30"
+        sheet["D5"] = 3
+        sheet["E5"] = 18000
+        sheet["H5"] = 2340
+        sheet["A6"] = 2
+        sheet["B6"] = "MD813"
+        sheet["C6"] = 7318230000
+        sheet["D6"] = 1
+        sheet["E6"] = 200100
+        sheet["F6"] = "PC"
+        sheet["G6"] = 0.049
+        sheet["H6"] = 9804.9
+        sheet["B7"] = "мебельная фурнитура MD813"
+        sheet["D7"] = 1
+        sheet["E7"] = 200100
+        sheet["H7"] = 9804.9
+        invoice.save(dest / "invoice.xlsx")
+
+        spec = Workbook()
+        body = spec.active
+        body.title = "Sheet1"
+        body["A1"] = "SPECIFICATION"
+        for col, name in enumerate(
+            ("ROLL No.", "PRODUCT NAME", "QUANTITY", "UNIT", "N.W", "G.W"),
+            1,
+        ):
+            body.cell(3, col, name)
+        for row, qty, net, gross in ((4, 6000, 28, 30), (5, 6000, 28, 30), (6, 6000, 28, 30)):
+            body.cell(row, 2, "Профиль О-30")
+            body.cell(row, 3, qty)
+            body.cell(row, 4, "M")
+            body.cell(row, 5, net)
+            body.cell(row, 6, gross)
+        body["B7"] = "MD813"
+        body["C7"] = 200100
+        body["D7"] = "PC"
+        body["E7"] = 1311
+        body["F7"] = 1344.8
+        spec.save(dest / "spec.xlsx")
+
+        lots = analyze(dest)["lots"]
+        self.assertEqual(len(lots), 2)
+        profile, fitting = lots
+        self.assertEqual(profile["model"], "Профиль О-30")
+        self.assertIn("Мебельный профиль", profile["description"])
+        self.assertEqual(profile["pieces"], 18000)
+        self.assertEqual(profile["packages"], 3)
+        self.assertAlmostEqual(profile["amount"], 2340)
+        self.assertAlmostEqual(profile["net"], 84)
+        self.assertAlmostEqual(profile["gross"], 90)
+        self.assertEqual(fitting["model"], "MD813")
+        self.assertIn("фурнитура", fitting["description"])
+        self.assertEqual(fitting["pieces"], 200100)
+        self.assertAlmostEqual(fitting["net"], 1311)
+        self.assertAlmostEqual(fitting["gross"], 1344.8)
+        self.assertAlmostEqual(sum(lot["amount"] for lot in lots), 12144.9)
+
+
 def _only(folder, names):
     import shutil
     import tempfile
