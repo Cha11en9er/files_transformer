@@ -76,7 +76,30 @@ def read_goods(goods: list[tuple[Path, str]]) -> dict[str, Any]:
             if target.exists():
                 target = dest / f"{path.stem}_{path.suffix}"
             shutil.copy(path, target)
-        return analyze(dest)
+        draft = analyze(dest)
+        _add_ocr_hints(dest, draft)
+        return draft
+
+
+def _add_ocr_hints(folder: Path, draft: dict[str, Any]) -> None:
+    """OCR для сканов как подсказка рядом с фото. Включается OCR_HINTS=1: на CPU он медленный и модель читает фото сама."""
+    if os.getenv("OCR_HINTS", "").strip() not in {"1", "true", "yes"}:
+        return
+    for doc in draft.get("documents") or []:
+        if doc.get("line_count") or doc.get("role") == "duplicate":
+            continue
+        path = folder / str(doc.get("name") or "")
+        if not path.is_file() or path.suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png"}:
+            continue
+        try:
+            from app.parsing.ocr import ocr_image, ocr_pdf_pages
+
+            text = ocr_pdf_pages(str(path))[0] if path.suffix.lower() == ".pdf" else ocr_image(str(path))[0]
+        except Exception:
+            continue
+        text = " ".join(str(text or "").split())
+        if text:
+            doc["ocr_text"] = text[:6000]
 
 
 def verdict_prompt(draft: dict[str, Any]) -> str:
@@ -128,8 +151,27 @@ def filled_base_columns(lots: list[dict[str, Any]]) -> int:
     return count
 
 
+DOUBT_SHARE = 0.3
+
+
+def doubt_share(lots: list[dict[str, Any]]) -> float:
+    """Доля строк, в которых модель не уверена или документы называют разные числа."""
+    goods = [lot for lot in lots if not lot.get("freight")]
+    if not goods:
+        return 0.0
+    doubtful = sum(
+        1
+        for lot in goods
+        if lot.get("_confidence") == "low" or lot.get("conflicts") or lot.get("packages_conflict") or lot.get("unit_conflict")
+    )
+    return doubtful / len(goods)
+
+
 def needs_second_model(lots: list[dict[str, Any]]) -> bool:
-    return filled_base_columns(lots) <= THIN_COLUMN_LIMIT
+    """Вторая модель нужна, когда таблица почти пустая или заметная часть строк под сомнением."""
+    if filled_base_columns(lots) <= THIN_COLUMN_LIMIT:
+        return True
+    return doubt_share(lots) >= DOUBT_SHARE
 
 
 def _merge_fields(lot: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any]:
@@ -183,6 +225,17 @@ def verdict_notes(lots: list[dict[str, Any]], payload: Any) -> list[str]:
     return notes
 
 
+def _tag(lot: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+    """Уверенность и источник, которые модель назвала для строки. Низкая уверенность видна флагом."""
+    confidence = str(row.get("confidence") or "").strip().lower()
+    if confidence in {"low", "низкая"}:
+        lot["_confidence"] = "low"
+    source = str(row.get("source") or "").strip()
+    if source:
+        lot["_source"] = source[:80]
+    return lot
+
+
 def apply_verdict(lots: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:
     """keep оставляет строку. fix меняет только присланные поля. Пустой ответ модели черновик не стирает."""
     base = [dict(lot) for lot in lots]
@@ -203,7 +256,7 @@ def apply_verdict(lots: list[dict[str, Any]], payload: Any) -> list[dict[str, An
             added = _blank_lot(fields)
             added["_verdict"] = "add"
             added["_reason"] = reason
-            out.append(added)
+            out.append(_tag(added, row))
             continue
         index = row.get("index")
         if isinstance(index, bool) or not isinstance(index, int) or index < 0 or index >= len(base):
@@ -214,16 +267,16 @@ def apply_verdict(lots: list[dict[str, Any]], payload: Any) -> list[dict[str, An
             continue
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
         if action == "fix":
-            out.append(_fixed(lot, fields, reason, "fix"))
+            out.append(_tag(_fixed(lot, fields, reason, "fix"), row))
         elif action == "split":
             parts = fields.get("parts") if isinstance(fields.get("parts"), list) else []
             if not parts:
                 out.append(lot)
             else:
                 for part in parts:
-                    out.append(_fixed(lot, part if isinstance(part, dict) else {}, reason, "split"))
+                    out.append(_tag(_fixed(lot, part if isinstance(part, dict) else {}, reason, "split"), row))
         else:
-            out.append(lot)
+            out.append(_tag(dict(lot), row))
     for index, lot in enumerate(base):
         if index not in used and not lot.get("freight"):
             out.append(lot)
@@ -314,7 +367,8 @@ def overlay_model_header(header: dict[str, str], payload: Any) -> dict[str, str]
         value = model_header.get(source)
         if _filled(value):
             out[target] = str(value).strip()
-    # Даты, адреса и условие поставки код уже умеет читать. Модель дописывает только то, что код не нашёл.
+    # Модель читает фото и видит бланк целиком, код — только текстовый слой. Если модель назвала значение,
+    # оно заменяет черновик. Что именно заменено, видно в header_changes.
     for source, target in (
         ("invoice_date", "invoice_date"),
         ("contract_date", "contract_date"),
@@ -323,9 +377,38 @@ def overlay_model_header(header: dict[str, str], payload: Any) -> dict[str, str]
         ("delivery", "delivery_terms"),
     ):
         value = model_header.get(source)
-        if _filled(value) and not _filled(out.get(target)):
+        if _filled(value):
             out[target] = str(value).strip()
     return out
+
+
+_HEADER_LABEL = {
+    "seller": "продавец",
+    "buyer": "покупатель",
+    "contract_no": "номер контракта",
+    "contract_date": "дата контракта",
+    "invoice_no": "номер инвойса",
+    "invoice_date": "дата инвойса",
+    "currency": "валюта",
+    "delivery_terms": "условие поставки",
+    "seller_address": "адрес продавца",
+    "buyer_address": "адрес покупателя",
+}
+
+
+def _squash(value: Any) -> str:
+    return re.sub(r"[\s,;.]+", "", str(value or "")).casefold()
+
+
+def header_changes(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    """Поля шапки, где модель заменила непустой черновик. Молча шапка не меняется."""
+    notes: list[str] = []
+    for key, label in _HEADER_LABEL.items():
+        old, new = before.get(key), after.get(key)
+        if not _filled(old) or not _filled(new) or _squash(old) == _squash(new):
+            continue
+        notes.append(f"Модель заменила в шапке {label}: было «{' '.join(str(old).split())[:90]}», стало «{' '.join(str(new).split())[:90]}»")
+    return notes
 
 
 def _split_description(text: str) -> tuple[str, str, str]:
@@ -356,6 +439,9 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
         unit = str(lot.get("unit") or "").strip()
         commercial: dict[str, Any] = {}
         packing: dict[str, Any] = {}
+        if not _filled(pieces):
+            # Товар продан на вес: цена за кг, сумма = цена × нетто. Количество тогда равно нетто.
+            pieces = _weight_quantity(lot)
         if _filled(pieces):
             commercial["qty"] = pieces
             if _is_meters(unit):
@@ -429,6 +515,18 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
     return rows
 
 
+def _weight_quantity(lot: dict[str, Any]) -> float | None:
+    unit = str(lot.get("unit") or "").casefold()
+    if not re.search(r"\b(?:kgs?|кг)\b", unit):
+        return None
+    price, amount, net = lot.get("price"), lot.get("amount"), lot.get("net")
+    if not (_filled(price) and _filled(amount) and _filled(net)) or not price:
+        return None
+    if abs(float(amount) / float(price) - float(net)) <= max(0.5, abs(float(net)) * 0.002):
+        return float(net)
+    return None
+
+
 _ROW_FIELD = {
     "vendor": ("article", "артикул"),
     "model": ("article", "модель"),
@@ -480,6 +578,9 @@ def _lot_flags(lot: dict[str, Any]) -> list[dict[str, Any]]:
                 f"Два брутто: без паллет {_show(gross)}, с паллетами {_show(with_pallet)}{extra}. Оба настоящие, одно не выбрано.",
             )
         )
+    if lot.get("_confidence") == "low":
+        where = f" Источник: {lot.get('_source')}." if lot.get("_source") else ""
+        out.append(_flag("article", "Модель не уверена в этой строке, проверь по документу." + where))
     kind = lot.get("_verdict")
     reason = str(lot.get("_reason") or "").strip()
     suffix = f" {reason}" if reason else ""

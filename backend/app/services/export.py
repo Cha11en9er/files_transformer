@@ -253,7 +253,7 @@ def build_export_preview(
                     "sheets": [
                         {
                             "title": "Invoice",
-                            "headers": invoice_headers(currency_from_sources(products, header) or "CNY"),
+                            "headers": invoice_headers(currency_from_sources(products, header) or ""),
                             "rows": invoice_rows(products),
                         },
                         {"title": "Packing list", "headers": packing_headers(), "rows": packing_rows(products)},

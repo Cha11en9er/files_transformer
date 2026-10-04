@@ -120,6 +120,9 @@ def analyze(folder):
     for code in currencies + currencies_of(text):
         if code not in all_currencies:
             all_currencies.append(code)
+    notes = []
+    if len(all_currencies) > 1 and not goods_currency(text):
+        notes.append("Валюта не привязана к колонке цены, в документах несколько кодов: " + ", ".join(all_currencies))
     invoice_nos = _labeled_numbers(plain, _INVOICE_LABEL)
     invoice_no = _first(_INVOICE_NO, text)
     if invoice_no and invoice_no not in invoice_nos:
@@ -166,7 +169,14 @@ def analyze(folder):
             lot["producer"] = producer
     proforma_nos = _proforma_nos(documents)
     stated = _stated_totals(documents)
+    invoice_date = _labeled_date(plain) or _spaced_date(plain)
+    invoice_seen = any(_is_role(doc, "invoice") and doc.get("readable", True) for doc in documents)
+    if invoice_date and invoice is None and not invoice_seen:
+        notes.append(
+            "Инвойс код не прочитал (скан или нет файла), дата инвойса взята из других документов и может быть датой спецификации."
+        )
     return {
+        "notes": notes,
         "documents": [
             {
                 "name": doc["name"],
@@ -190,7 +200,7 @@ def analyze(folder):
         "order_nos": _labeled_numbers(plain, _ORDER_LABEL),
         "contract": _contract(plain),
         "contract_date": _contract_date(plain),
-        "invoice_date": _labeled_date(plain) or _spaced_date(plain),
+        "invoice_date": invoice_date,
         "delivery": delivery,
         "container": _container(plain),
         "director": _director(plain),
@@ -388,6 +398,9 @@ def _spaced_date(text):
             tail = lines[index + 1]
         found = pattern.match(tail or "")
         if not found:
+            named = _named_date(tail or "")
+            if named:
+                return named
             continue
         if found.group(1):
             year, month, day = found.group(1), found.group(2), found.group(3)
@@ -397,6 +410,46 @@ def _spaced_date(text):
             continue
         return f"{int(day):02d}.{int(month):02d}.{year}"
     return ""
+
+
+_MONTHS = {
+    name: number
+    for number, names in enumerate(
+        (
+            ("jan", "january"),
+            ("feb", "february"),
+            ("mar", "march"),
+            ("apr", "april"),
+            ("may",),
+            ("jun", "june"),
+            ("jul", "july"),
+            ("aug", "august"),
+            ("sep", "sept", "september"),
+            ("oct", "october"),
+            ("nov", "november"),
+            ("dec", "december"),
+        ),
+        start=1,
+    )
+    for name in names
+}
+
+
+def _named_date(value):
+    """Дата с названием месяца: `Mar. 31, 2014` или `31 March 2014`. На выходе дд.мм.гггг."""
+    text = " ".join(str(value or "").split())
+    match = re.match(r"(?i)([a-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})", text)
+    if match:
+        month, day, year = match.group(1), match.group(2), match.group(3)
+    else:
+        match = re.match(r"(?i)(\d{1,2})\s+([a-z]{3,9})\.?,?\s+(\d{4})", text)
+        if not match:
+            return ""
+        day, month, year = match.group(1), match.group(2), match.group(3)
+    number = _MONTHS.get(month.lower())
+    if not number or not 1 <= int(day) <= 31:
+        return ""
+    return f"{int(day):02d}.{number:02d}.{year}"
 
 
 def _letterhead_address(text, seller):

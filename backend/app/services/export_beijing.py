@@ -127,8 +127,8 @@ def invoice_headers(ccy: str = "CNY") -> list[str]:
         "Color",
         "Quantity",
         "Unit",
-        f"Price ({ccy})",
-        f"Amount ({ccy})",
+        f"Price ({ccy})" if ccy else "Price",
+        f"Amount ({ccy})" if ccy else "Amount",
     ]
 
 

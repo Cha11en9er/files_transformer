@@ -416,6 +416,27 @@ class PalletsAndAddressesTest(unittest.TestCase):
         self.assertIn("weight_suspect", result["flags"])
 
 
+class DatesAndPromptModesTest(unittest.TestCase):
+    def test_date_with_month_name_and_year_first(self):
+        from prepare_transform_code.shipment import _named_date, _spaced_date
+
+        self.assertEqual(_named_date("Mar. 31, 2014"), "31.03.2014")
+        self.assertEqual(_named_date("5 September 2020"), "05.09.2020")
+        self.assertEqual(_spaced_date("Invoice No: 7\nDate\n2018-2-6"), "06.02.2018")
+        self.assertEqual(_spaced_date("Date: Mar. 31, 2014"), "31.03.2014")
+
+    def test_full_rules_stay_available_for_comparison(self):
+        import os
+        from prepare_transform_code.verdict import FULL_RULES, RULES, build_prompt
+
+        self.assertLess(len(RULES), len(FULL_RULES))
+        os.environ["VERDICT_PROMPT"] = "full"
+        try:
+            self.assertTrue(build_prompt({"lots": []}).startswith(FULL_RULES))
+        finally:
+            del os.environ["VERDICT_PROMPT"]
+
+
 class PhotoTileTest(unittest.TestCase):
     def test_left_to_right_then_down_skip_empty_corner(self):
         from prepare_transform_code.photos import _planned_pages

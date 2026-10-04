@@ -1,0 +1,678 @@
+{
+  "1": {
+    "documents": [
+      "invoice:1",
+      "invoice:1",
+      "packing:1",
+      "specification:3"
+    ],
+    "flags": [
+      "delivery_conflict",
+      "manufacturer_conflict"
+    ],
+    "freights": 0,
+    "header": {
+      "buyer": "Megaplast Production OOO Add.: of registration RF, 142300, Moscow reg, Chehov, Simferopolskoye shosse, 3A, off. 1/5",
+      "buyer_address": "Россия",
+      "contract": "MP-20210606",
+      "contract_date": "",
+      "currency": "USD",
+      "delivery": "FOB SHANGHAI / FCA-KOTKA",
+      "invoice_date": "",
+      "invoice_no": "JH21024",
+      "seller": "JIAHUI IMPORT AND EXPORT TRADELIMITED Add: Room 1302, 13/F, Cheong K Building 84-86Des Voeux Road Central Centralhong Kong",
+      "seller_address": "Комната 1302, 13 / F, Cheong K Building 84-86Des Voeux Road Central Centralhong Kong"
+    },
+    "lots": 1,
+    "sums": {
+      "amount": 55000.0,
+      "area": null,
+      "gross": 3270.0,
+      "net": 2980.0,
+      "packages": 5.0,
+      "pieces": 1.0,
+      "volume": 21.03
+    }
+  },
+  "10": {
+    "documents": [
+      "scan:0",
+      "scan:0",
+      "specification:23"
+    ],
+    "flags": [
+      "hs_conflict"
+    ],
+    "freights": 0,
+    "header": {
+      "buyer": "ООО \"Обувь XXI века\" //\"XXI Century Shoes\" LTD",
+      "buyer_address": "Приложение 11 к контракту RK/RK/74372/120091/UKM/3208606.1, от 05.11.2010",
+      "contract": "RK/RK/74372/120091/UKM/3208606.1",
+      "contract_date": "05.11.2010",
+      "currency": "USD",
+      "delivery": "",
+      "invoice_date": "04/07/2012",
+      "invoice_no": "",
+      "seller": "AIRWAIR INTERNATIONAL LTD",
+      "seller_address": ""
+    },
+    "lots": 23,
+    "sums": {
+      "amount": 166080.1,
+      "area": null,
+      "gross": 6974.0,
+      "net": 4892.0,
+      "packages": 491.0,
+      "pieces": 3817.0,
+      "volume": null
+    }
+  },
+  "11": {
+    "documents": [
+      "invoice:14",
+      "packing:14",
+      "specification:14"
+    ],
+    "flags": [
+      "hs_conflict"
+    ],
+    "freights": 0,
+    "header": {
+      "buyer": "XXI Century Shoes LTD",
+      "buyer_address": "",
+      "contract": "02/04/12",
+      "contract_date": "02/02/2012",
+      "currency": "USD",
+      "delivery": "FOB SHENZHEN, China",
+      "invoice_date": "03/07/2012",
+      "invoice_no": "SG1251",
+      "seller": "SHINEGARDEN SHOES LIMITED",
+      "seller_address": "RM B008,Xiyu International Shoes Centre,No.603-613 XiCha Road,BaiYun District,Guangzhou China"
+    },
+    "lots": 14,
+    "sums": {
+      "amount": 50206.52,
+      "area": null,
+      "gross": 3554.2,
+      "net": 2943.2,
+      "packages": 277.0,
+      "pieces": 2804.0,
+      "volume": 27.159
+    }
+  },
+  "12": {
+    "documents": [
+      "invoice:17",
+      "packing:17",
+      "scan:0",
+      "scan:0",
+      "specification:17"
+    ],
+    "flags": [
+      "packages_conflict"
+    ],
+    "freights": 0,
+    "header": {
+      "buyer": "LLC RESPECT",
+      "buyer_address": "141707, Moscow region",
+      "contract": "0702ST",
+      "contract_date": "09.07.2013",
+      "currency": "USD",
+      "delivery": "",
+      "invoice_date": "",
+      "invoice_no": "160305-160306",
+      "seller": "STAR MUTFAK VE MOBILYA AKSESUARLARI SAN.TİC.LTD.ŞTİ",
+      "seller_address": ""
+    },
+    "lots": 17,
+    "sums": {
+      "amount": 42247.0,
+      "area": null,
+      "gross": 11009.36,
+      "net": 10679.079,
+      "packages": 1824.0,
+      "pieces": 4860.0,
+      "volume": null
+    }
+  },
+  "13": {
+    "documents": [
+      "invoice:0",
+      "specification:3",
+      "unknown:0"
+    ],
+    "flags": [
+      "hs_conflict",
+      "weight_suspect"
+    ],
+    "freights": 3432.52,
+    "header": {
+      "buyer": "LLC RESPECT",
+      "buyer_address": "Leningradskaya str., 1 b.D, of.304 141402, Moscow Region",
+      "contract": "LPRS-19-04/17",
+      "contract_date": "19.04.2017",
+      "currency": "USD",
+      "delivery": "EXW Taizhou, China",
+      "invoice_date": "06.02.2018",
+      "invoice_no": "C-17LPTZ021-1",
+      "seller": "Leggett & Platt (Taizhou) Co., LTD",
+      "seller_address": "ZHENYU DONG ROAD 2#, ECONOMIC DEVELOPMENT ZONE, JIANGYAN CITY, JIANGSU PROVINCE, CHINA"
+    },
+    "lots": 1,
+    "sums": {
+      "amount": 27340.8,
+      "area": null,
+      "gross": null,
+      "net": 4.0,
+      "packages": null,
+      "pieces": 960.0,
+      "volume": null
+    }
+  },
+  "14": {
+    "documents": [
+      "scan:0",
+      "scan:0",
+      "specification:48"
+    ],
+    "flags": [],
+    "freights": 0,
+    "header": {
+      "buyer": "LLC “RESPECT”",
+      "buyer_address": "",
+      "contract": "0103-XDR-AC",
+      "contract_date": "",
+      "currency": "USD",
+      "delivery": "ex-works Jiakou, Guanzhou, China / EXW Джиакоу",
+      "invoice_date": "",
+      "invoice_no": "",
+      "seller": "XUZHOU DOUBLE RINGS MACHINERY CO., LTD",
+      "seller_address": ""
+    },
+    "lots": 48,
+    "sums": {
+      "amount": 888.83,
+      "area": null,
+      "gross": null,
+      "net": null,
+      "packages": 93.0,
+      "pieces": 1670.0,
+      "volume": null
+    }
+  },
+  "15": {
+    "documents": [
+      "scan:0",
+      "scan:0",
+      "specification:53"
+    ],
+    "flags": [
+      "hs_conflict"
+    ],
+    "freights": 0,
+    "header": {
+      "buyer": "“TD 21 VEK” LLC",
+      "buyer_address": "141720, Moscow region, Dolgoprudny, microdistrict Paveltsevo, Novoe shosse str., 38, fl.1, of.14",
+      "contract": "21V-210622-04IMP",
+      "contract_date": "21.06.2022",
+      "currency": "USD",
+      "delivery": "FCA ISTANBUL, TURKEY / УСЛОВИЯ ПОСТАВКИ: FCA Стамбул, Турция",
+      "invoice_date": "21.06.2022",
+      "invoice_no": "",
+      "seller": "OZKARDESLER METAL PLASTIK MOB.AKS.PAZ.LTD.STI",
+      "seller_address": ""
+    },
+    "lots": 53,
+    "sums": {
+      "amount": 25630.7,
+      "area": null,
+      "gross": 2201.0,
+      "net": 1998.0,
+      "packages": 177.0,
+      "pieces": 80905.0,
+      "volume": null
+    }
+  },
+  "16": {
+    "documents": [
+      "invoice:34",
+      "packing:34",
+      "specification:34"
+    ],
+    "flags": [],
+    "freights": 0,
+    "header": {
+      "buyer": "LIMITED LIABILITY COMPANY “TD 21 VEK”",
+      "buyer_address": "141720, Moscow region, Dolgoprudny, microdistrict Paveltsevo, Novoe shosse str., 38, fl.1, of.14",
+      "contract": "SHUNTEX/21V-2025",
+      "contract_date": "15.05.2025",
+      "currency": "CNY",
+      "delivery": "FOB NANSHA, CHINA / УСЛОВИЯ ПОСТАВКИ: FOB Наньша, Китай",
+      "invoice_date": "22.12.2025",
+      "invoice_no": "RU30006",
+      "seller": "GUANGDONG SHUNTEX TRADING COMPANY",
+      "seller_address": "Bank: VTB BANK(PJSC) SHANGHAI BRANCH"
+    },
+    "lots": 34,
+    "sums": {
+      "amount": 475638.47,
+      "area": null,
+      "gross": 24416.26,
+      "net": 23447.96,
+      "packages": 2522.0,
+      "pieces": 2333280.0,
+      "volume": 65.74
+    }
+  },
+  "17": {
+    "documents": [
+      "invoice:4",
+      "packing:4",
+      "proforma:4",
+      "unknown:0",
+      "unknown:0",
+      "unknown:0",
+      "unknown:0",
+      "unknown:0",
+      "unknown:0",
+      "unknown:0",
+      "unknown:4"
+    ],
+    "flags": [],
+    "freights": 0,
+    "header": {
+      "buyer": "Vitoria",
+      "buyer_address": "",
+      "contract": "27/08",
+      "contract_date": "03.09.2025",
+      "currency": "CNY",
+      "delivery": "EXW GAOMI, SHANDONG, China",
+      "invoice_date": "",
+      "invoice_no": "MD260224",
+      "seller": "GAOMI MODERN SHOES CO., LTD",
+      "seller_address": "NO.1,MIDDLE OF ZHOUYANG ROAD, MISHUI DISTRICT,GAOMI SHANDONG,CHINA"
+    },
+    "lots": 4,
+    "sums": {
+      "amount": 207000.0,
+      "area": null,
+      "gross": 2760.0,
+      "net": 2520.0,
+      "packages": 200.0,
+      "pieces": 1200.0,
+      "volume": 17.55
+    }
+  },
+  "18": {
+    "documents": [
+      "invoice:113",
+      "packing:113",
+      "specification:113",
+      "unknown:0",
+      "unknown:113",
+      "unknown:23",
+      "unknown:90"
+    ],
+    "flags": [],
+    "freights": 0,
+    "header": {
+      "buyer": "\"Master\" LLC",
+      "buyer_address": "196006, Russia, St. Petersburg, internal territorial city municipal district Moskovskaya Zastava, Zastavskaya street, 22, building 2, letter A, premises 1-N, room 317",
+      "contract": "YT-02/04/2025",
+      "contract_date": "02.04.2025",
+      "currency": "USD",
+      "delivery": "DAP Moscow (Incoterms 2020)",
+      "invoice_date": "18.11.2025",
+      "invoice_no": "YT-20251024",
+      "seller": "YM TRANS GROUP CO., LIMITED",
+      "seller_address": "Room 83, 3 / F, Youli centre, 45 Kaiyuan Road, Kwun Tong, Kowloon, Hong Kong"
+    },
+    "lots": 113,
+    "sums": {
+      "amount": 33364.31,
+      "area": null,
+      "gross": 11376.05,
+      "net": 9669.64,
+      "packages": 740.0,
+      "pieces": 43558.0,
+      "volume": null
+    }
+  },
+  "19": {
+    "documents": [
+      "packing:1",
+      "specification:1"
+    ],
+    "flags": [],
+    "freights": 0,
+    "header": {
+      "buyer": "FRUITVILL LLC",
+      "buyer_address": "Russia, 603155, Nizhny Novgorod region, G.O. city of Nizhny Novgorod, Nizhny Novgorod, st. Maxim Gorky, 260, room 26.",
+      "contract": "5PI-10/12",
+      "contract_date": "10.12.2024",
+      "currency": "USD",
+      "delivery": "DAP-Moscow",
+      "invoice_date": "30.12.2024",
+      "invoice_no": "INV-02/5PS-2024",
+      "seller": "5PS INTERNATIONAL",
+      "seller_address": "287 J-III, WAPDA TOWN, LAHORE.- PAKISTAN"
+    },
+    "lots": 1,
+    "sums": {
+      "amount": 17850.0,
+      "area": null,
+      "gross": 21750.0,
+      "net": 21000.0,
+      "packages": 2150.0,
+      "pieces": null,
+      "volume": null
+    }
+  },
+  "2": {
+    "documents": [
+      "draft:0",
+      "gtd_form:0",
+      "invoice:7",
+      "packing:7",
+      "packing:7",
+      "scan:0",
+      "specification:7"
+    ],
+    "flags": [
+      "weight_conflict"
+    ],
+    "freights": 0,
+    "header": {
+      "buyer": "LLC “DT Logistics”",
+      "buyer_address": "",
+      "contract": "WLFT/DT-2016",
+      "contract_date": "",
+      "currency": "USD",
+      "delivery": "FOB Ningbo, China / FOB Нингбо, Китай",
+      "invoice_date": "",
+      "invoice_no": "",
+      "seller": "WENZHOU LONGWAN FOREIGN TRADE CO.,LTD",
+      "seller_address": ""
+    },
+    "lots": 7,
+    "sums": {
+      "amount": 23161.9,
+      "area": null,
+      "gross": null,
+      "net": null,
+      "packages": null,
+      "pieces": 5050.0,
+      "volume": null
+    }
+  },
+  "20": {
+    "documents": [
+      "invoice:1",
+      "packing:1",
+      "packing:1",
+      "packing:1",
+      "packing:1",
+      "packing:1",
+      "packing:1",
+      "packing:1",
+      "packing:1",
+      "packing:1",
+      "packing:1",
+      "packing:1",
+      "specification:1"
+    ],
+    "flags": [],
+    "freights": 0,
+    "header": {
+      "buyer": "«Techexpo» LLC",
+      "buyer_address": "Etiler Mah. Adnan Menderes Bulvari",
+      "contract": "22/11",
+      "contract_date": "26.01.2023",
+      "currency": "RUB",
+      "delivery": "EXW, Sharjah Hamriyah port freezone, UAE (Incoterms 2020)",
+      "invoice_date": "15.05.2024",
+      "invoice_no": "ANTALYA - 119000 REG",
+      "seller": "WELCOME YAPI MAKİNA SANAYI TİCARET LIMITED ŞIRKETI",
+      "seller_address": "Tahilpazari Mah. 471 Sokak Bilen Ismerkezi B-Blok No: 4/8 premise 17-H, part of office 306, R.M.No.3"
+    },
+    "lots": 1,
+    "sums": {
+      "amount": 900000000.0,
+      "area": null,
+      "gross": 185480.0,
+      "net": null,
+      "packages": 102.0,
+      "pieces": 1.0,
+      "volume": null
+    }
+  },
+  "3": {
+    "documents": [
+      "invoice:1",
+      "invoice:1",
+      "packing:1"
+    ],
+    "flags": [],
+    "freights": 0,
+    "header": {
+      "buyer": "“SM REGIONTEKSTIL'” LLC",
+      "buyer_address": "",
+      "contract": "",
+      "contract_date": "",
+      "currency": "USD",
+      "delivery": "FOB Нингбо/Шанхай(NINGBO//Shanghai)",
+      "invoice_date": "",
+      "invoice_no": "HF20230106",
+      "seller": "ZHEJIANG HUIFENG WARP KNITTING CO. LTD",
+      "seller_address": ""
+    },
+    "lots": 1,
+    "sums": {
+      "amount": 42560.0,
+      "area": null,
+      "gross": 5332.9,
+      "net": 5154.9,
+      "packages": 178.0,
+      "pieces": 6809.6,
+      "volume": 12.5
+    }
+  },
+  "4": {
+    "documents": [
+      "duplicate:0",
+      "scan:0",
+      "specification:34"
+    ],
+    "flags": [
+      "hs_conflict"
+    ],
+    "freights": 2490.0,
+    "header": {
+      "buyer": "ООО « KRISTEL »",
+      "buyer_address": "Legal \\ Actual address: 117587, Moscow, Varshavskoe shosse, house 125 Zh, building 6, floor 9, rooms 2,3,8,9 INN 7726712191 KPP 772601001",
+      "contract": "03/17",
+      "contract_date": "22.05.2017",
+      "currency": "EUR",
+      "delivery": "FCA 4614-909, Felgueiras, Portugal",
+      "invoice_date": "20.09.2024",
+      "invoice_no": "",
+      "seller": "JONIL CALCADOS, LDA",
+      "seller_address": "Largo Manuel Baltazar 4610-113"
+    },
+    "lots": 33,
+    "sums": {
+      "amount": 109049.0,
+      "area": null,
+      "gross": 4022.0,
+      "net": 3550.0,
+      "packages": 187.0,
+      "pieces": 2261.0,
+      "volume": null
+    }
+  },
+  "5": {
+    "documents": [
+      "customs_appendix:0",
+      "invoice:5",
+      "packing:5"
+    ],
+    "flags": [],
+    "freights": 0,
+    "header": {
+      "buyer": "DATE: March 01, 2024",
+      "buyer_address": "121170, Moscow city, Neverovskogo street, house 9, E 5, POM I, K",
+      "contract": "AOTAI2024GTW-01",
+      "contract_date": "",
+      "currency": "CNY",
+      "delivery": "",
+      "invoice_date": "",
+      "invoice_no": "CI240301RU",
+      "seller": "",
+      "seller_address": ""
+    },
+    "lots": 5,
+    "sums": {
+      "amount": 291557.0,
+      "area": null,
+      "gross": 2675.0,
+      "net": 2083.0,
+      "packages": 29.0,
+      "pieces": 66.0,
+      "volume": null
+    }
+  },
+  "6": {
+    "documents": [
+      "packing:10",
+      "proforma:9",
+      "scan:0",
+      "specification:10"
+    ],
+    "flags": [
+      "unit_conflict"
+    ],
+    "freights": 0,
+    "header": {
+      "buyer": "ООО «Элемент»",
+      "buyer_address": "Адрес: 143050, Московская обл., Одинцовский р-н, д.Малые Вяземы, Петровский пр-д, вл.2, стр.2",
+      "contract": "STL-1EL",
+      "contract_date": "17/12/2021",
+      "currency": "EUR",
+      "delivery": "2020)",
+      "invoice_date": "17/12/2021",
+      "invoice_no": "",
+      "seller": "Stalmot & Wolmet Spółka z ograniczoną odpowiedzialnością",
+      "seller_address": "143050, Московская обл., Одинцовский р-н, д.Малые Вяземы, Петровский пр-д, вл.2, стр.2"
+    },
+    "lots": 10,
+    "sums": {
+      "amount": 31467.8,
+      "area": null,
+      "gross": 5112.68,
+      "net": 5028.58,
+      "packages": 1216.0,
+      "pieces": 27500.0,
+      "volume": null
+    }
+  },
+  "7": {
+    "documents": [
+      "invoice:115",
+      "packing:7",
+      "specification:115",
+      "unknown:15",
+      "unknown:30"
+    ],
+    "flags": [
+      "foreign_document",
+      "hs_conflict",
+      "weight_suspect"
+    ],
+    "freights": 0,
+    "header": {
+      "buyer": "Ejendals LLC",
+      "buyer_address": "РФ, 127576, Москва, Новгородская ул., 1",
+      "contract": "001/02/12",
+      "contract_date": "20.02.2012",
+      "currency": "EUR",
+      "delivery": "FCA Hamburg",
+      "invoice_date": "20.02.2012",
+      "invoice_no": "10587886",
+      "seller": "Фирма \"Эйендальс АБ\"",
+      "seller_address": "г. Лександ, п/я 7, SE-793-21, Швеция"
+    },
+    "lots": 115,
+    "sums": {
+      "amount": 11341.61,
+      "area": null,
+      "gross": 397.51,
+      "net": 358.74,
+      "packages": null,
+      "pieces": 681.0,
+      "volume": null
+    }
+  },
+  "8": {
+    "documents": [
+      "image:0",
+      "image:0",
+      "specification:13"
+    ],
+    "flags": [],
+    "freights": 0,
+    "header": {
+      "buyer": "ООО «ПО ОКТЯБРЬ»",
+      "buyer_address": "",
+      "contract": "2",
+      "contract_date": "25.02.2014",
+      "currency": "USD",
+      "delivery": "FOB：Циндао",
+      "invoice_date": "25.02.2014",
+      "invoice_no": "",
+      "seller": "YANTAI FOREVER TRADE CO., LTD",
+      "seller_address": ""
+    },
+    "lots": 13,
+    "sums": {
+      "amount": 48465.12,
+      "area": null,
+      "gross": null,
+      "net": null,
+      "packages": 655.0,
+      "pieces": 520000.0,
+      "volume": null
+    }
+  },
+  "9": {
+    "documents": [
+      "image:0",
+      "image:0",
+      "specification:6",
+      "unknown:0"
+    ],
+    "flags": [],
+    "freights": 0,
+    "header": {
+      "buyer": "и Общество с ограниченной ответственностью «Респект The company HUANAN INT'L HARDWARE CO., LIMITED, represented by General Director Alistair Lin acting based on the Articles of Association, hereinafter referred to as the Seller, on the one hand and the company “Respect” LLC represented by General Director Alexey Viktorovich Tsatsulin, acting basing on the Articles of Association, hereinafter referred to as the Buyer, on the other hand, have made this Specification on supplying the lot of the Goods as the following:",
+      "buyer_address": "",
+      "contract": "HUAH-RS-2018",
+      "contract_date": "10/04/2018",
+      "currency": "USD",
+      "delivery": "2010)",
+      "invoice_date": "10/04/2018",
+      "invoice_no": "",
+      "seller": "HUANAN INT'L HARDWARE CO., LIMITED The company HUANAN INT'L HARDWARE CO., LIMITED, represented by General Director Alistair Lin acting based on the Articles of Association, hereinafter referred to as the Seller, on the one hand and the company “Respect” LLC represented by General Director Alexey Viktorovich Tsatsulin, acting basing on the Articles of Association, hereinafter referred to as the Buyer, on the other hand, have made this Specification on supplying the lot of the Goods as the following:",
+      "seller_address": ""
+    },
+    "lots": 6,
+    "sums": {
+      "amount": 4402.8,
+      "area": null,
+      "gross": null,
+      "net": null,
+      "packages": null,
+      "pieces": 23680.0,
+      "volume": null
+    }
+  }
+}
