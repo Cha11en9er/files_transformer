@@ -89,6 +89,16 @@ def test_hs_is_digits_without_dots() -> None:
     assert rows[0]["validation_errors"] == []
 
 
+def test_missing_currency_does_not_become_yuan() -> None:
+    from app.parsing.header_extract import export_currency_label, export_currency_word_ru
+
+    assert export_currency_label(None, hangzhou_style=True) == ""
+    assert export_currency_label("USD", hangzhou_style=True) == "USD"
+    assert export_currency_label("CNY", hangzhou_style=True) == "RMB"
+    assert export_currency_word_ru(None) == ""
+    assert export_currency_word_ru("USD") == "долл. США"
+
+
 def test_draft_currency_reaches_the_header() -> None:
     # Валюта у колонки цены — USD. Она не должна теряться перед экспортом (иначе профиль ставит RMB).
     draft = {"currency": "USD", "seller": "ACME", "contract": "C-1"}
