@@ -92,6 +92,16 @@ def test_hs_is_digits_without_dots() -> None:
     assert rows[0]["validation_errors"] == []
 
 
+def test_missing_currency_does_not_become_yuan() -> None:
+    from app.parsing.header_extract import export_currency_label, export_currency_word_ru
+
+    assert export_currency_label(None, hangzhou_style=True) == ""
+    assert export_currency_label("USD", hangzhou_style=True) == "USD"
+    assert export_currency_label("CNY", hangzhou_style=True) == "RMB"
+    assert export_currency_word_ru(None) == ""
+    assert export_currency_word_ru("USD") == "долл. США"
+
+
 def test_draft_currency_reaches_the_header() -> None:
     # Валюта у колонки цены — USD. Она не должна теряться перед экспортом (иначе профиль ставит RMB).
     draft = {"currency": "USD", "seller": "ACME", "contract": "C-1"}
@@ -238,7 +248,7 @@ def test_printed_currency_goes_to_header() -> None:
 def test_review_tab_shows_rows_of_its_own_file() -> None:
     tables = {
         "pack.xlsx / Page1": {"rows": [{"article": "A", "rolls": 1}], "note": "", "text": "", "total_rows": 1},
-        "scan.jpg": {"rows": [], "note": "Код не прочитал этот файл", "text": "", "total_rows": 0},
+        "scan.jpg": {"rows": [], "note": "Код не прочитал этот файл", "text": "сырой текст", "total_rows": 0},
     }
     docs = [
         {"name": "pack.xlsx / Page1", "role": "packing"},
@@ -248,8 +258,8 @@ def test_review_tab_shows_rows_of_its_own_file() -> None:
     by_name = {entry["filename"]: entry for entry in context["excel"] + context["pdfs"]}
     assert by_name["pack.xlsx / Page1"]["table"] == [{"article": "A", "rolls": 1}]
     assert by_name["pack.xlsx / Page1"]["kind"] == "excel"
-    assert by_name["scan.jpg"]["kind"] == "image"
-    assert by_name["scan.jpg"]["note"].startswith("Код не прочитал")
+    assert "scan.jpg" not in by_name
+    assert "сырой текст" not in str(context)
 
 
 def test_model_european_decimals_are_parsed() -> None:

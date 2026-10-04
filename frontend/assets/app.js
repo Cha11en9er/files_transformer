@@ -570,8 +570,8 @@ const PIPELINE = [
   { id: "reconcile", title: "Сверка позиций" },
   { id: "read", title: "Чтение файлов кодом" },
   { id: "photos", title: "Фото страниц" },
-  { id: "verdict", title: "Вердикт модели" },
-  { id: "verdict2", title: "Вторая модель" },
+  { id: "verdict", title: "Обычная модель" },
+  { id: "verdict2", title: "Улучшенная модель" },
   { id: "assemble", title: "Сборка таблицы" },
   { id: "done", title: "Распознавание выполнено" },
 ];
@@ -776,10 +776,17 @@ function progressFrames(message) {
   return match ? `${match[1]} кадров` : "";
 }
 
+function progressModel(message) {
+  const text = String(message || "").toLowerCase();
+  if (text.includes("улучшенная")) return "улучшенная модель";
+  if (text.includes("обычная") || text.includes("вердикт модели")) return "обычная модель";
+  return "";
+}
+
 function pipelineStep(filename, stage, message) {
   const text = `${filename || ""} ${message || ""}`.toLowerCase();
-  if (stage === "model2" || text.includes("вторая модель")) return "verdict2";
-  if (stage === "model" || text.includes("вердикт модели") || text.includes("вердикт")) return "verdict";
+  if (stage === "model2" || text.includes("улучшенная модель") || text.includes("вторая модель")) return "verdict2";
+  if (stage === "model" || text.includes("обычная модель") || text.includes("вердикт модели") || text.includes("вердикт")) return "verdict";
   if (text.includes("сборк")) return "assemble";
   if (text.includes("фото")) return "photos";
   if (text.includes("чтени")) return "read";
@@ -814,9 +821,14 @@ async function processShipment() {
       onProgress(_current, _total, filename, extra) {
         const id = pipelineStep(filename, extra?.stage, extra?.message);
         if (id) {
+          const model = progressModel(extra?.message);
+          const step = pipeline.steps.find((item) => item.id === id);
+          if (step && model) {
+            step.title = id === "verdict2" ? "Улучшенная модель" : "Обычная модель";
+          }
           pipeline.reach(id, {
             seconds: progressSeconds(extra?.message),
-            detail: progressFrames(extra?.message),
+            detail: progressFrames(extra?.message) || (model && id === "verdict2" ? model : ""),
           });
         }
       },
@@ -825,6 +837,23 @@ async function processShipment() {
       },
     });
     pipeline.reach("assemble");
+    const run = created.verdict_run || {};
+    const firstStep = pipeline.steps.find((item) => item.id === "verdict");
+    const secondStep = pipeline.steps.find((item) => item.id === "verdict2");
+    const doneStep = pipeline.steps.find((item) => item.id === "done");
+    if (firstStep && run.first) firstStep.title = "Обычная модель";
+    if (secondStep && run.used_second && run.second) {
+      secondStep.title = "Улучшенная модель";
+      secondStep.detail = secondStep.detail || "после обычной";
+    }
+    if (doneStep) {
+      if (run.used_second && run.second) {
+        doneStep.title = "Готово · обычная + улучшенная";
+        doneStep.detail = "сначала обычная, потом улучшенная";
+      } else if (run.first) {
+        doneStep.title = "Готово · обычная модель";
+      }
+    }
     await new Promise((resolve) => window.setTimeout(resolve, 700));
     pipeline.complete();
     state.shipmentId = created.id;
@@ -1324,17 +1353,26 @@ function reviewSources(ws) {
   const ctx = ws?.model_review?.context || {};
   const pdfs = ctx.pdfs || [];
   const excel = ctx.excel || [];
-  return { pdfs, excel, files: [...pdfs, ...excel] };
+  const raw = [...pdfs, ...excel];
+  return { pdfs, excel, files: raw.filter((file) => recognizedRows(file).length > 0) };
 }
 
 function renderReviewMeta(ws, _review) {
   const reviewMeta = $("#model-review-meta");
   const launch = $("#review-launch");
-  const { files } = reviewSources(ws);
-  if (launch) launch.classList.toggle("hidden", !files.length);
+  const hasTable = (ws.items || []).length > 0 || reviewSources(ws).files.length > 0;
+  if (launch) launch.classList.toggle("hidden", !hasTable);
   if (!reviewMeta) return;
-  // End users only need the button; hide model name / cost / balance.
-  reviewMeta.textContent = "";
+  const run = ws.verdict_run || {};
+  if (run.used_second && run.second) {
+    reviewMeta.textContent = "Сначала обычная модель, потом улучшенная.";
+  } else if (run.first) {
+    reviewMeta.textContent = "Вердикт обычной модели.";
+  } else if (_review?.meaning) {
+    reviewMeta.textContent = String(_review.meaning).slice(0, 180);
+  } else {
+    reviewMeta.textContent = "";
+  }
 }
 
 function sourceKind(file) {
@@ -1356,16 +1394,32 @@ function findReviewFile(files, filename) {
   );
 }
 
+function finalReviewRows(ws) {
+  return (ws.items || []).map((item) => {
+    const c = item.commercial_data || {};
+    const p = item.packing_data || {};
+    const u = item.customs_data || {};
+    return {
+      article: articleLabel(item),
+      rolls: p.rolls ?? p.boxes,
+      qty: c.qty,
+      meters: p.meters,
+      price: c.price,
+      amount: c.amount,
+      net_weight: p.net_weight,
+      gross_weight: p.gross_weight,
+      hs_code: u.hs_code,
+      customs_code: u.tnved_code,
+      description: u.description || u.description_ru || u.description_en,
+    };
+  });
+}
+
 function renderFilePane(file) {
   const pages = (file.pages || []).length ? `стр. ${(file.pages || []).join(", ")}` : "";
   const sheets = (file.sheets || []).length ? `листы: ${(file.sheets || []).join(", ")}` : "";
   const n = recognizedRows(file).length;
   const kind = sourceKind(file);
-  const preview =
-    !n && file.text
-      ? `<p class="hint">Текст листа, как его видит код:</p><pre class="review-text">${escapeHtml(String(file.text).slice(0, 6000))}</pre>`
-      : "";
-  const note = file.note ? `<p class="hint review-note">${escapeHtml(file.note)}</p>` : "";
   const capped =
     file.total_rows && file.total_rows > (file.table || []).length
       ? `<p class="hint">Показаны первые ${(file.table || []).length} из ${file.total_rows} строк.</p>`
@@ -1375,10 +1429,8 @@ function renderFilePane(file) {
       <strong>${escapeHtml(kind)} ${escapeHtml(file.filename || "")}</strong>
       <span class="hint">${escapeHtml([pages || sheets, file.meaning, `${n} строк`].filter(Boolean).join(" · "))}</span>
     </div>
-    ${note}
     ${renderRecognizedTable(file.table)}
     ${capped}
-    ${preview}
   `;
 }
 
@@ -1389,31 +1441,38 @@ function fillReviewDialog(ws, filename) {
   if (!tabs || !body) return;
   const review = ws.model_review;
   const { files } = reviewSources(ws);
-  const wanted = findReviewFile(files, filename);
+  const finalRows = finalReviewRows(ws);
+  const wanted = filename && filename !== "__final__" ? findReviewFile(files, filename) : null;
   const title = $("#review-dialog-title");
-  if (title) title.textContent = wanted ? `Распознавание ${sourceKind(wanted)}` : "Распознавание файла";
-  tabs.innerHTML = files
+  if (title) title.textContent = wanted ? `Таблица из ${sourceKind(wanted)}` : "Что распозналось";
+  const finalActive = !wanted ? " active" : "";
+  const fileTabs = files
     .map((file) => {
       const n = recognizedRows(file).length;
       const active = wanted && file.filename === wanted.filename ? " active" : "";
       return `<button type="button" class="review-tab${active}" data-review-file="${escapeHtml(file.filename || "")}">${escapeHtml(file.filename || "файл")} · ${n}</button>`;
     })
     .join("");
+  tabs.innerHTML =
+    `<button type="button" class="review-tab${finalActive}" data-review-file="__final__">Итог · ${finalRows.length}</button>` +
+    fileTabs;
   if (meta) {
-    meta.textContent = review?.meaning
-      ? String(review.meaning).slice(0, 180)
-      : wanted
-        ? `${recognizedRows(wanted).length} строк`
-        : "";
+    meta.textContent = review?.meaning || (wanted ? `${recognizedRows(wanted).length} строк` : `${finalRows.length} строк`);
   }
-  if (!wanted) {
-    body.innerHTML = "<p class=\"hint\">Нет распознанных таблиц.</p>";
+  if (wanted) {
+    body.innerHTML = renderFilePane(wanted);
+    return;
+  }
+  if (!finalRows.length) {
+    body.innerHTML = "<p class=\"hint\">Таблицу собрать не удалось.</p>";
     return;
   }
   body.innerHTML = `
-    ${renderFilePane(wanted)}
-    ${renderTotalsStrip(review)}
-    ${renderCompareTable(ws, review)}
+    <div class="review-file-meta">
+      <strong>Итоговая таблица</strong>
+      <span class="hint">${finalRows.length} строк после кода и модели</span>
+    </div>
+    ${renderRecognizedTable(finalRows)}
   `;
 }
 

@@ -1126,9 +1126,9 @@ def export_currency_label(code: str | None, *, hangzhou_style: bool = False) -> 
 
     Hangzhou templates historically say RMB for CNY; other profiles keep ISO codes.
     """
-    normalized = normalize_currency_code(code) or ("CNY" if hangzhou_style else None)
+    normalized = normalize_currency_code(code)
     if not normalized:
-        return "USD"
+        return ""
     if hangzhou_style and normalized in {"CNY", "RMB"}:
         return "RMB"
     if normalized == "RMB":
@@ -1155,7 +1155,7 @@ def export_currency_word_ru(code: str | None) -> str:
     shows the right money instead of a hardcoded «Юань»."""
     normalized = normalize_currency_code(code)
     if not normalized:
-        return "Юань"
+        return ""
     return _CCY_WORD_RU.get(normalized, normalized)
 
 
