@@ -240,7 +240,7 @@ def build_prompt(result):
             "proforma_nos": list(result.get("proforma_nos") or []),
             "order_no": result.get("order_no") or "",
             "order_nos": list(result.get("order_nos") or []),
-            "currency": result.get("currency") or "",
+            "currency": result.get("currency_printed") or result.get("currency") or "",
             "currencies": list(result.get("currencies") or []),
             "invoice_date": result.get("invoice_date") or "",
             "contract_date": result.get("contract_date") or "",

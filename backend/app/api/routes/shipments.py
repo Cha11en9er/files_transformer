@@ -47,8 +47,9 @@ from app.services.prepare_site import (
     apply_verdict,
     fee_rows,
     fill_from_catalog,
+    fold_rolls,
     goods_lots,
-    header_changes,
+    header_diff,
     header_from_draft,
     load_catalogs,
     lots_to_rows,
@@ -613,12 +614,21 @@ def _iter_create_events(
                 review_dict = second
         shutil.rmtree(vision_dir, ignore_errors=True)
         fill_from_catalog(lots, catalog)
+        # Рулоны одного дизайна идут одной строкой. Каждый рулон остаётся виден на вкладке файла.
+        lots, fold_notes = fold_rolls(lots, draft.get("spec_rows"))
+        flags_now = [
+            flag
+            for flag in (draft.get("flags") or [])
+            if flag != "packages_conflict" or any(lot.get("packages_conflict") for lot in lots)
+        ]
         header_fields = header_from_draft(draft, lots)
+        header_changed: list[dict[str, str]] = []
         if review_dict.get("status") == "ok":
             draft_header = dict(header_fields)
             header_fields = overlay_model_header(header_fields, review_dict.get("payload"))
-            verdict_dropped.extend(header_changes(draft_header, header_fields))
-        reconciled = lots_to_rows(lots, list(draft.get("flags") or []))
+            header_changed = header_diff(draft_header, header_fields)
+        header_notes = list(draft.get("notes") or []) + verdict_dropped + fold_notes
+        reconciled = lots_to_rows(lots, flags_now)
         found = len(reconciled)
         # Сборы идут отдельными строками без количества: деньги поставки их содержат, штуки нет.
         reconciled = reconciled + fee_rows(draft.get("freights"))
@@ -657,7 +667,7 @@ def _iter_create_events(
                 )
             )
             yield {"event": "file", "filename": display, "status": "ok", "message": message}
-        for flag in draft.get("flags") or []:
+        for flag in flags_now:
             message = _FLAG_RU.get(str(flag), str(flag))
             file_outs.append(
                 _make_file_out(
@@ -669,17 +679,6 @@ def _iter_create_events(
                 )
             )
             yield {"event": "file", "filename": "сверка", "status": "review", "message": message}
-        for note in list(draft.get("notes") or []) + verdict_dropped:
-            file_outs.append(
-                _make_file_out(
-                    filename="модель",
-                    doc_type=None,
-                    ocr_confidence=None,
-                    parse_status="review",
-                    parse_message=note,
-                )
-            )
-            yield {"event": "file", "filename": "модель", "status": "review", "message": note}
         if review_dict.get("error"):
             file_outs.append(
                 _make_file_out(
@@ -698,7 +697,9 @@ def _iter_create_events(
         stated_totals = _stated_for_review(draft.get("stated") or {})
         review_dict["totals"] = stated_totals
         review_dict["totals_mismatch"] = _totals_differ(excel_totals, stated_totals)
-        review_dict["context"] = review_files(list(draft.get("documents") or []), reconciled)
+        review_dict["context"] = review_files(
+            list(draft.get("documents") or []), reconciled, draft.get("document_tables")
+        )
         review_dict["items"] = []
         model_review = ModelReviewOut.model_validate(review_dict)
 
@@ -727,6 +728,8 @@ def _iter_create_events(
             warning_count=warning_count,
             skipped_count=skipped_count,
             model_review=model_review,
+            header_changes=header_changed,
+            header_notes=header_notes,
         )
         yield {"event": "done", **payload.model_dump(mode="json")}
 

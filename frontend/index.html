@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=39" />
+  <link rel="stylesheet" href="/assets/styles.css?v=40" />
 </head>
 <body>
   <div class="app">
@@ -103,9 +103,10 @@
         <span id="model-review-meta" class="hint"></span>
       </div>
 
-      <details class="header-panel">
-        <summary>Реквизиты документа</summary>
+      <details class="header-panel" id="header-panel">
+        <summary>Реквизиты документа <span id="header-summary-badge" class="header-badge" hidden></span></summary>
         <p class="field-note header-note">Шапка выгрузки: покупатель, продавец, инвойс, контракт, оплата, производитель. Правки из этого блока уходят в Excel при выгрузке.</p>
+        <div id="header-changes" class="header-changes" hidden></div>
         <form id="header-form" class="header-form">
           <label>Покупатель <input name="buyer" /></label>
           <label>Адрес покупателя <textarea name="buyer_address" rows="2"></textarea></label>
@@ -116,6 +117,7 @@
           <label>№ инвойса <input name="invoice_no" /></label>
           <label>Дата инвойса <input name="invoice_date" /></label>
           <label>Условия поставки <input name="delivery_terms" /></label>
+          <label>Валюта <input name="currency" /></label>
           <label>Условия оплаты <input name="payment_terms" /></label>
           <label>Производитель <input name="manufacturer" /></label>
           <label>Срок поставки <input name="delivery_date" /></label>
@@ -223,6 +225,6 @@
 
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
-  <script src="/assets/app.js?v=52"></script>
+  <script src="/assets/app.js?v=53"></script>
 </body>
 </html>

@@ -1798,6 +1798,140 @@ class DescriptionEchoTest(unittest.TestCase):
         self.assertAlmostEqual(sum(lot["amount"] for lot in lots), 12144.9)
 
 
+def _roll(vendor, meters, net, gross, model="", price=10.0, packages=1):
+    return {
+        "freight": False,
+        "vendor": vendor,
+        "model": model,
+        "description": "FABRIC",
+        "hs": "54077100",
+        "hs_alt": "",
+        "unit": "meters",
+        "package_type": "ROLLS",
+        "pieces": meters,
+        "packages": packages,
+        "price": price,
+        "amount": round(price * meters, 2),
+        "net": net,
+        "gross": gross,
+        "conflicts": {},
+    }
+
+
+class FoldRollsTest(unittest.TestCase):
+    def test_rolls_of_one_design_become_one_row(self):
+        from prepare_transform_code.rolls import fold_rolls
+
+        lots = [
+            _roll("LIV 600", 25.5, 22.0, 22.2, model="PM1"),
+            _roll("LIV 600", 27.0, 23.3, 23.5, model="PM2"),
+            _roll("OXF 1", 26.0, 20.8, 21.0, model="PM3", price=9.0),
+        ]
+        out, notes = fold_rolls(lots)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["packages"], 2)
+        self.assertAlmostEqual(out[0]["pieces"], 52.5)
+        self.assertAlmostEqual(out[0]["net"], 45.3)
+        self.assertAlmostEqual(out[0]["gross"], 45.7)
+        self.assertAlmostEqual(out[0]["amount"], 525.0)
+        self.assertEqual(out[0]["model"], "")
+        self.assertEqual(out[1]["packages"], 1)
+        self.assertEqual(len(notes), 1)
+
+    def test_repeated_model_splits_a_design_into_colours(self):
+        from prepare_transform_code.rolls import fold_rolls
+
+        lots = [
+            _roll("EDERAS", 10.0, 5.0, 5.5, model="ERBA 27"),
+            _roll("EDERAS", 11.0, 6.0, 6.5, model="ERBA 01"),
+            _roll("EDERAS", 12.0, 7.0, 7.5, model="ERBA 27"),
+            _roll("EDERAS", 13.0, 8.0, 8.5, model="ERBA 01"),
+        ]
+        out, _notes = fold_rolls(lots)
+        self.assertEqual([lot["vendor"] for lot in out], ["EDERAS ERBA 27", "EDERAS ERBA 01"])
+        self.assertEqual([lot["packages"] for lot in out], [2, 2])
+        self.assertAlmostEqual(out[0]["pieces"], 22.0)
+
+    def test_missing_weight_stays_empty_not_partial(self):
+        from prepare_transform_code.rolls import fold_rolls
+
+        lots = [_roll("A", 10.0, 5.0, 5.5), _roll("A", 11.0, None, 6.5)]
+        out, _notes = fold_rolls(lots)
+        self.assertIsNone(out[0]["net"])
+        self.assertAlmostEqual(out[0]["gross"], 12.0)
+
+    def test_lots_with_many_places_or_other_prices_are_left_alone(self):
+        from prepare_transform_code.rolls import fold_rolls
+
+        lots = [
+            _roll("A", 10.0, 5.0, 5.5, packages=4),
+            _roll("A", 11.0, 6.0, 6.5, packages=3),
+            _roll("B", 10.0, 5.0, 5.5, price=1.0),
+            _roll("B", 10.0, 5.0, 5.5, price=2.0),
+        ]
+        out, notes = fold_rolls(lots)
+        self.assertEqual(len(out), 4)
+        self.assertEqual(notes, [])
+
+    def test_places_are_checked_against_the_specification(self):
+        from prepare_transform_code.rolls import fold_rolls
+
+        lots = [_roll("LIV 600", 25.5, 22.0, 22.2), _roll("LIV 600", 27.0, 23.3, 23.5)]
+        same = fold_rolls(lots, [{"vendor": "LIV 600", "model": "", "packages": 2}])[0]
+        self.assertFalse(same[0]["packages_conflict"])
+        other = fold_rolls(lots, [{"vendor": "LIV 600", "model": "", "packages": 3}])[0]
+        self.assertTrue(other[0]["packages_conflict"])
+
+    def test_aydin_rolls_become_three_colour_rows(self):
+        from prepare_transform_code.rolls import fold_rolls
+
+        result = _only(
+            Path("documents/6_pravka/!Aydin"),
+            ("AYDIN INVOICE 17255.xlsx", "AYDIN PL 17255.xlsx", "Копия Specification  Айдын 17255 N.xlsx"),
+        )
+        lots, _notes = fold_rolls([lot for lot in result["lots"] if not lot["freight"]], result["spec_rows"])
+        self.assertEqual(sorted(lot["packages"] for lot in lots), [5, 5, 6])
+        self.assertAlmostEqual(sum(lot["pieces"] for lot in lots), 589.94, places=2)
+        self.assertAlmostEqual(sum(lot["amount"] for lot in lots), 4802.11, places=2)
+        self.assertFalse(any(lot["packages_conflict"] for lot in lots))
+        self.assertEqual(sorted(round(lot["pieces"], 2) for lot in lots), [163.88, 207.27, 218.79])
+
+    def test_pehlivan_rolls_become_twelve_designs(self):
+        from prepare_transform_code.rolls import fold_rolls
+
+        result = _only(
+            Path("documents/6_pravka/!Pehlivan"),
+            (
+                "Specification Пехливан 17255.xlsx",
+                "ИНВОЙС ПЕХЛИВАН 17255.pdf",
+                "ПАКИНГ ПЕХЛИВАН 17255.xlsx",
+            ),
+        )
+        lots, _notes = fold_rolls([lot for lot in result["lots"] if not lot["freight"]], result["spec_rows"])
+        self.assertEqual(len(lots), 12)
+        self.assertEqual(sum(lot["packages"] for lot in lots), 53)
+        self.assertAlmostEqual(sum(lot["pieces"] for lot in lots), 1473.8, places=2)
+        self.assertAlmostEqual(sum(lot["net"] for lot in lots), 1170.8, places=2)
+        liverpool = next(lot for lot in lots if lot["vendor"] == "LIVERPOOL 600")
+        self.assertEqual(liverpool["packages"], 11)
+        self.assertAlmostEqual(liverpool["pieces"], 314.3, places=2)
+        self.assertFalse(any(lot["packages_conflict"] for lot in lots))
+
+
+class DocumentTablesTest(unittest.TestCase):
+    def test_each_file_keeps_its_own_rows(self):
+        result = _only(
+            Path("documents/6_pravka/!Aydin"),
+            ("AYDIN INVOICE 17255.xlsx", "AYDIN PL 17255.xlsx", "Копия Specification  Айдын 17255 N.xlsx"),
+        )
+        tables = result["document_tables"]
+        packing = next(table for name, table in tables.items() if "PL" in name)
+        invoice = next(table for name, table in tables.items() if "INVOICE" in name)
+        self.assertEqual(len(packing["rows"]), 16)
+        self.assertEqual(len(invoice["rows"]), 1)
+        self.assertEqual(result["currency_printed"], "USD")
+
+
 def _only(folder, names):
     import shutil
     import tempfile

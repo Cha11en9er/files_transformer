@@ -188,9 +188,12 @@ def analyze(folder):
             for doc in documents
         ],
         "lots": lots,
+        "spec_rows": _spec_rows(specification),
+        "document_tables": {doc["name"]: _document_table(doc) for doc in documents},
         "freights": [_plain(line) for line in freights],
         "flags": flags,
         "currency": goods_currency(text) or (currencies[0] if currencies else currency_of(text)),
+        "currency_printed": _printed_currency(goods_currency(text) or (currencies[0] if currencies else currency_of(text)), text),
         "currencies": all_currencies,
         "invoice_no": invoice_no,
         "invoice_nos": invoice_nos,
@@ -324,14 +327,23 @@ def _weights_differ(packings):
     for doc in packings:
         goods = [line for line in doc["lines"] if not line.freight and not line.measure_group]
         totals.append(round(sum(line.gross or 0 for line in goods), 2))
+        # Строка без количества не должна ломать сортировку: None и число между собой не сравниваются.
         piece_sets.append(
-            tuple(sorted(None if line.pieces is None else round(line.pieces, 3) for line in goods))
+            tuple(
+                sorted(
+                    (None if line.pieces is None else round(line.pieces, 3) for line in goods),
+                    key=lambda value: (value is None, value or 0),
+                )
+            )
         )
         vendors = tuple(
             sorted(
-                ((line.vendor or "").strip(), None if line.pieces is None else round(line.pieces, 3))
-                for line in goods
-                if (line.vendor or "").strip()
+                (
+                    ((line.vendor or "").strip(), None if line.pieces is None else round(line.pieces, 3))
+                    for line in goods
+                    if (line.vendor or "").strip()
+                ),
+                key=lambda pair: (pair[0], pair[1] is None, pair[1] or 0),
             )
         )
         vendor_sets.append(vendors)
@@ -979,4 +991,71 @@ def _plain(line):
         "description": line.description,
         "amount": line.amount,
         "freight": True,
+    }
+
+
+def _printed_currency(code, text):
+    """Код валюты, как он напечатан. Юань в документе чаще всего RMB, и CNY в файле может не быть вовсе."""
+    if code != "CNY":
+        return code or ""
+    blob = str(text or "")
+    if re.search(r"\bCNY\b", blob, re.I):
+        return "CNY"
+    if re.search(r"\bRMB\b", blob, re.I):
+        return "RMB"
+    return "CNY"
+
+
+def _spec_rows(specification):
+    """Строки спецификации: по ним после вердикта сверяются места свёрнутых рулонов."""
+    if specification is None:
+        return []
+    return [
+        {"vendor": line.vendor, "model": line.model, "packages": line.packages, "pieces": line.pieces}
+        for line in specification.get("lines") or []
+        if not line.freight
+    ]
+
+
+_TABLE_ROWS_LIMIT = 400
+_TABLE_TEXT_LIMIT = 4000
+
+
+def _document_table(doc):
+    """Что код прочитал в этом файле. Строки без склейки, как они стоят в документе."""
+    lines = doc.get("lines") or []
+    rows = []
+    for line in lines[:_TABLE_ROWS_LIMIT]:
+        rows.append(
+            {
+                "article": (line.vendor or line.model or "").strip(),
+                "model": line.model,
+                "description": line.description,
+                "rolls": line.packages,
+                "qty": line.pieces,
+                "unit": line.unit,
+                "price": line.price,
+                "amount": line.amount,
+                "net_weight": line.net,
+                "gross_weight": line.gross,
+                "area": line.area,
+                "width": line.width,
+                "hs_code": line.hs,
+                "customs_code": line.hs_alt,
+                "freight": bool(line.freight),
+            }
+        )
+    note = ""
+    if doc.get("role") == "duplicate":
+        note = f"Тот же файл, что {doc.get('duplicate_of')}. Строки не удваиваются."
+    elif not lines and not doc.get("readable", True):
+        note = "Код не прочитал этот файл (скан или картинка без текстового слоя). Его читает модель по фото."
+    elif not lines:
+        note = "Строк товара код в этом файле не нашёл."
+    return {
+        "role": doc.get("role") or "",
+        "rows": rows,
+        "total_rows": len(lines),
+        "note": note,
+        "text": "" if rows else str(doc.get("text") or "")[:_TABLE_TEXT_LIMIT],
     }

@@ -13,11 +13,13 @@ from app.services.prepare_site import (
     fee_rows,
     filled_base_columns,
     header_changes,
+    header_diff,
     header_from_draft,
     is_reference_name,
     lots_to_rows,
     needs_second_model,
     overlay_model_header,
+    review_files,
     split_uploads,
     verdict_notes,
 )
@@ -190,3 +192,61 @@ def test_weight_sold_goods_get_quantity_from_net() -> None:
     assert row["commercial_data"]["qty"] == 21000.0
     other = _lot(vendor="A2", unit="kg", price=0.85, amount=999.0, net=21000.0)
     assert "qty" not in lots_to_rows([other], [])[0]["commercial_data"]
+
+
+def test_cosmetic_header_differences_are_not_changes() -> None:
+    header = {
+        "buyer": "\u201cSM REGIONTEKSTIL\u201d LLC",
+        "invoice_date": "13/01/2026",
+        "contract_no": "NE\u0421-01/10",
+        "delivery_terms": "EXW ISTANBUL//Turkey",
+        "currency": "RMB",
+        "contract_date": "2018-05-23",
+    }
+    payload = {
+        "header": {
+            "buyer": '"SM REGIONTEKSTIL" LLC',
+            "invoice_date": "13.01.2026",
+            "contract": "NEC-01/10",
+            "delivery": "EXW ISTANBUL/Turkey",
+            "currency": "CNY",
+            "contract_date": "23.05.2018",
+        }
+    }
+    out = overlay_model_header(header, payload)
+    assert header_diff(header, out) == []
+    assert out["contract_no"] == "NE\u0421-01/10"
+    assert out["invoice_date"] == "13/01/2026"
+
+
+def test_real_header_change_is_listed_with_before_and_after() -> None:
+    header = {"seller_address": "Hadimkoy Mah. No:7", "currency": ""}
+    payload = {"header": {"seller_address": "Hadimkoy Mah. No:7 Arnavutkoy-Istanbul", "currency": "USD"}}
+    out = overlay_model_header(header, payload)
+    diff = {item["field"]: item for item in header_diff(header, out)}
+    assert diff["seller_address"]["kind"] == "replaced"
+    assert diff["seller_address"]["before"] == "Hadimkoy Mah. No:7"
+    assert diff["currency"]["kind"] == "filled"
+    # В строки сообщений попадают только замены чужого значения.
+    assert len(header_changes(header, out)) == 1
+
+
+def test_printed_currency_goes_to_header() -> None:
+    assert header_from_draft({"currency": "CNY", "currency_printed": "RMB"}, [])["currency"] == "RMB"
+
+
+def test_review_tab_shows_rows_of_its_own_file() -> None:
+    tables = {
+        "pack.xlsx / Page1": {"rows": [{"article": "A", "rolls": 1}], "note": "", "text": "", "total_rows": 1},
+        "scan.jpg": {"rows": [], "note": "Код не прочитал этот файл", "text": "", "total_rows": 0},
+    }
+    docs = [
+        {"name": "pack.xlsx / Page1", "role": "packing"},
+        {"name": "scan.jpg", "role": "image"},
+    ]
+    context = review_files(docs, [{"article": "ALL"}], tables)
+    by_name = {entry["filename"]: entry for entry in context["excel"] + context["pdfs"]}
+    assert by_name["pack.xlsx / Page1"]["table"] == [{"article": "A", "rolls": 1}]
+    assert by_name["pack.xlsx / Page1"]["kind"] == "excel"
+    assert by_name["scan.jpg"]["kind"] == "image"
+    assert by_name["scan.jpg"]["note"].startswith("Код не прочитал")

@@ -11,6 +11,7 @@ import re
 import shutil
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ _ROOT = Path(__file__).resolve().parents[3]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from prepare_transform_code.rolls import fold_rolls  # noqa: F401  (маршрут берёт её отсюда)
 from prepare_transform_code.shipment import analyze
 from prepare_transform_code.verdict import build_prompt
 
@@ -344,10 +346,89 @@ def header_from_draft(draft: dict[str, Any], lots: list[dict[str, Any]]) -> dict
         "invoice_no": text("invoice_no"),
         "invoice_date": text("invoice_date"),
         "delivery_terms": text("delivery"),
-        # Валюта черновика — та, что у колонки цены. Иначе экспорт по профилю ставит дефолт (RMB).
-        "currency": text("currency"),
+        # Валюта черновика — та, что у колонки цены, в написании документа (RMB, а не CNY). Иначе экспорт ставит дефолт.
+        "currency": text("currency_printed") or text("currency"),
         "manufacturer": _one_producer(lots),
     }
+
+
+_MODEL_HEADER = (
+    ("seller", "seller"),
+    ("buyer", "buyer"),
+    ("contract", "contract_no"),
+    ("invoice_no", "invoice_no"),
+    # Валюту модель видит по колонке цены на фото и может поправить черновик.
+    ("currency", "currency"),
+    # Модель читает фото и видит бланк целиком, код — только текстовый слой. Названное моделью значение
+    # заменяет черновик. Что именно заменено, видно в header_diff.
+    ("invoice_date", "invoice_date"),
+    ("contract_date", "contract_date"),
+    ("seller_address", "seller_address"),
+    ("buyer_address", "buyer_address"),
+    ("delivery", "delivery_terms"),
+)
+# Номер читается как напечатан. Латинская C вместо кириллической (и наоборот) номер не меняет.
+_IDENTIFIERS = {"contract_no", "invoice_no"}
+_DATES = {"invoice_date", "contract_date"}
+
+_LOOK_ALIKE = str.maketrans("авекмнорстух", "abekmhopctyx")
+_CURRENCY_ALIAS = {
+    "rmb": "cny",
+    "yuan": "cny",
+    "cnh": "cny",
+    "¥": "cny",
+    "us$": "usd",
+    "$": "usd",
+    "€": "eur",
+    "euro": "eur",
+}
+_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _fold(value: Any) -> str:
+    """Запись для сравнения: регистр, кавычки, пробелы, знаки и похожие буквы двух алфавитов не считаются отличием."""
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    return re.sub(r"[\W_]+", "", text.casefold().translate(_LOOK_ALIKE))
+
+
+def _date_key(value: Any) -> str | None:
+    """Дата в одном виде ГГГГ-ММ-ДД, чтобы 13/01/2026, 13.01.2026 и 2026-01-13 не считались разными."""
+    text = " ".join(str(value or "").split())
+    numeric = re.search(r"(\d{1,4})\s*[./\-]\s*(\d{1,2})\s*[./\-]\s*(\d{2,4})", text)
+    if numeric:
+        a, b, c = (int(part) for part in numeric.groups())
+        if len(numeric.group(1)) == 4:
+            year, month, day = a, b, c
+        else:
+            day, month, year = a, b, c + (2000 if c < 100 else 0)
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            return f"{year:04d}-{month:02d}-{day:02d}"
+    named = re.search(r"([A-Za-z]{3,9})\.?\s*(\d{1,2})\s*,?\s*(\d{4})", text)
+    if named and named.group(1)[:3].lower() in _MONTHS:
+        return f"{int(named.group(3)):04d}-{_MONTHS[named.group(1)[:3].lower()]:02d}-{int(named.group(2)):02d}"
+    day_first = re.search(r"(\d{1,2})\s*([A-Za-z]{3,9})\.?\s*,?\s*(\d{4})", text)
+    if day_first and day_first.group(2)[:3].lower() in _MONTHS:
+        return f"{int(day_first.group(3)):04d}-{_MONTHS[day_first.group(2)[:3].lower()]:02d}-{int(day_first.group(1)):02d}"
+    return None
+
+
+def _currency_key(value: Any) -> str:
+    text = " ".join(str(value or "").split()).casefold()
+    return _CURRENCY_ALIAS.get(text, text)
+
+
+def _same_value(field: str, old: Any, new: Any) -> bool:
+    if field == "currency":
+        return _currency_key(old) == _currency_key(new)
+    if field in _DATES:
+        left, right = _date_key(old), _date_key(new)
+        if left and right:
+            return left == right
+    return _fold(old) == _fold(new)
 
 
 def overlay_model_header(header: dict[str, str], payload: Any) -> dict[str, str]:
@@ -355,30 +436,17 @@ def overlay_model_header(header: dict[str, str], payload: Any) -> dict[str, str]
         return header
     model_header = payload.get("header") if isinstance(payload.get("header"), dict) else {}
     out = dict(header)
-    mapping = {
-        "seller": "seller",
-        "buyer": "buyer",
-        "contract": "contract_no",
-        "invoice_no": "invoice_no",
-        # Валюту модель видит по колонке цены на фото и может поправить черновик.
-        "currency": "currency",
-    }
-    for source, target in mapping.items():
+    for source, target in _MODEL_HEADER:
         value = model_header.get(source)
-        if _filled(value):
-            out[target] = str(value).strip()
-    # Модель читает фото и видит бланк целиком, код — только текстовый слой. Если модель назвала значение,
-    # оно заменяет черновик. Что именно заменено, видно в header_changes.
-    for source, target in (
-        ("invoice_date", "invoice_date"),
-        ("contract_date", "contract_date"),
-        ("seller_address", "seller_address"),
-        ("buyer_address", "buyer_address"),
-        ("delivery", "delivery_terms"),
-    ):
-        value = model_header.get(source)
-        if _filled(value):
-            out[target] = str(value).strip()
+        if not _filled(value):
+            continue
+        text = str(value).strip()
+        if _filled(out.get(target)) and _same_value(target, out.get(target), text):
+            # Та же запись другими знаками. Валюта берётся в написании модели с фото, остальное остаётся как прочитал код.
+            if target == "currency":
+                out[target] = text
+            continue
+        out[target] = text
     return out
 
 
@@ -396,19 +464,34 @@ _HEADER_LABEL = {
 }
 
 
-def _squash(value: Any) -> str:
-    return re.sub(r"[\s,;.]+", "", str(value or "")).casefold()
+def header_diff(before: dict[str, str], after: dict[str, str]) -> list[dict[str, str]]:
+    """Поля шапки, где модель заменила черновик кода или заполнила пустое. Только настоящие отличия, не кавычки и не знаки."""
+    changes: list[dict[str, str]] = []
+    for key, label in _HEADER_LABEL.items():
+        old, new = before.get(key), after.get(key)
+        if not _filled(new):
+            continue
+        if _filled(old) and _same_value(key, old, new):
+            continue
+        changes.append(
+            {
+                "field": key,
+                "label": label,
+                "before": " ".join(str(old or "").split()),
+                "after": " ".join(str(new).split()),
+                "kind": "replaced" if _filled(old) else "filled",
+            }
+        )
+    return changes
 
 
 def header_changes(before: dict[str, str], after: dict[str, str]) -> list[str]:
-    """Поля шапки, где модель заменила непустой черновик. Молча шапка не меняется."""
-    notes: list[str] = []
-    for key, label in _HEADER_LABEL.items():
-        old, new = before.get(key), after.get(key)
-        if not _filled(old) or not _filled(new) or _squash(old) == _squash(new):
-            continue
-        notes.append(f"Модель заменила в шапке {label}: было «{' '.join(str(old).split())[:90]}», стало «{' '.join(str(new).split())[:90]}»")
-    return notes
+    """Те же отличия одной строкой. Для заполненного моделью пустого поля строки нет: оно не заменяет чужое значение."""
+    return [
+        f"Модель заменила в шапке {item['label']}: было «{item['before'][:90]}», стало «{item['after'][:90]}»"
+        for item in header_diff(before, after)
+        if item["kind"] == "replaced"
+    ]
 
 
 def _split_description(text: str) -> tuple[str, str, str]:
@@ -646,7 +729,12 @@ def _flag(field_name: str, message: str) -> dict[str, Any]:
     }
 
 
-def review_files(documents: list[dict[str, Any]], rows: list[dict[str, Any]]) -> dict[str, Any]:
+def review_files(
+    documents: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+    tables: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Вкладки файлов. Если код отдал строки каждого файла, вкладка показывает их, а не общую таблицу поставки."""
     table = []
     for row in rows:
         commercial = row.get("commercial_data") or {}
@@ -670,11 +758,37 @@ def review_files(documents: list[dict[str, Any]], rows: list[dict[str, Any]]) ->
     excel = []
     for doc in documents:
         name = str(doc.get("name") or "")
-        entry = {"filename": name, "table": table, "pages": [], "sheets": [], "meaning": doc.get("role") or ""}
-        if name.lower().endswith(".pdf"):
+        own = (tables or {}).get(name)
+        entry = {
+            "filename": name,
+            "table": own["rows"] if own is not None else table,
+            "note": (own or {}).get("note") or "",
+            "text": (own or {}).get("text") or "",
+            "total_rows": (own or {}).get("total_rows"),
+            "pages": [],
+            "sheets": [],
+            "meaning": _ROLE_TITLE.get(str(doc.get("role") or ""), doc.get("role") or ""),
+        }
+        base = name.split(" / ")[0].lower()
+        if base.endswith(".pdf"):
             entry["kind"] = "pdf"
+            pdfs.append(entry)
+        elif base.endswith((".jpg", ".jpeg", ".png")):
+            entry["kind"] = "image"
             pdfs.append(entry)
         else:
             entry["kind"] = "excel"
             excel.append(entry)
     return {"excel": excel, "pdfs": pdfs}
+
+
+_ROLE_TITLE = {
+    "invoice": "инвойс",
+    "packing": "пакинг",
+    "specification": "спецификация",
+    "proforma": "проформа",
+    "duplicate": "дубль",
+    "image": "картинка",
+    "scan": "скан",
+    "unknown": "роль не определена",
+}

@@ -137,12 +137,24 @@ class ModelReviewOut(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+class HeaderChangeOut(BaseModel):
+    """Поле шапки, где модель заменила черновик кода или заполнила пустое."""
+
+    field: str
+    label: str
+    before: str = ""
+    after: str = ""
+    kind: str = "replaced"
+
+
 class ShipmentCreateResponse(BaseModel):
     id: uuid.UUID
     title: str
     profile_type: ProfileType
     status: ShipmentStatus
     header_fields: dict[str, Any] = Field(default_factory=dict)
+    header_changes: list[HeaderChangeOut] = Field(default_factory=list)
+    header_notes: list[str] = Field(default_factory=list)
     files: list[FileOut]
     items: list[ItemOut] = Field(default_factory=list)
     item_count: int

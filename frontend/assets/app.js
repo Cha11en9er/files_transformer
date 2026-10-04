@@ -263,6 +263,7 @@ function headerSnapshot(fields) {
     "invoice_no",
     "invoice_date",
     "delivery_terms",
+    "currency",
     "payment_terms",
     "manufacturer",
     "delivery_date",
@@ -1210,8 +1211,11 @@ function renderRecognizedTable(rows) {
   const body = list
     .slice(0, 250)
     .map((row, index) => {
-      const code = row.customs_code || row.hs_code || "";
-      const desc = row.description || "";
+      const code = [row.hs_code, row.customs_code]
+        .filter(Boolean)
+        .filter((part, at, all) => all.indexOf(part) === at)
+        .join(" / ");
+      const desc = (row.freight ? "Сбор: " : "") + (row.description || "");
       return `<tr>
         <td class="row-no">${index + 1}</td>
         <td>${escapeHtml(row.article || "-")}</td>
@@ -1330,8 +1334,9 @@ function renderReviewMeta(ws, _review) {
 }
 
 function sourceKind(file) {
-  const name = String(file?.filename || "").toLowerCase();
+  const name = String(file?.filename || "").toLowerCase().split(" / ")[0];
   if (file?.kind === "pdf" || name.endsWith(".pdf")) return "PDF";
+  if (file?.kind === "image" || /\.(jpe?g|png)$/.test(name)) return "Картинка";
   if (/\.(xlsx|xls|xlsm)$/.test(name) || file?.kind === "excel") return "Excel";
   return "Файл";
 }
@@ -1354,14 +1359,21 @@ function renderFilePane(file) {
   const kind = sourceKind(file);
   const preview =
     !n && file.text
-      ? `<pre class="review-text">${escapeHtml(String(file.text).slice(0, 6000))}</pre>`
+      ? `<p class="hint">Текст листа, как его видит код:</p><pre class="review-text">${escapeHtml(String(file.text).slice(0, 6000))}</pre>`
+      : "";
+  const note = file.note ? `<p class="hint review-note">${escapeHtml(file.note)}</p>` : "";
+  const capped =
+    file.total_rows && file.total_rows > (file.table || []).length
+      ? `<p class="hint">Показаны первые ${(file.table || []).length} из ${file.total_rows} строк.</p>`
       : "";
   return `
     <div class="review-file-meta">
       <strong>${escapeHtml(kind)} ${escapeHtml(file.filename || "")}</strong>
       <span class="hint">${escapeHtml([pages || sheets, file.meaning, `${n} строк`].filter(Boolean).join(" · "))}</span>
     </div>
+    ${note}
     ${renderRecognizedTable(file.table)}
+    ${capped}
     ${preview}
   `;
 }
@@ -1559,6 +1571,55 @@ async function loadWorkspace(_id) {
   renderWorkspace();
 }
 
+function renderHeaderChanges(ws, form) {
+  const box = $("#header-changes");
+  const badge = $("#header-summary-badge");
+  const panel = $("#header-panel");
+  if (!box || !form) return;
+  form.querySelectorAll("label.header-changed, label.header-filled").forEach((label) => {
+    label.classList.remove("header-changed", "header-filled");
+    label.querySelectorAll(".header-was").forEach((node) => node.remove());
+  });
+  const changes = ws.header_changes || [];
+  const notes = ws.header_notes || [];
+  const rows = [];
+  changes.forEach((change) => {
+    const label = form[change.field]?.closest("label");
+    const filled = change.kind === "filled";
+    if (label) {
+      label.classList.add(filled ? "header-filled" : "header-changed");
+      const was = document.createElement("span");
+      was.className = "header-was";
+      was.textContent = filled
+        ? "Код поля не нашёл, значение вписала модель по фото"
+        : `Код прочитал: ${change.before}`;
+      label.appendChild(was);
+    }
+    rows.push(
+      filled
+        ? `<li><strong>${escapeHtml(change.label)}</strong>: код не нашёл, модель вписала «${escapeHtml(change.after)}»</li>`
+        : `<li><strong>${escapeHtml(change.label)}</strong>: код прочитал «${escapeHtml(change.before)}», модель по фото поставила «${escapeHtml(change.after)}»</li>`
+    );
+  });
+  const noteRows = notes.map((text) => `<li class="header-note-row">${escapeHtml(text)}</li>`);
+  const parts = [];
+  if (rows.length) parts.push(`<p class="header-changes-title">Что изменила модель в шапке</p><ul>${rows.join("")}</ul>`);
+  if (noteRows.length) parts.push(`<p class="header-changes-title">Замечания к разбору</p><ul>${noteRows.join("")}</ul>`);
+  box.innerHTML = parts.join("");
+  box.hidden = !parts.length;
+  if (badge) {
+    const bits = [];
+    if (changes.length) bits.push(`изменено моделью: ${changes.length}`);
+    if (notes.length) bits.push(`замечаний: ${notes.length}`);
+    badge.textContent = bits.join(" · ");
+    badge.hidden = !bits.length;
+  }
+  if (panel && parts.length && !ws._headerShown) {
+    panel.open = true;
+    ws._headerShown = true;
+  }
+}
+
 function renderWorkspace() {
   const ws = state.workspace;
   if (!ws) return;
@@ -1569,12 +1630,14 @@ function renderWorkspace() {
 
   const badges = $("#files-badges");
   badges.innerHTML = "";
+  // Нажимается каждый файл, у которого есть вкладка с тем, что в нём прочитано. Лист Excel называется «книга.xlsx / Лист1».
+  const reviewNames = new Set(reviewSources(ws).files.map((entry) => entry.filename));
   (ws.files || []).forEach((f) => {
     const parseStatus = f.parse_status || "ok";
-    const name = String(f.filename || "").toLowerCase();
+    const name = String(f.filename || "").toLowerCase().split(" / ")[0];
     const isPdf = name.endsWith(".pdf");
     const isExcel = /\.(xlsx|xls|xlsm)$/.test(name);
-    const clickable = parseStatus !== "skipped" && (isPdf || isExcel || parseStatus === "review");
+    const clickable = parseStatus !== "skipped" && reviewNames.has(f.filename);
     const span = document.createElement(clickable ? "button" : "span");
     span.type = clickable ? "button" : undefined;
     span.className = `badge ${f.doc_type ? "" : "unknown"} ${parseStatus === "ok" ? "" : parseStatus} ${clickable ? "clickable" : ""}`.trim();
@@ -1620,6 +1683,7 @@ function renderWorkspace() {
     "invoice_no",
     "invoice_date",
     "delivery_terms",
+    "currency",
     "payment_terms",
     "manufacturer",
     "delivery_date",
@@ -1627,6 +1691,7 @@ function renderWorkspace() {
   ].forEach((k) => {
     if (headerForm[k]) headerForm[k].value = hf[k] || "";
   });
+  renderHeaderChanges(ws, headerForm);
 
   const tbody = $("#items-table tbody");
   tbody.innerHTML = "";
@@ -1925,6 +1990,7 @@ function readHeaderForm() {
     invoice_no: form.invoice_no?.value || "",
     invoice_date: form.invoice_date?.value || "",
     delivery_terms: form.delivery_terms?.value || "",
+    currency: form.currency?.value || "",
     payment_terms: form.payment_terms?.value || "",
     manufacturer: form.manufacturer?.value || "",
     delivery_date: form.delivery_date?.value || "",
