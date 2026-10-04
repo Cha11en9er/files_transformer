@@ -6,12 +6,22 @@ from prepare_transform_code.fields import (
     column_of,
     is_header_row,
     is_row_index,
+    is_shipper_code,
     is_stop_label,
     role_of,
     roles_of,
     stamp_header,
 )
-from prepare_transform_code.lines import Line, assign_cell, fold_parts, is_bare_total, is_pallet_only, pull_article
+from prepare_transform_code.lines import (
+    Line,
+    assign_cell,
+    attach_pallet,
+    fold_parts,
+    is_bare_total,
+    is_pallet_only,
+    pull_article,
+    settle_pallets,
+)
 from prepare_transform_code.numbers import (
     _COMMA_IS_DECIMAL,
     _DOT_IS_DECIMAL,
@@ -70,6 +80,7 @@ def read_pdf(path):
     text = collapse_letter_spacing(raw)
     readable = _readable(text)
     lines = fold_parts(_share_measures(found_lines)) if readable else []
+    settle_pallets(lines)
     role = role_of(text) if readable else "scan"
     roles = roles_of(text) if readable else []
     if role not in roles and role not in {"unknown", "scan"}:
@@ -157,11 +168,20 @@ def _map_row(row):
             if not stamp_header(cell):
                 mapped["model"] = col
             continue
+        if name == "hs" and is_shipper_code(cell):
+            # Код поставщика — второй код, даже если колонка стоит левее ТН ВЭД.
+            if "hs_alt" not in mapped:
+                mapped["hs_alt"] = col
+                mapped["_hs_alt_shipper"] = "1"
+            continue
         if name == "hs" and "hs" in mapped and "hs_alt" not in mapped:
             mapped["hs_alt"] = col
             continue
         if name not in mapped:
             mapped[name] = col
+    if "hs" not in mapped and "hs_alt" in mapped and mapped.get("_hs_alt_shipper"):
+        mapped["hs"] = mapped.pop("hs_alt")
+        mapped.pop("_hs_alt_shipper", None)
     if extra:
         mapped["_description_extra"] = extra
     return mapped
@@ -245,6 +265,8 @@ def _table_lines(table, boxes, words, table_box, inherited):
         for col in mapping.get("_description_extra") or []:
             if col < len(row):
                 assign_cell(line, "description", row[col])
+        if line.hs_alt and mapping.get("_hs_alt_shipper"):
+            line.hs_alt_shipper = True
         pull_article(line)
         if not line.unit and _kg_price(table, mapping, header_idx, cursor):
             line.unit = "kg"
@@ -269,6 +291,7 @@ def _table_lines(table, boxes, words, table_box, inherited):
         if is_bare_total(line, lines):
             break
         if is_pallet_only(line):
+            attach_pallet(lines, line)
             continue
         if measured or named:
             lines.append(line)

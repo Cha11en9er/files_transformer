@@ -13,7 +13,17 @@ from prepare_transform_code.fields import (
     role_of,
     roles_of,
 )
-from prepare_transform_code.lines import Line, assign_cell, fold_parts, hs_text, is_bare_total, is_pallet_only, pull_article
+from prepare_transform_code.lines import (
+    Line,
+    assign_cell,
+    attach_pallet,
+    fold_parts,
+    hs_text,
+    is_bare_total,
+    is_pallet_only,
+    pull_article,
+    settle_pallets,
+)
 from prepare_transform_code.numbers import currency_of, parse_number
 
 try:
@@ -213,6 +223,8 @@ def _lines(rows):
         _unit_beside_divisor(line, row, mapping)
         if _same_code(line.hs, line.hs_alt):
             line.hs_alt = ""
+        if line.hs_alt and mapping.get("_hs_alt_shipper"):
+            line.hs_alt_shipper = True
         pull_article(line)
         # Короткое имя варианта написано один раз, ниже клетка пустая. Длинное описание на соседние строки не переносим.
         if (
@@ -235,6 +247,7 @@ def _lines(rows):
         if is_bare_total(line, lines):
             break
         if is_pallet_only(line):
+            attach_pallet(lines, line)
             continue
         if _blank_charge(line):
             continue
@@ -243,7 +256,9 @@ def _lines(rows):
             continue
         if useful or (line.vendor and line.description):
             lines.append(line)
-    return fold_parts(lines)
+    folded = fold_parts(lines)
+    settle_pallets(folded)
+    return folded
 
 
 def _package_part(line, previous):
@@ -420,6 +435,8 @@ def _header(rows):
             if name == "hs" and is_shipper_code(cell):
                 if "hs_alt" not in mapped:
                     mapped["hs_alt"] = col
+                    # Строка-маркер, не число: цикл по колонкам берёт только int.
+                    mapped["_hs_alt_shipper"] = "1"
                 continue
             if name == "hs" and "hs" in mapped and "hs_alt" not in mapped:
                 mapped["hs_alt"] = col
@@ -442,6 +459,7 @@ def _header(rows):
         measures = {"qty", "price", "packages"} & set(mapped)
         if "hs" not in mapped and "hs_alt" in mapped:
             mapped["hs"] = mapped.pop("hs_alt")
+            mapped.pop("_hs_alt_shipper", None)
         if score > best_score and identity and measures:
             best = mapped
             best_score = score

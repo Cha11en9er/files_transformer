@@ -148,6 +148,41 @@ def _blank_lot(fields: dict[str, Any]) -> dict[str, Any]:
     return _merge_fields(lot, fields)
 
 
+def _fixed(lot: dict[str, Any], fields: dict[str, Any], reason: str, kind: str) -> dict[str, Any]:
+    """Строка после решения модели. Что именно модель заменила, остаётся в служебных полях для флагов."""
+    merged = _merge_fields(lot, fields)
+    changes: dict[str, tuple[Any, Any]] = {}
+    for key in (fields or {}):
+        if key == "parts" or not _filled(lot.get(key)):
+            continue
+        if _filled(merged.get(key)) and merged.get(key) != lot.get(key):
+            changes[key] = (lot.get(key), merged.get(key))
+    merged["_verdict"] = kind
+    merged["_reason"] = reason
+    merged["_changes"] = changes
+    return merged
+
+
+def verdict_notes(lots: list[dict[str, Any]], payload: Any) -> list[str]:
+    """Строки черновика, которые модель выбросила. Молча они не пропадают."""
+    notes: list[str] = []
+    rows = payload.get("lots") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return notes
+    for row in rows:
+        if not isinstance(row, dict) or str(row.get("action") or "").lower() != "drop":
+            continue
+        index = row.get("index")
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(lots):
+            continue
+        lot = lots[index]
+        title = str(lot.get("vendor") or lot.get("model") or lot.get("description") or f"строка {index + 1}")
+        title = " ".join(title.split())[:80]
+        reason = str(row.get("reason") or "").strip()
+        notes.append(f"Модель убрала из черновика: {title}" + (f". {reason}" if reason else ""))
+    return notes
+
+
 def apply_verdict(lots: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:
     """keep оставляет строку. fix меняет только присланные поля. Пустой ответ модели черновик не стирает."""
     base = [dict(lot) for lot in lots]
@@ -162,9 +197,13 @@ def apply_verdict(lots: list[dict[str, Any]], payload: Any) -> list[dict[str, An
         if not isinstance(row, dict):
             continue
         action = str(row.get("action") or "keep").lower()
+        reason = str(row.get("reason") or "").strip()
         if action == "add":
             fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
-            out.append(_blank_lot(fields))
+            added = _blank_lot(fields)
+            added["_verdict"] = "add"
+            added["_reason"] = reason
+            out.append(added)
             continue
         index = row.get("index")
         if isinstance(index, bool) or not isinstance(index, int) or index < 0 or index >= len(base):
@@ -175,14 +214,14 @@ def apply_verdict(lots: list[dict[str, Any]], payload: Any) -> list[dict[str, An
             continue
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
         if action == "fix":
-            out.append(_merge_fields(lot, fields))
+            out.append(_fixed(lot, fields, reason, "fix"))
         elif action == "split":
             parts = fields.get("parts") if isinstance(fields.get("parts"), list) else []
             if not parts:
                 out.append(lot)
             else:
                 for part in parts:
-                    out.append(_merge_fields(lot, part if isinstance(part, dict) else {}))
+                    out.append(_fixed(lot, part if isinstance(part, dict) else {}, reason, "split"))
         else:
             out.append(lot)
     for index, lot in enumerate(base):
@@ -275,6 +314,17 @@ def overlay_model_header(header: dict[str, str], payload: Any) -> dict[str, str]
         value = model_header.get(source)
         if _filled(value):
             out[target] = str(value).strip()
+    # Даты, адреса и условие поставки код уже умеет читать. Модель дописывает только то, что код не нашёл.
+    for source, target in (
+        ("invoice_date", "invoice_date"),
+        ("contract_date", "contract_date"),
+        ("seller_address", "seller_address"),
+        ("buyer_address", "buyer_address"),
+        ("delivery", "delivery_terms"),
+    ):
+        value = model_header.get(source)
+        if _filled(value) and not _filled(out.get(target)):
+            out[target] = str(value).strip()
     return out
 
 
@@ -318,6 +368,13 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
             commercial["amount"] = lot.get("amount")
         if _filled(lot.get("packages")):
             packing["rolls"] = lot.get("packages")
+        # Вид места и паллеты — отдельно от числа мест. Иначе «2150 коробок и 20 паллет» превращается в 2150 рулонов.
+        if _filled(lot.get("package_type")):
+            packing["package_type"] = lot.get("package_type")
+        if _filled(lot.get("pallet_count")):
+            packing["pallets"] = lot.get("pallet_count")
+        if _filled(lot.get("gross_with_pallet")):
+            packing["gross_weight_with_pallet"] = lot.get("gross_with_pallet")
         for source, target in (
             ("width", "width"),
             ("area", "area"),
@@ -330,12 +387,17 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
         customs: dict[str, Any] = {}
         hs = _plain_code(lot.get("hs"))
         hs_alt = _plain_code(lot.get("hs_alt"))
-        if _filled(hs):
-            customs["hs_code"] = hs
-        if _filled(hs_alt):
-            customs["tnved_code"] = hs_alt
-        elif _filled(hs):
+        if lot.get("hs_alt_shipper") and _filled(hs) and _filled(hs_alt):
+            # Таможенный код поставщика стоит в колонке HS, ТН ВЭД остаётся основным.
+            customs["hs_code"] = hs_alt
             customs["tnved_code"] = hs
+        else:
+            if _filled(hs):
+                customs["hs_code"] = hs
+            if _filled(hs_alt):
+                customs["tnved_code"] = hs_alt
+            elif _filled(hs):
+                customs["tnved_code"] = hs
         if desc:
             customs["description"] = desc
         if desc_en:
@@ -351,6 +413,7 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
             errors.append(_flag("rolls", "Места в документах разошлись, одно число не выбрано."))
         if lot.get("unit_conflict"):
             errors.append(_flag("qty", "Подпись единицы разошлась, количество не пересчитано."))
+        errors.extend(_lot_flags(lot))
         rows.append(
             {
                 "article": article,
@@ -361,6 +424,101 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
                 "customs_data": customs,
                 "source_traces": {"sources": ["prepare"]},
                 "validation_errors": errors,
+            }
+        )
+    return rows
+
+
+_ROW_FIELD = {
+    "vendor": ("article", "артикул"),
+    "model": ("article", "модель"),
+    "description": ("description", "описание"),
+    "pieces": ("qty", "количество"),
+    "packages": ("rolls", "места"),
+    "price": ("price", "цена"),
+    "amount": ("amount", "сумма"),
+    "net": ("net_weight", "нетто"),
+    "gross": ("gross_weight", "брутто"),
+    "volume": ("volume", "объём"),
+    "area": ("area", "площадь"),
+    "hs": ("hs_code", "код"),
+    "hs_alt": ("tnved_code", "второй код"),
+    "unit": ("qty", "единица"),
+    "origin": ("country", "страна"),
+    "producer": ("manufacturer", "производитель"),
+}
+
+
+def _show(value: Any) -> str:
+    if isinstance(value, float):
+        text = f"{value:,.4f}".rstrip("0").rstrip(".")
+        return text.replace(",", " ")
+    return str(value)
+
+
+def _lot_flags(lot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Что код и модель сочли спорным в этой строке. Флаг стоит у той клетки, к которой относится."""
+    out: list[dict[str, Any]] = []
+    for key, other in (lot.get("conflicts") or {}).items():
+        field, label = _ROW_FIELD.get(key, ("article", key))
+        out.append(
+            _flag(
+                field,
+                f"Второй документ называет другое число ({label}: {_show(other)}, в строке {_show(lot.get(key))}). Одно число не выбрано.",
+            )
+        )
+    if lot.get("weight_suspect"):
+        out.append(_flag("net_weight", "Нетто выглядит неправдоподобно по весу на штуку. Проверь по документам."))
+    gross, with_pallet = lot.get("gross"), lot.get("gross_with_pallet")
+    if _filled(gross) and _filled(with_pallet) and abs(float(gross) - float(with_pallet)) > 0.05:
+        extra = ""
+        if _filled(lot.get("pallet_count")) and _filled(lot.get("pallet_weight")):
+            extra = f" ({_show(lot.get('pallet_count'))} палл. по {_show(lot.get('pallet_weight'))})"
+        out.append(
+            _flag(
+                "gross_weight",
+                f"Два брутто: без паллет {_show(gross)}, с паллетами {_show(with_pallet)}{extra}. Оба настоящие, одно не выбрано.",
+            )
+        )
+    kind = lot.get("_verdict")
+    reason = str(lot.get("_reason") or "").strip()
+    suffix = f" {reason}" if reason else ""
+    if kind == "add":
+        out.append(_flag("article", "Строки не было в черновике кода, модель добавила её по фото." + suffix))
+    elif kind == "split":
+        out.append(_flag("article", "Модель разбила строку черновика на несколько по фото." + suffix))
+    for key, (old, new) in (lot.get("_changes") or {}).items():
+        field, label = _ROW_FIELD.get(key, ("article", key))
+        out.append(_flag(field, f"Модель заменила {label}: было {_show(old)}, стало {_show(new)}." + suffix))
+    return out
+
+
+def fee_rows(freights: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Сборы (упаковка, консолидация, доставка) входят в деньги поставки и не входят в штуки."""
+    rows: list[dict[str, Any]] = []
+    for fee in freights or []:
+        amount = fee.get("amount")
+        if not _filled(amount):
+            continue
+        description = " ".join(str(fee.get("description") or "Сбор").split())
+        desc_en, desc_ru, desc = _split_description(description)
+        customs: dict[str, Any] = {"description": desc}
+        if desc_en:
+            customs["description_en"] = desc_en
+        if desc_ru:
+            customs["description_ru"] = desc_ru
+        rows.append(
+            {
+                "article": "-",
+                "model": "-",
+                "normalized_article": "",
+                "commercial_data": {"amount": amount},
+                "packing_data": {},
+                "customs_data": customs,
+                "source_traces": {"sources": ["prepare"], "fee": True},
+                "validation_errors": [
+                    _flag("amount", "Это сбор, не товар: сумма входит в деньги поставки, в штуки не входит.")
+                ],
             }
         )
     return rows

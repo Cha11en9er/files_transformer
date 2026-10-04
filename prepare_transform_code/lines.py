@@ -54,6 +54,11 @@ class Line:
     size: str = ""
     order_ref: str = ""
     hs_alt: str = ""
+    # Второй код пришёл из колонки «таможенный код поставщика». В таблице он идёт в HS, основной — в ТН ВЭД.
+    hs_alt_shipper: bool = False
+    # Строка «20 PALLET 250 KG» под товаром: сколько паллет и сколько они весят.
+    pallet_count: float | None = None
+    pallet_weight: float | None = None
     measure_group: dict | None = None
     freight: bool = False
     extra: dict = field(default_factory=dict)
@@ -106,6 +111,33 @@ def is_pallet_only(line):
         return False
     blob = f"{line.qty_text} {line.package_type} {line.pallet}".lower()
     return "pallet" in blob or "паллет" in blob or "палет" in blob
+
+
+_PALLET_COUNT = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:pallets?|паллет\w*|палет\w*)", re.I)
+
+
+def attach_pallet(lines, pallet_line):
+    """Строка-паллеты не товар, но её вес и число паллет принадлежат товару над ней. Не терять."""
+    if not lines or lines[-1].freight:
+        return
+    head = lines[-1]
+    found = _PALLET_COUNT.search(f"{pallet_line.qty_text} {pallet_line.package_type} {pallet_line.pallet}")
+    if found and head.pallet_count is None:
+        head.pallet_count = parse_number(found.group(1))
+    weight = pallet_line.gross if pallet_line.gross is not None else pallet_line.net
+    if weight is not None and head.pallet_weight is None:
+        head.pallet_weight = weight
+
+
+def settle_pallets(lines):
+    """Вес паллет прибавляется к брутто только когда товар в пакинге один: на несколько строк его не делят."""
+    goods = [line for line in lines if not line.freight]
+    if len(goods) != 1:
+        return
+    head = goods[0]
+    if head.pallet_weight is None or head.gross is None or head.gross_with_pallet is not None:
+        return
+    head.gross_with_pallet = round(head.gross + head.pallet_weight, 4)
 
 
 def pull_article(line):

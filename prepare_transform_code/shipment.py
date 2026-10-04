@@ -147,6 +147,18 @@ def analyze(folder):
     ship_to = _ship_to_address(plain)
     if ship_to and not buyer_address:
         buyer_address = ship_to
+    if not seller_address:
+        seller_address = _letterhead_address(plain, parties.get("seller") or "")
+    seller_address = _clean_address(_complete_address(seller_address, plain))
+    buyer_address = _clean_address(_complete_address(buyer_address, plain))
+    buyer_address = _drop_foreign_country(buyer_address, seller_address)
+    for lot in lots:
+        if _weight_suspect(lot, freights):
+            lot["weight_suspect"] = True
+    if any(lot.get("weight_suspect") for lot in lots):
+        flags.append("weight_suspect")
+    if any(lot.get("conflicts") for lot in lots):
+        flags.append("values_conflict")
     for lot in lots:
         if origin and not lot.get("origin"):
             lot["origin"] = origin
@@ -178,7 +190,7 @@ def analyze(folder):
         "order_nos": _labeled_numbers(plain, _ORDER_LABEL),
         "contract": _contract(plain),
         "contract_date": _contract_date(plain),
-        "invoice_date": _labeled_date(plain),
+        "invoice_date": _labeled_date(plain) or _spaced_date(plain),
         "delivery": delivery,
         "container": _container(plain),
         "director": _director(plain),
@@ -361,6 +373,109 @@ def _labeled_date(text):
     if match:
         return match.group(1)
     return _title_date(text)
+
+
+def _spaced_date(text):
+    """Подпись Date на своей строке, дата строкой ниже или после двоеточия. Год-месяц-день приводится к дд.мм.гггг."""
+    lines = [" ".join(line.split()) for line in str(text or "").splitlines() if line.strip()]
+    pattern = re.compile(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})|(\d{1,2})[./](\d{1,2})[./](\d{4})")
+    for index, line in enumerate(lines):
+        match = re.match(r"(?i)^(?:invoice\s+)?date\s*:?\s*(.*)$", line)
+        if not match:
+            continue
+        tail = match.group(1)
+        if not tail and index + 1 < len(lines):
+            tail = lines[index + 1]
+        found = pattern.match(tail or "")
+        if not found:
+            continue
+        if found.group(1):
+            year, month, day = found.group(1), found.group(2), found.group(3)
+        else:
+            day, month, year = found.group(4), found.group(5), found.group(6)
+        if not (1 <= int(month) <= 12 and 1 <= int(day) <= 31):
+            continue
+        return f"{int(day):02d}.{int(month):02d}.{year}"
+    return ""
+
+
+def _letterhead_address(text, seller):
+    """Адрес на строке сразу под именем продавца в шапке бланка, если подписи Address нет."""
+    if not seller:
+        return ""
+    key = " ".join(seller.split()).casefold().split(",")[0].strip()
+    lines = [" ".join(line.split()) for line in str(text or "").splitlines() if line.strip()]
+    for index, line in enumerate(lines[:-1]):
+        if line.casefold().split(",")[0].strip() != key:
+            continue
+        nxt = lines[index + 1]
+        if re.match(r"(?i)^(phone|tel|fax|e-?mail|web|address|exporter|seller)\b", nxt):
+            continue
+        if re.search(r"\d", nxt) and "," in nxt:
+            chunks = [nxt]
+            for more in lines[index + 2 : index + 4]:
+                if not chunks[-1].endswith(",") or re.match(r"(?i)^(phone|tel|fax|e-?mail|web)\b", more):
+                    break
+                chunks.append(more)
+            return " ".join(chunks)
+    return ""
+
+
+_TRANSPORT_REF = re.compile(
+    r"(?i)\b(?:B/?L|bill\s+of\s+lading|container|seal|vessel)\s*(?:No\.?|number|#)?\s*:?\s*(?=[A-Z0-9\-]*\d)[A-Z0-9][A-Z0-9\-]*"
+)
+_CONTACT_TAIL = re.compile(r"(?i)\s*\b(?:OGRN|ОГРН|E-?mail|Tel\.?|Phone|Fax)\b.*$")
+
+
+def _clean_address(value):
+    """Номер коносамента, контейнер и контакты в почтовый адрес не входят."""
+    lines = []
+    for line in str(value or "").splitlines():
+        line = _TRANSPORT_REF.sub("", line)
+        line = _CONTACT_TAIL.sub("", line)
+        line = " ".join(line.split()).strip(" ,;")
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _complete_address(address, text):
+    """Колонки склеились и адрес оборван — полная запись того же адреса ищется в строке, где колонок нет."""
+    flat = " ".join(str(address or "").split())
+    if len(flat) < 20:
+        return address
+    head = flat[:25]
+    best = address
+    pattern = re.compile(
+        r"(?i)address\s*:\s*([^:]+?)(?=\s+(?:OGRN|ОГРН|E-?mail|Tel\.?|Bank|INN|KPP|BIC|SWIFT)\b|$)"
+    )
+    for line in str(text or "").splitlines():
+        for match in pattern.finditer(line):
+            candidate = " ".join(match.group(1).split()).strip(" ,;")
+            if candidate.startswith(head) and len(candidate) > len(" ".join(str(best).split())):
+                best = candidate
+    return best
+
+
+def _drop_foreign_country(address, other):
+    """Название страны соседней колонки (адрес продавца кончается PAKISTAN) посреди адреса покупателя не стоит."""
+    words = re.findall(r"[A-Za-z]{4,}", str(other or ""))
+    if not address or not words or not words[-1].isupper():
+        return address
+    # Своя страна идёт после запятой; слово без запятой перед ним — текст чужой колонки.
+    return re.sub(rf"(?<=[A-Za-z.])\s+{words[-1]}\b", "", address).strip(" ,;")
+
+
+def _weight_suspect(lot, freights=()):
+    """Вес не похож на вес строки: нетто больше брутто, либо то же число стоит на сборах без товара."""
+    net, gross = lot.get("net"), lot.get("gross")
+    if net is not None and gross is not None and net > gross + 0.05:
+        return True
+    if net is None or lot.get("freight"):
+        return False
+    return any(
+        fee.net is not None and abs(fee.net - net) < 0.005 for fee in freights
+    )
 
 
 def _title_date(text):

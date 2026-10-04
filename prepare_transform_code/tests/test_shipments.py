@@ -387,6 +387,35 @@ class Shipment7Test(unittest.TestCase):
         self.assertTrue(all(lot["vendor"] != "Purchase contract" for lot in goods))
 
 
+class PalletsAndAddressesTest(unittest.TestCase):
+    def test_pallet_row_is_not_places_and_addresses_are_clean(self):
+        result = load("Шаблон 19")
+        goods = [lot for lot in result["lots"] if not lot["freight"]]
+        self.assertEqual(len(goods), 1)
+        lot = goods[0]
+        self.assertEqual(lot["packages"], 2150)
+        self.assertEqual(lot["pallet_count"], 20)
+        self.assertEqual(lot["pallet_weight"], 250)
+        self.assertEqual(lot["gross"], 21750)
+        self.assertEqual(lot["gross_with_pallet"], 22000)
+        self.assertIn("Maxim Gorky", result["buyer_address"])
+        self.assertIn("room 26", result["buyer_address"])
+        self.assertNotIn("PAKISTAN", result["buyer_address"])
+        self.assertIn("PAKISTAN", result["seller_address"])
+        self.assertEqual(result["currency"], "USD")
+
+    def test_shipper_code_second_date_and_fees(self):
+        result = load("Шаблон 13")
+        goods = [lot for lot in result["lots"] if not lot["freight"]]
+        self.assertTrue(goods[0]["hs_alt_shipper"])
+        self.assertEqual(result["invoice_date"], "06.02.2018")
+        self.assertNotIn("Container", result["buyer_address"])
+        self.assertNotIn("BL No", result["buyer_address"])
+        self.assertTrue(result["seller_address"].endswith("CHINA"))
+        self.assertEqual(len(result["freights"]), 2)
+        self.assertIn("weight_suspect", result["flags"])
+
+
 class PhotoTileTest(unittest.TestCase):
     def test_left_to_right_then_down_skip_empty_corner(self):
         from prepare_transform_code.photos import _planned_pages
