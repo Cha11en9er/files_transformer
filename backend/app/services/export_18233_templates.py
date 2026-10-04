@@ -1041,7 +1041,10 @@ def fill_packing_template(
     shutil.copy2(template, output)
     wb = load_workbook(output)
     ws = wb.active
-    products = _ordered_products(items)
+    # Сбор (упаковка, консолидация) — деньги инвойса и спецификации. В пакинге у него нет ни мест, ни веса.
+    products = [
+        item for item in _ordered_products(items) if not (item.get("source_traces") or {}).get("fee")
+    ]
     fabric = is_fabric_layout(_layout_kit(kit, products, header), products)
     rows = packing_table_rows(products, fabric)
     header_row = _find_header_row(ws, "NO.", "NO", "DESIGN") or 9

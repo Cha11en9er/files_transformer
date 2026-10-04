@@ -12,6 +12,7 @@ from app.services.prepare_site import (
     apply_verdict,
     fee_rows,
     filled_base_columns,
+    header_changes,
     header_from_draft,
     is_reference_name,
     lots_to_rows,
@@ -173,10 +174,19 @@ def test_conflicting_number_of_another_document_is_flagged_not_chosen() -> None:
     assert any("другое число" in flag["message"] for flag in row["validation_errors"])
 
 
-def test_model_header_fills_only_empty_fields() -> None:
-    header = {"invoice_date": "06.02.2018", "contract_date": "", "buyer_address": ""}
-    payload = {"header": {"invoice_date": "01.01.2000", "contract_date": "19.04.2017", "buyer_address": "Moscow"}}
+def test_model_header_replaces_draft_and_change_is_reported() -> None:
+    header = {"invoice_date": "25.02.2014", "contract_date": "", "buyer_address": "Moscow"}
+    payload = {"header": {"invoice_date": "31.03.2014", "contract_date": "25.02.2014", "buyer_address": "moscow"}}
     out = overlay_model_header(header, payload)
-    assert out["invoice_date"] == "06.02.2018"
-    assert out["contract_date"] == "19.04.2017"
-    assert out["buyer_address"] == "Moscow"
+    assert out["invoice_date"] == "31.03.2014"
+    assert out["contract_date"] == "25.02.2014"
+    notes = header_changes(header, out)
+    assert len(notes) == 1 and "дата инвойса" in notes[0]
+
+
+def test_weight_sold_goods_get_quantity_from_net() -> None:
+    lot = _lot(vendor="A1", unit="kg", price=0.85, amount=17850.0, net=21000.0, packages=2150)
+    row = lots_to_rows([lot], [])[0]
+    assert row["commercial_data"]["qty"] == 21000.0
+    other = _lot(vendor="A2", unit="kg", price=0.85, amount=999.0, net=21000.0)
+    assert "qty" not in lots_to_rows([other], [])[0]["commercial_data"]

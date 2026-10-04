@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import queue
 import re
 import shutil
@@ -47,6 +48,7 @@ from app.services.prepare_site import (
     fee_rows,
     fill_from_catalog,
     goods_lots,
+    header_changes,
     header_from_draft,
     load_catalogs,
     lots_to_rows,
@@ -613,7 +615,9 @@ def _iter_create_events(
         fill_from_catalog(lots, catalog)
         header_fields = header_from_draft(draft, lots)
         if review_dict.get("status") == "ok":
+            draft_header = dict(header_fields)
             header_fields = overlay_model_header(header_fields, review_dict.get("payload"))
+            verdict_dropped.extend(header_changes(draft_header, header_fields))
         reconciled = lots_to_rows(lots, list(draft.get("flags") or []))
         found = len(reconciled)
         # Сборы идут отдельными строками без количества: деньги поставки их содержат, штуки нет.
@@ -665,7 +669,7 @@ def _iter_create_events(
                 )
             )
             yield {"event": "file", "filename": "сверка", "status": "review", "message": message}
-        for note in verdict_dropped:
+        for note in list(draft.get("notes") or []) + verdict_dropped:
             file_outs.append(
                 _make_file_out(
                     filename="модель",
@@ -814,6 +818,11 @@ def recognize_uploads(
 ) -> Response:
     """Parse a kit without the UI. JSON: file messages, header, table. export=1 returns the archive."""
     from app.services.export import export_18233, export_beijing
+
+    # Старый контур (app/parsing + app/transform). Боевой путь — POST /shipments с prepare_transform_code.
+    # Включается только явно, чтобы два разбора не жили в боевом пути одновременно.
+    if os.getenv("ENABLE_LEGACY_RECOGNIZE", "").strip() not in {"1", "true", "yes"}:
+        raise HTTPException(status_code=410, detail="Старый разбор отключён. Используй загрузку поставки.")
 
     with tempfile.TemporaryDirectory(prefix="recognize_") as tmp:
         tmp_dir = Path(tmp)

@@ -1359,6 +1359,14 @@ def review_with_opencode(
             }
             if variant:
                 message["variant"] = variant
+            if user_prompt is not None and os.getenv("OPENCODE_JSON_SCHEMA", "").strip() in {"1", "true", "yes"}:
+                # Структурный ответ по схеме вердикта. Включается явно: нужен OpenCode, который знает поле format.
+                try:
+                    from prepare_transform_code.verdict import VERDICT_SCHEMA
+
+                    message["format"] = {"type": "json_schema", "schema": VERDICT_SCHEMA, "retryCount": 1}
+                except Exception:
+                    pass
             reply = client.post(
                 f"/session/{encoded_id}/message",
                 json=message,
