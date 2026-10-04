@@ -111,7 +111,8 @@ def _readable(text):
     marks = (
         "INVOICE", "PACKING", "DESCRIPTION", "QTY", "СПЕЦИФИКАЦИЯ", "ИНВОЙС",
         "АРТИКУЛ", "ОПИСАНИЕ", "КОЛ-ВО", "RECHNUNG", "FACTURE", "FACTURA",
-        "CONTENTS", "MENGE", "BEZEICHNUNG",
+        "CONTENTS", "MENGE", "BEZEICHNUNG", "FATURA", "AMBALAJ", "LISTESI",
+        "NET METRE", "BRUT METRE", "BRÜT",
     )
     return any(mark in upper for mark in marks)
 

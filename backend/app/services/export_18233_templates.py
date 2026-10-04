@@ -40,7 +40,9 @@ NUM_FMT_3 = "0.000"
 
 def _price_headers(ccy: str) -> tuple[str, str]:
     label = export_currency_label(ccy, hangzhou_style=True)
-    return f"UNIT PRICE({label})", f"AMOUNT({label})"
+    if label:
+        return f"UNIT PRICE({label})", f"AMOUNT({label})"
+    return "UNIT PRICE", "AMOUNT"
 
 
 def fabric_invoice_headers(ccy: str = "CNY") -> list[str]:
@@ -616,7 +618,7 @@ def preview_headers(
     header: dict[str, Any] | None = None,
 ) -> dict[str, list[str]]:
     fabric = is_fabric_layout(layout, items)
-    ccy = currency_from_sources(items, header) or "CNY"
+    ccy = currency_from_sources(items, header) or ""
     return {
         "invoice": fabric_invoice_headers(ccy) if fabric else element_invoice_headers(ccy),
         "packing": FABRIC_PACKING_HEADERS if fabric else ELEMENT_PACKING_HEADERS,
@@ -822,8 +824,9 @@ def _apply_letterhead(ws, header: dict[str, Any] | None, kit: str, header_row: i
     payment = _header_value(header, "payment_terms")
     delivery_date = _header_value(header, "delivery_date")
     manufacturer = _header_value(header, "manufacturer")
-    ccy_label = export_currency_label(_header_value(header, "currency") or "CNY", hangzhou_style=True)
-    ccy_word = export_currency_word_ru(_header_value(header, "currency") or "CNY")
+    ccy = currency_from_sources(None, header) or _header_value(header, "currency")
+    ccy_label = export_currency_label(ccy, hangzhou_style=True)
+    ccy_word = export_currency_word_ru(ccy)
     for r in range(1, max(header_row, 22) + 1):
         for c in range(1, 16):
             val = ws.cell(r, c).value
@@ -871,12 +874,12 @@ def _apply_letterhead(ws, header: dict[str, Any] | None, kit: str, header_row: i
             if manufacturer and text.lower().startswith("manufacturer"):
                 ws.cell(r, c).value = f"Manufacturer: {manufacturer}"
             # Rewrite hardcoded etalon currency labels to the shipment currency.
-            if _PRICE_CCY_RE.search(stripped):
+            if ccy_label and _PRICE_CCY_RE.search(stripped):
                 ws.cell(r, c).value = _PRICE_CCY_RE.sub(
                     lambda m: f"{m.group(1).upper()}({ccy_label})",
                     stripped,
                 )
-            elif "Цена" in stripped and _CCY_WORD_RE.search(stripped):
+            elif ccy_word and "Цена" in stripped and _CCY_WORD_RE.search(stripped):
                 ws.cell(r, c).value = _CCY_WORD_RE.sub(ccy_word, stripped)
 
 

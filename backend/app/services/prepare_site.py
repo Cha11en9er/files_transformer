@@ -816,12 +816,15 @@ def review_files(
     for doc in documents:
         name = str(doc.get("name") or "")
         own = (tables or {}).get(name)
+        rows = own["rows"] if own is not None else table
+        if not _review_has_rows(rows):
+            continue
         entry = {
             "filename": name,
-            "table": own["rows"] if own is not None else table,
+            "table": rows,
             "note": (own or {}).get("note") or "",
-            "text": (own or {}).get("text") or "",
-            "total_rows": (own or {}).get("total_rows"),
+            "text": "",
+            "total_rows": (own or {}).get("total_rows") or len(rows),
             "pages": [],
             "sheets": [],
             "meaning": _ROLE_TITLE.get(str(doc.get("role") or ""), doc.get("role") or ""),
@@ -837,6 +840,32 @@ def review_files(
             entry["kind"] = "excel"
             excel.append(entry)
     return {"excel": excel, "pdfs": pdfs}
+
+
+def _review_has_rows(rows: list[dict[str, Any]] | None) -> bool:
+    for row in rows or []:
+        if not row:
+            continue
+        if any(
+            row.get(key) not in (None, "", [])
+            for key in (
+                "article",
+                "description",
+                "hs_code",
+                "customs_code",
+                "qty",
+                "amount",
+                "net_weight",
+                "gross_weight",
+                "price",
+                "rolls",
+                "meters",
+            )
+        ):
+            return True
+        if row.get("raw"):
+            return True
+    return False
 
 
 _ROLE_TITLE = {

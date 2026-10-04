@@ -240,6 +240,9 @@ def _lines(rows):
             line.freight = True
         if line.pieces is None and line.price and line.amount:
             pass
+        # Колонка мест вдруг держит заводской код: ниже уже другая таблица (рулоны), не те же колонки.
+        if lines and _places_became_code(row, mapping):
+            break
         useful = any(
             getattr(line, name) is not None
             for name in ("pieces", "packages", "price", "amount", "gross", "net", "gross_with_pallet")
@@ -259,6 +262,16 @@ def _lines(rows):
     folded = fold_parts(lines)
     settle_pallets(folded)
     return folded
+
+
+def _places_became_code(row, mapping):
+    """В колонке мест стоит код вроде YS950700VLT0690110 — шапка выше уже не про эту таблицу."""
+    col = mapping.get("packages")
+    if not isinstance(col, int) or col >= len(row):
+        return False
+    compact = re.sub(r"\s+", "", str(row[col] or "").strip())
+    # 24 и 24 rolls начинаются с цифры. Заводской код начинается с буквы, внутри цифры.
+    return bool(re.match(r"[A-Za-z]", compact) and re.search(r"\d", compact) and len(compact) >= 8)
 
 
 def _package_part(line, previous):

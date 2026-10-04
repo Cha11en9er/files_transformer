@@ -155,6 +155,7 @@ class ShipmentCreateResponse(BaseModel):
     header_fields: dict[str, Any] = Field(default_factory=dict)
     header_changes: list[HeaderChangeOut] = Field(default_factory=list)
     header_notes: list[str] = Field(default_factory=list)
+    verdict_run: dict[str, Any] = Field(default_factory=dict)
     files: list[FileOut]
     items: list[ItemOut] = Field(default_factory=list)
     item_count: int
@@ -173,6 +174,7 @@ class WorkspaceOut(BaseModel):
     items: list[ItemOut]
     created_at: datetime | None = None
     model_review: ModelReviewOut | None = None
+    verdict_run: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExportRequest(BaseModel):

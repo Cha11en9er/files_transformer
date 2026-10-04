@@ -20,7 +20,7 @@ COLUMNS = (
     ("finish", ("тип покрытия", "finish", "colour", "color", "farbe", "couleur", "colore", "renk", "kolor", "цвет")),
     ("model", ("model", "наименование модели", "модели", "style", "модель", "modell", "modele", "modelo")),
     ("size", ("размер", "pointure", "größe", "grosse", "talla", "taglia", "tamanho", "beden", "rozmiar", "storlek", "size")),
-    ("order_ref", ("order number", "номер заказа", "bestellnummer", "n° de commande", "numero de pedido", "cust po", "customer po", "po no", "po number", "sipariş", "siparis")),
+    ("order_ref", ("order number", "номер заказа", "bestellnummer", "n° de commande", "numero de pedido", "cust po", "customer po", "vendor po", "po no", "po number", "sipariş", "siparis")),
     ("hs", ("customs code", "customs tariff", "custom tariff", "shipper's custom", "product code", "h.s. code", "h.s.code", "hscode", "hs code", "zolltarif", "harmonized", "таможенный код", "код тн", "код товара", "тн вэд", "тнвэд", "海关")),
     ("origin", ("country of orig", "страна происхождения", "ursprung", "pays d'origine", "pais de origen", "paese di origine", "pais de origem", "kraj pochodzenia", "menşe", "mense", "原产")),
     ("brand", ("trademark", "brand", "marque", "marca", "товарный знак")),
@@ -40,7 +40,7 @@ _PARTY = (
 )
 
 _ROLE_MARKS = (
-    ("packing", ("PACKING AND WEIGHT", "PACKING LIST", "УПАКОВОЧН", "PACKLISTE", "LISTE DE COLISAGE", "LISTA DE EMBALAJE", "LISTA DI IMBALLAGGIO", "AMBALAJ LIST", "PAKLIJST", "PACKLISTA", "装箱单")),
+    ("packing", ("PACKING AND WEIGHT", "PACKING LIST", "УПАКОВОЧН", "PACKLISTE", "LISTE DE COLISAGE", "LISTA DE EMBALAJE", "LISTA DI IMBALLAGGIO", "AMBALAJ LIST", "SEÇME LIST", "SECME LIST", "PAKLIJST", "PACKLISTA", "装箱单")),
     ("proforma", ("PRO FORMA", "PROFORMA")),
     ("invoice", ("COMMERCIAL INVOICE", "FAKTURA", "INVOICE", "СЧЕТ-ФАКТУРА", "СЧЁТ-ФАКТУРА", "ИНВОЙС", "RECHNUNG", "FACTURE", "FACTURA", "FATURA", "FATTURA", "发票")),
     ("specification", ("СПЕЦИФИКАЦИЯ", "СПЕЦИФИКАЦ", "SPECIFICATION", "SPEZIFIKATION", "ESPECIFICACION", "SPECYFIKACJA")),
@@ -134,6 +134,9 @@ def column_of(header):
             return "net_primary"
         return name
     if text == "item":
+        return "vendor"
+    # Pattern в пакинге тканей — имя варианта (Zoom 695), не узор как покрытие.
+    if text == "pattern":
         return "vendor"
     if text == "design":
         return "model"

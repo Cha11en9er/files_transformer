@@ -68,6 +68,16 @@ from app.services.export_18233_templates import export_18233_from_templates
 from app.services.export_style import resolve_shipment_title, safe_export_stem
 from app.services.materials_18233 import kit_sources, materials_available
 from app.services.profile_18233 import parse_bundle, reconcile_18233
+
+
+def _model_chip(spec: str) -> str:
+    """На сайте без имён моделей: обычная или улучшенная."""
+    low = (spec or "").lower()
+    if "grok" in low:
+        return "улучшенная модель"
+    if "qwen" in low:
+        return "обычная модель"
+    return "обычная модель" if spec else "модель"
 from app.services.reconcile import items_to_dicts, reconcile_documents
 from app.transform.service import canonical_to_rows, transform_paths
 
@@ -542,19 +552,20 @@ def _iter_create_events(
         }
         first_model = model_spec(1)
         second_model = model_spec(2)
-        model_label = first_model or "модель"
+        first_chip = _model_chip(first_model)
+        second_chip = _model_chip(second_model) if second_model else ""
         yield {
             "event": "progress",
             "current": total,
             "total": total,
-            "filename": model_label,
+            "filename": first_model or "модель",
             "stage": "model",
-            "message": "Вердикт модели: сверка черновика с фото",
+            "message": f"Обычная модель: сверка черновика с фото",
         }
 
         def _ask(spec: str, stage: str = "model") -> dict[str, Any]:
             box: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
-            label = "Вторая модель" if stage == "model2" else "Вердикт модели"
+            label = "Улучшенная модель" if stage == "model2" else "Обычная модель"
 
             def _call() -> None:
                 try:
@@ -594,19 +605,21 @@ def _iter_create_events(
 
         review_dict: dict[str, Any] = {"status": "skipped", "model": first_model, "error": None}
         verdict_dropped: list[str] = []
+        second_used = False
         if first_model:
             review_dict = yield from _ask(first_model, "model")
             if review_dict.get("status") == "ok":
                 lots = apply_verdict(goods_lots(draft), review_dict.get("payload"))
                 verdict_dropped = verdict_notes(list(draft.get("lots") or []), review_dict.get("payload"))
         if second_model and needs_second_model(lots):
+            second_used = True
             yield {
                 "event": "progress",
                 "current": total,
                 "total": total,
                 "filename": second_model,
                 "stage": "model2",
-                "message": "Вторая модель: мало столбцов или много сомнений",
+                "message": "Улучшенная модель: мало столбцов или много сомнений",
             }
             second = yield from _ask(second_model, "model2")
             if second.get("status") == "ok":
@@ -710,6 +723,13 @@ def _iter_create_events(
             list(draft.get("documents") or []), reconciled, draft.get("document_tables")
         )
         review_dict["items"] = []
+        if second_used:
+            review_dict["meaning"] = (
+                "Обычная модель не собрала таблицу уверенно, смотрела улучшенная."
+            )
+        elif first_model:
+            review_dict["meaning"] = "Вердикт обычной модели."
+        review_dict["model_label"] = second_chip if second_used else first_chip
         model_review = ModelReviewOut.model_validate(review_dict)
 
         warning_count = sum(
@@ -739,6 +759,11 @@ def _iter_create_events(
             model_review=model_review,
             header_changes=header_changed,
             header_notes=header_notes,
+            verdict_run={
+                "first": first_chip,
+                "second": second_chip if second_used else "",
+                "used_second": second_used,
+            },
         )
         yield {"event": "done", **payload.model_dump(mode="json")}
 

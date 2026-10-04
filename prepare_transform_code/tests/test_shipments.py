@@ -118,6 +118,12 @@ class LanguageTest(unittest.TestCase):
         self.assertEqual(column_of("Цвет /Тип покрытия"), "finish")
         self.assertEqual(column_of("Количество мест"), "packages")
         self.assertEqual(column_of("Количество упаковок"), "packages")
+        self.assertEqual(column_of("Pattern"), "vendor")
+        self.assertEqual(column_of("Total Roll"), "packages")
+        self.assertEqual(column_of("Total Meter"), "qty")
+        self.assertEqual(column_of("Vendor  PO"), "order_ref")
+        self.assertEqual(column_of("N.W.KGS"), "net")
+        self.assertEqual(column_of("G.W.KGS"), "gross")
         self.assertEqual(column_of("Number of packages"), "packages")
         self.assertEqual(column_of("Name of product"), "description")
         self.assertEqual(column_of("Количество, шт."), "qty")
@@ -1916,6 +1922,68 @@ class FoldRollsTest(unittest.TestCase):
         self.assertEqual(liverpool["packages"], 11)
         self.assertAlmostEqual(liverpool["pieces"], 314.3, places=2)
         self.assertFalse(any(lot["packages_conflict"] for lot in lots))
+
+
+class PatternPackingSheetTest(unittest.TestCase):
+    def test_design_rows_stop_before_mill_codes(self):
+        import tempfile
+
+        from openpyxl import Workbook
+
+        from prepare_transform_code.exceldoc import read_excel
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "DPL"
+        ws.append(["PACKING LIST"])
+        ws.append(["Pattern", "Total Roll", "Total Meter", "CBM", "N.W.KGS", "G.W.KGS", "Vendor  PO"])
+        ws.append(["Zoom 695", 24, 1125.5, 2.4, 621.1, 630.7, 9528])
+        ws.append(["California 994", 59, 3058.2, 3.5, 1129.1, 1182.2, 9499])
+        for index in range(20):
+            ws.append(["Velutto 69", f"YS950700VLT06901{index:02d}", 70974, 55, "2026-08-12", 1.42, 20.3])
+        folder = Path(tempfile.mkdtemp())
+        path = folder / "pack.xlsx"
+        wb.save(path)
+        try:
+            docs = read_excel(path)
+            lines = [line for doc in docs for line in doc["lines"]]
+            self.assertEqual(len(lines), 2)
+            self.assertEqual(lines[0].vendor, "Zoom 695")
+            self.assertEqual(lines[0].packages, 24)
+            self.assertAlmostEqual(lines[0].pieces, 1125.5)
+            self.assertAlmostEqual(lines[0].net, 621.1)
+            self.assertEqual(lines[1].vendor, "California 994")
+            self.assertEqual(lines[1].packages, 59)
+        finally:
+            path.unlink()
+            folder.rmdir()
+
+
+class TurkishPackingReadableTest(unittest.TestCase):
+    def test_selection_list_is_not_a_scan(self):
+        from prepare_transform_code.pdfdoc import _readable
+
+        self.assertTrue(_readable("Tosunoğlu Seçme Listesi (Kalem, Etkinlik Birimi) Net Metre Brüt Kilogram"))
+        folder = next(
+            (
+                path
+                for path in (Path(__file__).resolve().parents[2] / "documents" / "я_тестирую").iterdir()
+                if path.name.startswith("23_")
+            ),
+            None,
+        )
+        if folder is None:
+            return
+        packing = next((path for path in (folder / "вход").glob("*.pdf") if "пакинг" in path.name.lower()), None)
+        if packing is None:
+            packing = next((path for path in folder.rglob("*.pdf") if "пакинг" in path.name.lower()), None)
+        if packing is None:
+            return
+        from prepare_transform_code.pdfdoc import read_pdf
+
+        doc = read_pdf(packing)
+        self.assertTrue(doc["readable"])
+        self.assertEqual(doc["role"], "packing")
 
 
 class DocumentTablesTest(unittest.TestCase):
