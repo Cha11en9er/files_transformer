@@ -519,7 +519,7 @@ def _iter_create_events(
             return payload
 
         goods, references = split_uploads(saved, catalog_names)
-        draft = yield from _while_busy("Чтение файлов", lambda: read_goods(goods))
+        draft = yield from _while_busy("Чтение файлов кодом", lambda: read_goods(goods))
         catalog = load_catalogs(references)
         prompt = verdict_prompt(draft)
         lots = goods_lots(draft)
@@ -549,11 +549,12 @@ def _iter_create_events(
             "total": total,
             "filename": model_label,
             "stage": "model",
-            "message": "Модель проверяет черновик",
+            "message": "Вердикт модели: сверка черновика с фото",
         }
 
-        def _ask(spec: str) -> dict[str, Any]:
+        def _ask(spec: str, stage: str = "model") -> dict[str, Any]:
             box: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+            label = "Вторая модель" if stage == "model2" else "Вердикт модели"
 
             def _call() -> None:
                 try:
@@ -583,8 +584,8 @@ def _iter_create_events(
                         "current": total,
                         "total": total,
                         "filename": spec or "модель",
-                        "stage": "model",
-                        "message": f"Модель всё ещё отвечает ({waited} с)",
+                        "stage": stage,
+                        "message": f"{label} всё ещё отвечает ({waited} с)",
                     }
             status, payload = box.get()
             if status == "err":
@@ -594,7 +595,7 @@ def _iter_create_events(
         review_dict: dict[str, Any] = {"status": "skipped", "model": first_model, "error": None}
         verdict_dropped: list[str] = []
         if first_model:
-            review_dict = yield from _ask(first_model)
+            review_dict = yield from _ask(first_model, "model")
             if review_dict.get("status") == "ok":
                 lots = apply_verdict(goods_lots(draft), review_dict.get("payload"))
                 verdict_dropped = verdict_notes(list(draft.get("lots") or []), review_dict.get("payload"))
@@ -604,34 +605,42 @@ def _iter_create_events(
                 "current": total,
                 "total": total,
                 "filename": second_model,
-                "stage": "model",
-                "message": "В таблице заполнено мало столбцов, смотрит вторая модель",
+                "stage": "model2",
+                "message": "Вторая модель: мало столбцов или много сомнений",
             }
-            second = yield from _ask(second_model)
+            second = yield from _ask(second_model, "model2")
             if second.get("status") == "ok":
                 lots = apply_verdict(goods_lots(draft), second.get("payload"))
                 verdict_dropped = verdict_notes(list(draft.get("lots") or []), second.get("payload"))
                 review_dict = second
         shutil.rmtree(vision_dir, ignore_errors=True)
-        fill_from_catalog(lots, catalog)
-        # Рулоны одного дизайна идут одной строкой. Каждый рулон остаётся виден на вкладке файла.
-        lots, fold_notes = fold_rolls(lots, draft.get("spec_rows"))
-        flags_now = [
-            flag
-            for flag in (draft.get("flags") or [])
-            if flag != "packages_conflict" or any(lot.get("packages_conflict") for lot in lots)
-        ]
-        header_fields = header_from_draft(draft, lots)
-        header_changed: list[dict[str, str]] = []
-        if review_dict.get("status") == "ok":
-            draft_header = dict(header_fields)
-            header_fields = overlay_model_header(header_fields, review_dict.get("payload"))
-            header_changed = header_diff(draft_header, header_fields)
-        header_notes = list(draft.get("notes") or []) + verdict_dropped + fold_notes
-        reconciled = lots_to_rows(lots, flags_now)
+
+        def _assemble() -> tuple[list[dict[str, Any]], list[str], dict[str, Any], list[dict[str, str]], list[str], list[dict[str, Any]]]:
+            filled = list(lots)
+            fill_from_catalog(filled, catalog)
+            # Рулоны одного дизайна идут одной строкой. Каждый рулон остаётся виден на вкладке файла.
+            filled, fold_notes = fold_rolls(filled, draft.get("spec_rows"))
+            flags_now = [
+                flag
+                for flag in (draft.get("flags") or [])
+                if flag != "packages_conflict" or any(lot.get("packages_conflict") for lot in filled)
+            ]
+            header_fields = header_from_draft(draft, filled)
+            header_changed: list[dict[str, str]] = []
+            if review_dict.get("status") == "ok":
+                draft_header = dict(header_fields)
+                header_fields = overlay_model_header(header_fields, review_dict.get("payload"))
+                header_changed = header_diff(draft_header, header_fields)
+            header_notes = list(draft.get("notes") or []) + verdict_dropped + fold_notes
+            reconciled = lots_to_rows(filled, flags_now)
+            # Сборы идут отдельными строками без количества: деньги поставки их содержат, штуки нет.
+            reconciled = reconciled + fee_rows(draft.get("freights"))
+            return filled, flags_now, header_fields, header_changed, header_notes, reconciled
+
+        lots, flags_now, header_fields, header_changed, header_notes, reconciled = yield from _while_busy(
+            "Сборка таблицы", _assemble
+        )
         found = len(reconciled)
-        # Сборы идут отдельными строками без количества: деньги поставки их содержат, штуки нет.
-        reconciled = reconciled + fee_rows(draft.get("freights"))
         role_type = {
             "invoice": DocType.INVOICE,
             "packing": DocType.PACKING_LIST,

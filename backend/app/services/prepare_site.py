@@ -23,9 +23,29 @@ _ROOT = Path(__file__).resolve().parents[3]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from prepare_transform_code.numbers import parse_number
 from prepare_transform_code.rolls import fold_rolls  # noqa: F401  (маршрут берёт её отсюда)
 from prepare_transform_code.shipment import analyze
 from prepare_transform_code.verdict import build_prompt
+
+# Поля, которые модель часто присылает строкой с запятой («6,17»). Без разбора float() падает на сборке.
+_NUMERIC_LOT = {
+    "pieces",
+    "packages",
+    "price",
+    "amount",
+    "net",
+    "net_primary",
+    "gross",
+    "gross_with_pallet",
+    "unit_net",
+    "volume",
+    "area",
+    "width",
+    "gsm",
+    "pallet_count",
+    "pallet_weight",
+}
 
 THIN_COLUMN_LIMIT = 4
 _EXCEL = {".xlsx", ".xls", ".xlsm"}
@@ -176,6 +196,19 @@ def needs_second_model(lots: list[dict[str, Any]]) -> bool:
     return doubt_share(lots) >= DOUBT_SHARE
 
 
+def _as_number(value: Any) -> Any:
+    """Число из ответа модели. «6,17» и «1.234,56» становятся float, неломаный текст остаётся текстом."""
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return value
+    parsed = parse_number(text)
+    return parsed if parsed is not None else value
+
+
 def _merge_fields(lot: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any]:
     merged = dict(lot)
     for key, value in (fields or {}).items():
@@ -183,6 +216,8 @@ def _merge_fields(lot: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any]
             continue
         if not _filled(value):
             continue
+        if key in _NUMERIC_LOT:
+            value = _as_number(value)
         merged[key] = value
     return merged
 
@@ -238,14 +273,23 @@ def _tag(lot: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
     return lot
 
 
+def _normalize_numbers(lot: dict[str, Any]) -> dict[str, Any]:
+    """Числа в лоте после вердикта. Модель может прислать «6,17» строкой, float() на сборке ломался."""
+    out = dict(lot)
+    for key in _NUMERIC_LOT:
+        if key in out and _filled(out[key]):
+            out[key] = _as_number(out[key])
+    return out
+
+
 def apply_verdict(lots: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:
     """keep оставляет строку. fix меняет только присланные поля. Пустой ответ модели черновик не стирает."""
     base = [dict(lot) for lot in lots]
     if not isinstance(payload, dict):
-        return [lot for lot in base if not lot.get("freight")]
+        return [_normalize_numbers(lot) for lot in base if not lot.get("freight")]
     rows = payload.get("lots")
     if not isinstance(rows, list) or not rows:
-        return [lot for lot in base if not lot.get("freight")]
+        return [_normalize_numbers(lot) for lot in base if not lot.get("freight")]
     used: set[int] = set()
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -258,7 +302,7 @@ def apply_verdict(lots: list[dict[str, Any]], payload: Any) -> list[dict[str, An
             added = _blank_lot(fields)
             added["_verdict"] = "add"
             added["_reason"] = reason
-            out.append(_tag(added, row))
+            out.append(_normalize_numbers(_tag(added, row)))
             continue
         index = row.get("index")
         if isinstance(index, bool) or not isinstance(index, int) or index < 0 or index >= len(base):
@@ -269,19 +313,21 @@ def apply_verdict(lots: list[dict[str, Any]], payload: Any) -> list[dict[str, An
             continue
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
         if action == "fix":
-            out.append(_tag(_fixed(lot, fields, reason, "fix"), row))
+            out.append(_normalize_numbers(_tag(_fixed(lot, fields, reason, "fix"), row)))
         elif action == "split":
             parts = fields.get("parts") if isinstance(fields.get("parts"), list) else []
             if not parts:
-                out.append(lot)
+                out.append(_normalize_numbers(lot))
             else:
                 for part in parts:
-                    out.append(_tag(_fixed(lot, part if isinstance(part, dict) else {}, reason, "split"), row))
+                    out.append(
+                        _normalize_numbers(_tag(_fixed(lot, part if isinstance(part, dict) else {}, reason, "split"), row))
+                    )
         else:
-            out.append(_tag(dict(lot), row))
+            out.append(_normalize_numbers(_tag(dict(lot), row)))
     for index, lot in enumerate(base):
         if index not in used and not lot.get("freight"):
-            out.append(lot)
+            out.append(_normalize_numbers(lot))
     return [lot for lot in out if not lot.get("freight")]
 
 
@@ -602,8 +648,15 @@ def _weight_quantity(lot: dict[str, Any]) -> float | None:
     unit = str(lot.get("unit") or "").casefold()
     if not re.search(r"\b(?:kgs?|кг)\b", unit):
         return None
-    price, amount, net = lot.get("price"), lot.get("amount"), lot.get("net")
-    if not (_filled(price) and _filled(amount) and _filled(net)) or not price:
+    price = _as_number(lot.get("price"))
+    amount = _as_number(lot.get("amount"))
+    net = _as_number(lot.get("net"))
+    if not (
+        isinstance(price, (int, float))
+        and isinstance(amount, (int, float))
+        and isinstance(net, (int, float))
+        and price
+    ):
         return None
     if abs(float(amount) / float(price) - float(net)) <= max(0.5, abs(float(net)) * 0.002):
         return float(net)
@@ -650,8 +703,12 @@ def _lot_flags(lot: dict[str, Any]) -> list[dict[str, Any]]:
         )
     if lot.get("weight_suspect"):
         out.append(_flag("net_weight", "Нетто выглядит неправдоподобно по весу на штуку. Проверь по документам."))
-    gross, with_pallet = lot.get("gross"), lot.get("gross_with_pallet")
-    if _filled(gross) and _filled(with_pallet) and abs(float(gross) - float(with_pallet)) > 0.05:
+    gross, with_pallet = _as_number(lot.get("gross")), _as_number(lot.get("gross_with_pallet"))
+    if (
+        isinstance(gross, (int, float))
+        and isinstance(with_pallet, (int, float))
+        and abs(float(gross) - float(with_pallet)) > 0.05
+    ):
         extra = ""
         if _filled(lot.get("pallet_count")) and _filled(lot.get("pallet_weight")):
             extra = f" ({_show(lot.get('pallet_count'))} палл. по {_show(lot.get('pallet_weight'))})"

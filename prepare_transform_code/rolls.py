@@ -7,16 +7,26 @@
 
 import re
 
+from prepare_transform_code.numbers import parse_number
+
 _SUM_FIELDS = ("pieces", "packages", "amount", "net", "net_primary", "gross", "volume", "area", "gross_with_pallet")
 _METERS = re.compile(r"^(?:m|mt|mtr|mtrs|meters?|metres?|м|метр\w*)\.?$", re.I)
 _PRICE_TOLERANCE = 0.02
 
 
+def _num(value):
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return parse_number(value)
+
+
 def _roll_like(lot):
     if lot.get("freight") or lot.get("measure_group"):
         return False
-    packages = lot.get("packages")
-    if packages is None or abs(float(packages) - 1) > 0.05:
+    packages = _num(lot.get("packages"))
+    if packages is None or abs(packages - 1) > 0.05:
         return False
     kind = str(lot.get("package_type") or "").casefold()
     if "roll" in kind or "рулон" in kind:
@@ -37,8 +47,8 @@ def _digits(value):
 
 
 def _price_key(lot):
-    price = lot.get("price")
-    return None if price is None else round(float(price) / _PRICE_TOLERANCE)
+    price = _num(lot.get("price"))
+    return None if price is None else round(price / _PRICE_TOLERANCE)
 
 
 def _group_key(lot):
@@ -69,10 +79,10 @@ def _split_by_model(members):
 
 
 def _sum_field(members, name):
-    values = [lot.get(name) for lot in members]
+    values = [_num(lot.get(name)) for lot in members]
     if any(value is None for value in values):
         return None
-    return round(sum(float(value) for value in values), 4)
+    return round(sum(values), 4)
 
 
 def _same(members, name):
@@ -84,8 +94,9 @@ def _merged(members, spec_rows):
     first = dict(members[0])
     for name in _SUM_FIELDS:
         first[name] = _sum_field(members, name)
-    if first.get("packages") is not None:
-        first["packages"] = int(first["packages"]) if float(first["packages"]).is_integer() else first["packages"]
+    packages = first.get("packages")
+    if packages is not None:
+        first["packages"] = int(packages) if float(packages).is_integer() else packages
     models = {str(lot.get("model") or "").strip() for lot in members}
     shared = models.pop() if len(models) == 1 else ""
     first["model"] = shared
@@ -128,10 +139,11 @@ def _packages_differ(lot, spec_rows):
         model_label = " ".join(str(row.get("model") or "").split()).casefold()
         if (label in labels or (model_label and model_label in labels)) and row.get("packages") is not None:
             matched.append(row)
-    if not matched or lot.get("packages") is None:
+    packages = _num(lot.get("packages"))
+    if not matched or packages is None:
         return False
-    total = sum(float(row["packages"]) for row in matched)
-    return abs(total - float(lot["packages"])) > 0.05
+    total = sum(_num(row["packages"]) or 0 for row in matched)
+    return abs(total - packages) > 0.05
 
 
 def fold_rolls(lots, spec_rows=None):
