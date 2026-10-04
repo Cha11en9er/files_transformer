@@ -11,9 +11,11 @@ from app.services.opencode_review import _model_parts
 from app.services.prepare_site import (
     apply_verdict,
     filled_base_columns,
+    header_from_draft,
     is_reference_name,
     lots_to_rows,
     needs_second_model,
+    overlay_model_header,
     split_uploads,
 )
 
@@ -83,6 +85,27 @@ def test_hs_is_digits_without_dots() -> None:
     assert customs["tnved_code"] == "5407699000"
     assert "." not in customs["hs_code"]
     assert rows[0]["validation_errors"] == []
+
+
+def test_draft_currency_reaches_the_header() -> None:
+    # Валюта у колонки цены — USD. Она не должна теряться перед экспортом (иначе профиль ставит RMB).
+    draft = {"currency": "USD", "seller": "ACME", "contract": "C-1"}
+    header = header_from_draft(draft, [])
+    assert header["currency"] == "USD"
+
+
+def test_model_can_correct_the_currency() -> None:
+    header = {"currency": "CNY"}
+    payload = {"header": {"currency": "USD"}}
+    out = overlay_model_header(header, payload)
+    assert out["currency"] == "USD"
+
+
+def test_empty_model_currency_does_not_wipe_the_draft() -> None:
+    header = {"currency": "USD"}
+    payload = {"header": {"currency": ""}}
+    out = overlay_model_header(header, payload)
+    assert out["currency"] == "USD"
 
 
 def test_reference_file_stays_out_of_goods() -> None:
