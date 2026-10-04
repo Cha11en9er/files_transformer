@@ -252,6 +252,8 @@ def header_from_draft(draft: dict[str, Any], lots: list[dict[str, Any]]) -> dict
         "invoice_no": text("invoice_no"),
         "invoice_date": text("invoice_date"),
         "delivery_terms": text("delivery"),
+        # Валюта черновика — та, что у колонки цены. Иначе экспорт по профилю ставит дефолт (RMB).
+        "currency": text("currency"),
         "manufacturer": _one_producer(lots),
     }
 
@@ -266,6 +268,8 @@ def overlay_model_header(header: dict[str, str], payload: Any) -> dict[str, str]
         "buyer": "buyer",
         "contract": "contract_no",
         "invoice_no": "invoice_no",
+        # Валюту модель видит по колонке цены на фото и может поправить черновик.
+        "currency": "currency",
     }
     for source, target in mapping.items():
         value = model_header.get(source)
