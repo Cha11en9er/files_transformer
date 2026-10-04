@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.services.opencode_review import _model_parts
 from app.services.prepare_site import (
     apply_verdict,
+    fee_rows,
     filled_base_columns,
     header_from_draft,
     is_reference_name,
@@ -17,6 +18,7 @@ from app.services.prepare_site import (
     needs_second_model,
     overlay_model_header,
     split_uploads,
+    verdict_notes,
 )
 
 
@@ -118,3 +120,63 @@ def test_reference_file_stays_out_of_goods() -> None:
     assert [name for _path, name in goods] == ["invoice.pdf"]
     assert {name for _path, name in references} == {"сводная.xlsx", "letter.pdf"}
     assert is_reference_name("справочник.xlsx", set())
+
+
+def test_pallets_and_package_type_stay_apart_from_places() -> None:
+    lot = _lot(vendor="A1", packages=2150, package_type="carton box", pallet_count=20, gross=21750.0, gross_with_pallet=22000.0, pallet_weight=250.0)
+    row = lots_to_rows([lot], [])[0]
+    assert row["packing_data"]["rolls"] == 2150
+    assert row["packing_data"]["package_type"] == "carton box"
+    assert row["packing_data"]["pallets"] == 20
+    assert row["packing_data"]["gross_weight_with_pallet"] == 22000.0
+    assert any(flag["field_name"] == "gross_weight" for flag in row["validation_errors"])
+
+
+def test_shipper_code_goes_to_hs_and_tnved_stays_main() -> None:
+    lot = _lot(vendor="A1", hs="9401908009", hs_alt="9401909090", hs_alt_shipper=True)
+    customs = lots_to_rows([lot], [])[0]["customs_data"]
+    assert customs["tnved_code"] == "9401908009"
+    assert customs["hs_code"] == "9401909090"
+    plain = _lot(vendor="A2", hs="5903101000", hs_alt="590310909000")
+    customs = lots_to_rows([plain], [])[0]["customs_data"]
+    assert customs["hs_code"] == "5903101000"
+    assert customs["tnved_code"] == "590310909000"
+
+
+def test_fees_become_rows_without_quantity() -> None:
+    rows = fee_rows([{"description": "Packing fee", "amount": 1084.8, "freight": True}, {"description": "no sum"}])
+    assert len(rows) == 1
+    assert rows[0]["commercial_data"] == {"amount": 1084.8}
+    assert "qty" not in rows[0]["commercial_data"]
+
+
+def test_model_changes_and_drops_are_visible() -> None:
+    draft = [_lot(vendor="A1", pieces=10, net=4.0), _lot(vendor="B2", pieces=5)]
+    payload = {
+        "lots": [
+            {"index": 0, "action": "fix", "fields": {"net": 40.0}, "reason": "на фото 40"},
+            {"index": 1, "action": "drop", "reason": "это итог"},
+        ]
+    }
+    out = apply_verdict(draft, payload)
+    assert len(out) == 1
+    flags = lots_to_rows(out, [])[0]["validation_errors"]
+    assert any(flag["field_name"] == "net_weight" and "было 4" in flag["message"] for flag in flags)
+    notes = verdict_notes(draft, payload)
+    assert len(notes) == 1 and "B2" in notes[0]
+
+
+def test_conflicting_number_of_another_document_is_flagged_not_chosen() -> None:
+    lot = _lot(vendor="A1", net=100.0, conflicts={"net": 120.0})
+    row = lots_to_rows([lot], [])[0]
+    assert row["packing_data"]["net_weight"] == 100.0
+    assert any("другое число" in flag["message"] for flag in row["validation_errors"])
+
+
+def test_model_header_fills_only_empty_fields() -> None:
+    header = {"invoice_date": "06.02.2018", "contract_date": "", "buyer_address": ""}
+    payload = {"header": {"invoice_date": "01.01.2000", "contract_date": "19.04.2017", "buyer_address": "Moscow"}}
+    out = overlay_model_header(header, payload)
+    assert out["invoice_date"] == "06.02.2018"
+    assert out["contract_date"] == "19.04.2017"
+    assert out["buyer_address"] == "Moscow"

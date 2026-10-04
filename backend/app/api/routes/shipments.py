@@ -44,6 +44,7 @@ from app.services.opencode_review import review_with_opencode
 from app.services.pdf_pages import collect_vision_images
 from app.services.prepare_site import (
     apply_verdict,
+    fee_rows,
     fill_from_catalog,
     goods_lots,
     header_from_draft,
@@ -55,6 +56,7 @@ from app.services.prepare_site import (
     read_goods,
     review_files,
     split_uploads,
+    verdict_notes,
     verdict_prompt,
 )
 from app.services.scan_reconcile import compute_excel_totals
@@ -323,6 +325,13 @@ def _complete_18233_kit(saved_paths: list[Path]) -> tuple[list[Path], list[str]]
     return completed, notes
 
 
+_ROLE_RU = {
+    "invoice": "инвойс",
+    "packing": "пакинг",
+    "specification": "спецификация",
+    "proforma": "проформа",
+}
+
 _FLAG_RU = {
     "hs_conflict": "два кода рядом, оба оставлены",
     "manufacturer_conflict": "в документах разный производитель",
@@ -331,6 +340,8 @@ _FLAG_RU = {
     "packages_conflict": "места в документах разошлись",
     "unit_conflict": "подпись единицы разошлась",
     "foreign_document": "в комплекте чужой лист",
+    "weight_suspect": "вес строки выглядит неправдоподобно, проверь по документам",
+    "values_conflict": "документы называют разные числа для одной строки",
 }
 
 
@@ -578,10 +589,12 @@ def _iter_create_events(
             return payload
 
         review_dict: dict[str, Any] = {"status": "skipped", "model": first_model, "error": None}
+        verdict_dropped: list[str] = []
         if first_model:
             review_dict = yield from _ask(first_model)
             if review_dict.get("status") == "ok":
                 lots = apply_verdict(goods_lots(draft), review_dict.get("payload"))
+                verdict_dropped = verdict_notes(list(draft.get("lots") or []), review_dict.get("payload"))
         if second_model and needs_second_model(lots):
             yield {
                 "event": "progress",
@@ -594,6 +607,7 @@ def _iter_create_events(
             second = yield from _ask(second_model)
             if second.get("status") == "ok":
                 lots = apply_verdict(goods_lots(draft), second.get("payload"))
+                verdict_dropped = verdict_notes(list(draft.get("lots") or []), second.get("payload"))
                 review_dict = second
         shutil.rmtree(vision_dir, ignore_errors=True)
         fill_from_catalog(lots, catalog)
@@ -602,6 +616,8 @@ def _iter_create_events(
             header_fields = overlay_model_header(header_fields, review_dict.get("payload"))
         reconciled = lots_to_rows(lots, list(draft.get("flags") or []))
         found = len(reconciled)
+        # Сборы идут отдельными строками без количества: деньги поставки их содержат, штуки нет.
+        reconciled = reconciled + fee_rows(draft.get("freights"))
         role_type = {
             "invoice": DocType.INVOICE,
             "packing": DocType.PACKING_LIST,
@@ -612,6 +628,9 @@ def _iter_create_events(
             name = str(doc.get("name") or "")
             role = str(doc.get("role") or "")
             message = f"нашлось {found} позиций"
+            roles = [r for r in (doc.get("roles") or []) if r]
+            if len(roles) > 1:
+                message += ", в одном файле: " + " и ".join(_ROLE_RU.get(r, r) for r in roles)
             file_outs.append(
                 _make_file_out(
                     filename=name,
@@ -646,6 +665,17 @@ def _iter_create_events(
                 )
             )
             yield {"event": "file", "filename": "сверка", "status": "review", "message": message}
+        for note in verdict_dropped:
+            file_outs.append(
+                _make_file_out(
+                    filename="модель",
+                    doc_type=None,
+                    ocr_confidence=None,
+                    parse_status="review",
+                    parse_message=note,
+                )
+            )
+            yield {"event": "file", "filename": "модель", "status": "review", "message": note}
         if review_dict.get("error"):
             file_outs.append(
                 _make_file_out(

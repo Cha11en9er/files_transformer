@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from app.parsing.pdf_extractor import sniff_kind
 
-MAX_IMAGES = 20
+MAX_IMAGES = 40
 MAX_PAGES_PER_PDF = 25
-MAX_SIDE = 1600
-JPEG_QUALITY = 78
-RENDER_DPI = 130
+MAX_SIDE = 2000
+JPEG_QUALITY = 80
+RENDER_DPI = 150
+# Каждому файлу достаётся своя доля кадров, иначе длинный первый файл съедает лимит и последний не попадает на фото.
+MIN_IMAGES_PER_FILE = 6
+
+_ROOT = Path(__file__).resolve().parents[3]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 
 @dataclass(frozen=True)
@@ -55,11 +62,12 @@ def collect_pdf_pages(
     pdf = pdfium.PdfDocument(str(path))
     try:
         page_count = min(len(pdf), max_pages)
+        words_by_page = _page_words(path, page_count)
         for index in range(page_count):
             page = pdf[index]
             try:
                 bitmap = page.render(scale=RENDER_DPI / 72)
-                pil_image = bitmap.to_pil()
+                pil_image = _upright_page(bitmap.to_pil(), words_by_page.get(index))
                 out = dest_dir / f"{stem}_p{index + 1}.jpg"
                 _save_jpeg(pil_image, out)
                 written.append(VisionPage(path=out, source_name=path.name, page=index + 1))
@@ -68,6 +76,33 @@ def collect_pdf_pages(
     finally:
         pdf.close()
     return written
+
+
+def _page_words(path: Path, page_count: int) -> dict[int, list]:
+    """Слова текстового слоя по страницам. Нужны, чтобы понять, лежит ли лист на боку."""
+    try:
+        import pdfplumber
+
+        out: dict[int, list] = {}
+        with pdfplumber.open(path) as pdf:
+            for index in range(min(page_count, len(pdf.pages))):
+                try:
+                    out[index] = pdf.pages[index].extract_words() or []
+                except Exception:
+                    out[index] = []
+        return out
+    except Exception:
+        return {}
+
+
+def _upright_page(image, words):
+    """Лист на боку или вверх ногами поворачивается так, чтобы строки шли горизонтально."""
+    try:
+        from prepare_transform_code.photos import _upright
+
+        return _upright(image.convert("RGB"), words)
+    except Exception:
+        return image
 
 
 def _sheet_font(size: int):
@@ -216,36 +251,55 @@ def collect_workbook_pages(path: Path, dest_dir: Path, *, limit: int) -> list[Vi
     return pages
 
 
+def _workbook_photos(path: Path, dest_dir: Path, limit: int) -> list[VisionPage]:
+    """Лист режется по границам клеток, шапка колонок повторяется на продолжении. Не вышло — прежняя сетка."""
+    try:
+        from prepare_transform_code.photos import _excel, _slug
+
+        folder = dest_dir / f"xl_{abs(hash(path.name)) % 10**8}"
+        folder.mkdir(parents=True, exist_ok=True)
+        written = _excel(path, folder, _slug(path))
+        if written:
+            return [
+                VisionPage(path=Path(item), source_name=path.name, page=index)
+                for index, item in enumerate(written[:limit], start=1)
+            ]
+    except Exception:
+        pass
+    return collect_workbook_pages(path, dest_dir, limit=limit)
+
+
 def collect_vision_images(paths: list[Path], dest_dir: Path) -> list[VisionPage]:
     """JPEG set for the model: PDF page photos, uploaded images, and each Excel sheet."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     collected: list[VisionPage] = []
+    share = MAX_IMAGES if len(paths) <= 1 else max(MIN_IMAGES_PER_FILE, MAX_IMAGES // len(paths))
     for path in paths:
         if len(collected) >= MAX_IMAGES:
             break
         kind = sniff_kind(str(path))
+        quota = min(share, MAX_IMAGES - len(collected))
         try:
             if kind == "pdf":
-                remaining = MAX_IMAGES - len(collected)
                 collected.extend(
                     collect_pdf_pages(
                         path,
                         dest_dir,
                         stem=path.stem[:40] or "pdf",
-                        max_pages=min(MAX_PAGES_PER_PDF, remaining),
+                        max_pages=min(MAX_PAGES_PER_PDF, quota),
                     )
                 )
             elif kind == "excel":
                 lowered = path.name.lower()
                 if any(token in lowered for token in ("сводная", "справочник", "catalog", "catalogue")):
                     continue
-                remaining = MAX_IMAGES - len(collected)
-                collected.extend(collect_workbook_pages(path, dest_dir, limit=remaining))
+                collected.extend(_workbook_photos(path, dest_dir, quota))
             elif kind == "image":
-                from PIL import Image
+                from PIL import Image, ImageOps
 
                 out = dest_dir / f"{path.stem[:40] or 'image'}.jpg"
                 with Image.open(path) as image:
+                    image = _upright_page(ImageOps.exif_transpose(image).convert("RGB"), None)
                     _save_jpeg(image, out)
                 collected.append(VisionPage(path=out, source_name=path.name, page=None))
         except Exception:

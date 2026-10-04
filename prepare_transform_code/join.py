@@ -372,8 +372,8 @@ def _merge(base, packing):
         and abs(lot["packages"] - packing.packages) > 0.05
     ):
         lot["packages_conflict"] = True
-    for name in ("packages", "gross", "net", "net_primary", "volume", "gross_with_pallet"):
-        if lot.get(name) is None and getattr(packing, name) is not None:
+    for name in ("packages", "gross", "net", "net_primary", "volume", "gross_with_pallet", "pallet_count", "pallet_weight"):
+        if lot.get(name) is None and getattr(packing, name, None) is not None:
             lot[name] = getattr(packing, name)
     if lot.get("pieces") is None and packing.pieces is not None:
         lot["pieces"] = packing.pieces
@@ -413,7 +413,7 @@ def _overlay(lots, spec_lines):
         if probe.pieces is not None and spec.pieces is not None and abs(probe.pieces - spec.pieces) > 0.05:
             continue
         used.add(found)
-        _take_fields(lot, spec)
+        _take_fields(lot, spec, check=spec.pieces is not None)
         if spec.pieces is None:
             for other in lots:
                 if other is lot:
@@ -421,7 +421,8 @@ def _overlay(lots, spec_lines):
                 other_probe = Line(vendor=other.get("vendor") or "", model=other.get("model") or "", description=other.get("description") or "")
                 if not _vendor_hit(list(_vendors(probe)), list(_vendors(other_probe))):
                     continue
-                _take_fields(other, spec)
+                # Строка без своего количества относится к группе лотов: веса группы с весом лота не сверяются.
+                _take_fields(other, spec, check=False)
         for index, extra in enumerate(spec_lines):
             if index in used or extra.freight:
                 continue
@@ -448,7 +449,7 @@ def _overlay_sums(lots, spec_lines):
         if not group:
             continue
         for lot in group:
-            _take_fields(lot, spec)
+            _take_fields(lot, spec, check=False)
             if lot.get("pieces") is not None and abs(lot["pieces"] - spec.pieces) > 0.05:
                 for name in ("net", "gross", "packages", "amount", "area"):
                     if getattr(spec, name) is not None and lot.get(name) == getattr(spec, name):
@@ -502,8 +503,26 @@ def _same_goods(probe, line):
     return True
 
 
-def _take_fields(lot, spec):
+# Допуск, в пределах которого два документа считаются называющими одно число.
+_CONFLICT_TOLERANCE = {"net": 0.2, "gross": 0.2}
+
+
+def _note_conflict(lot, spec):
+    """Число уже стоит и спецификация называет другое. Первое остаётся, расхождение запоминается."""
+    for name, absolute in _CONFLICT_TOLERANCE.items():
+        mine = lot.get(name)
+        other = getattr(spec, name, None)
+        if mine is None or other is None:
+            continue
+        if abs(mine - other) <= max(absolute, abs(mine) * 0.001):
+            continue
+        lot.setdefault("conflicts", {})[name] = other
+
+
+def _take_fields(lot, spec, check=True):
     """Пустые поля дописать. Число, которое уже стоит, не затирать. Тот же цвет пишется полнее."""
+    if check:
+        _note_conflict(lot, spec)
     for name in ("vendor", "hs", "origin", "brand", "producer", "finish", "package_type", "pallet", "model", "size", "order_ref"):
         spec_value = getattr(spec, name)
         if name == "finish" and lot.get(name) and spec_value:
@@ -521,8 +540,10 @@ def _take_fields(lot, spec):
         lot["packages_conflict"] = True
     if spec.hs and lot.get("hs") and _hs_key(spec.hs) != _hs_key(lot.get("hs")):
         lot["hs_alt"] = spec.hs
+        lot["hs_alt_shipper"] = False
     elif spec.hs_alt and lot.get("hs") and _hs_key(spec.hs_alt) != _hs_key(lot.get("hs")):
         lot["hs_alt"] = spec.hs_alt
+        lot["hs_alt_shipper"] = bool(getattr(spec, "hs_alt_shipper", False))
     if not lot.get("unit"):
         lot["unit"] = spec.unit
     for name in ("price", "amount", "width"):
@@ -548,6 +569,9 @@ def _public(line: Line):
             lot[name] = ""
     lot["freight"] = line.freight
     lot["measure_group"] = line.measure_group
+    lot["hs_alt_shipper"] = bool(getattr(line, "hs_alt_shipper", False) and line.hs_alt)
+    lot["pallet_count"] = getattr(line, "pallet_count", None)
+    lot["pallet_weight"] = getattr(line, "pallet_weight", None)
     lot["unit_conflict"] = False
     lot["packages_conflict"] = False
     lot["split_of"] = None

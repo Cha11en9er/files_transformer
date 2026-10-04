@@ -33,6 +33,8 @@ _CCY_WORD_RE = re.compile(r"долл\.?\s*США|Юань|юань|Евро|ев
 
 NUM_FMT_INT = "0"
 NUM_FMT_2 = "0.00"
+# От двух до шести знаков: 12.5 останется 12.50, 0.1030 покажется как 0.103.
+NUM_FMT_PRICE = "0.00####"
 NUM_FMT_3 = "0.000"
 
 
@@ -748,9 +750,12 @@ def _prepare_data_block(ws, data_start: int, n_rows: int, total_cols: tuple[int,
     return total_row
 
 
-def _fmt_for(field: str) -> str | None:
+def _fmt_for(field: str, value: Any = None) -> str | None:
     if field in {"no"}:
         return NUM_FMT_INT
+    # Цена 0,1030 или 0,0655 в формате 0.00 выглядит как 0,10 и 0,07, хотя число в ячейке точное.
+    if field == "price" and isinstance(value, float) and abs(round(value, 2) - value) > 1e-9:
+        return NUM_FMT_PRICE
     if field in {"area"}:
         return NUM_FMT_3
     if field in {
@@ -795,7 +800,7 @@ def _write_mapped_row(ws, row: int, colmap: dict[str, int], values: dict[str, An
         col = colmap.get(field)
         if not col:
             continue
-        _set_cell(ws, row, col, value, _fmt_for(field))
+        _set_cell(ws, row, col, value, _fmt_for(field, value))
 
 
 def _header_value(header: dict[str, Any] | None, *keys: str) -> str:

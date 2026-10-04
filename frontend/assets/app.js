@@ -1006,12 +1006,34 @@ function formatMoney(value) {
   }).replace(/\s/g, "\u00a0");
 }
 
+// Цена за единицу бывает 0,1030 или 0,0655: два знака её искажают. Знаки после двух показываются, пока они не нули.
+function formatPrice(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return escapeHtml(value);
+  return n.toLocaleString("ru-RU", {
+    useGrouping: true,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  }).replace(/\s/g, "\u00a0");
+}
+
 const SEVERITY_RU = {
   RED: "Расхождение",
   YELLOW: "Пропуск",
   ORANGE: "Распознавание",
   BLUE: "РД",
 };
+
+// Вид места и паллеты стоят рядом с числом мест, а не вместо него: «2150 коробок, 20 палл».
+function placeNote(p) {
+  const parts = [];
+  if (p?.package_type) parts.push(String(p.package_type));
+  if (p?.pallets != null) parts.push(`${formatNum(p.pallets, 0)} палл.`);
+  if (p?.gross_weight_with_pallet != null) parts.push(`брутто с палл. ${formatNum(p.gross_weight_with_pallet, 2)}`);
+  if (!parts.length) return "";
+  return `<div class="cell-note" style="font-size:11px;color:#6b7280;font-weight:400">${escapeHtml(parts.join(", "))}</div>`;
+}
 
 const FIELD_RU = {
   article: "артикул",
@@ -1621,13 +1643,13 @@ function renderWorkspace() {
     tr.innerHTML = `
       <td class="row-no">${idx + 1}</td>
       ${longCell(articleLabel(item), "article")}
-      <td class="num ${fieldSeverity(errs, "rolls")}" data-edit="edit-rolls">${formatNum(p.rolls ?? p.boxes, 0)}</td>
+      <td class="num ${fieldSeverity(errs, "rolls")}" data-edit="edit-rolls">${formatNum(p.rolls ?? p.boxes, 0)}${placeNote(p)}</td>
       <td class="num ${fieldSeverity(errs, "meters")}" data-edit="edit-qty">${formatNum(p.meters ?? c.qty)}</td>
       <td class="num ${fieldSeverity(errs, "width")}" data-edit="edit-width">${formatNum(p.width, 3)}</td>
       <td class="num ${fieldSeverity(errs, "area")}" data-edit="edit-area">${formatNum(p.area, 3)}</td>
       <td class="num ${fieldSeverity(errs, "net_weight")}" data-edit="edit-net-weight">${formatNum(p.net_weight)}</td>
       <td class="num ${fieldSeverity(errs, "gross_weight")}" data-edit="edit-gross-weight">${formatNum(p.gross_weight)}</td>
-      <td class="money ${fieldSeverity(errs, "price")}" data-edit="edit-price">${formatMoney(c.price)}</td>
+      <td class="money ${fieldSeverity(errs, "price")}" data-edit="edit-price">${formatPrice(c.price)}</td>
       <td class="money ${fieldSeverity(errs, "amount")}" data-edit="edit-amount">${formatMoney(c.amount)}</td>
       <td class="code ${fieldSeverity(errs, "hs_code")}" data-edit="edit-hs">${escapeHtml(u.hs_code || "-")}</td>
       <td class="code ${fieldSeverity(errs, "tnved_code")}" data-edit="edit-tnved">${escapeHtml(u.tnved_code || "-")}</td>
