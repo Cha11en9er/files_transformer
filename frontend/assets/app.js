@@ -568,9 +568,10 @@ dropzoneWrap?.addEventListener("drop", async (e) => {
 const PIPELINE = [
   { id: "receive", title: "Приём файлов" },
   { id: "reconcile", title: "Сверка позиций" },
-  { id: "read", title: "Чтение документов" },
+  { id: "read", title: "Чтение файлов кодом" },
   { id: "photos", title: "Фото страниц" },
   { id: "verdict", title: "Вердикт модели" },
+  { id: "verdict2", title: "Вторая модель" },
   { id: "assemble", title: "Сборка таблицы" },
   { id: "done", title: "Распознавание выполнено" },
 ];
@@ -777,7 +778,9 @@ function progressFrames(message) {
 
 function pipelineStep(filename, stage, message) {
   const text = `${filename || ""} ${message || ""}`.toLowerCase();
-  if (stage === "model" || text.includes("вердикт") || text.includes("модель")) return "verdict";
+  if (stage === "model2" || text.includes("вторая модель")) return "verdict2";
+  if (stage === "model" || text.includes("вердикт модели") || text.includes("вердикт")) return "verdict";
+  if (text.includes("сборк")) return "assemble";
   if (text.includes("фото")) return "photos";
   if (text.includes("чтени")) return "read";
   if (text.includes("сверк")) return "reconcile";
@@ -1026,10 +1029,11 @@ const SEVERITY_RU = {
   BLUE: "РД",
 };
 
-// Вид места и паллеты стоят рядом с числом мест, а не вместо него: «2150 коробок, 20 палл».
+// Вид места и паллеты рядом с числом мест. «ROLLS» / «рулоны» не пишем: колонка уже «Рулоны / места».
 function placeNote(p) {
   const parts = [];
-  if (p?.package_type) parts.push(String(p.package_type));
+  const kind = String(p?.package_type || "").trim();
+  if (kind && !/^(rolls?|рулон\w*|roll)$/i.test(kind)) parts.push(kind);
   if (p?.pallets != null) parts.push(`${formatNum(p.pallets, 0)} палл.`);
   if (p?.gross_weight_with_pallet != null) parts.push(`брутто с палл. ${formatNum(p.gross_weight_with_pallet, 2)}`);
   if (!parts.length) return "";

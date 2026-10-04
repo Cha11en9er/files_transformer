@@ -250,3 +250,48 @@ def test_review_tab_shows_rows_of_its_own_file() -> None:
     assert by_name["pack.xlsx / Page1"]["kind"] == "excel"
     assert by_name["scan.jpg"]["kind"] == "image"
     assert by_name["scan.jpg"]["note"].startswith("Код не прочитал")
+
+
+def test_model_european_decimals_are_parsed() -> None:
+    lots = [_lot(vendor="A1", pieces=10)]
+    payload = {
+        "lots": [
+            {
+                "index": 0,
+                "action": "fix",
+                "fields": {"net": "6,17", "gross": "6,50", "price": "3,85", "amount": "793,10"},
+            }
+        ]
+    }
+    out = apply_verdict(lots, payload)
+    assert out[0]["net"] == 6.17
+    assert out[0]["gross"] == 6.5
+    assert out[0]["price"] == 3.85
+    assert out[0]["amount"] == 793.1
+    rows = lots_to_rows(out, [])
+    assert rows[0]["packing_data"]["net_weight"] == 6.17
+
+
+def test_model_add_with_comma_decimals_builds_rows() -> None:
+    payload = {
+        "lots": [
+            {
+                "action": "add",
+                "fields": {
+                    "vendor": "DYER 789",
+                    "pieces": "206",
+                    "packages": "5",
+                    "price": "3,85",
+                    "amount": "793,10",
+                    "net": "64,50",
+                    "gross": "67,95",
+                    "unit": "meters",
+                },
+            }
+        ]
+    }
+    out = apply_verdict([], payload)
+    rows = lots_to_rows(out, [])
+    assert len(rows) == 1
+    assert rows[0]["commercial_data"]["price"] == 3.85
+    assert rows[0]["packing_data"]["net_weight"] == 64.5
