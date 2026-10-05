@@ -1058,17 +1058,6 @@ const SEVERITY_RU = {
   BLUE: "РД",
 };
 
-// Вид места и паллеты рядом с числом мест. «ROLLS» / «рулоны» не пишем: колонка уже «Рулоны / места».
-function placeNote(p) {
-  const parts = [];
-  const kind = String(p?.package_type || "").trim();
-  if (kind && !/^(rolls?|рулон\w*|roll)$/i.test(kind)) parts.push(kind);
-  if (p?.pallets != null) parts.push(`${formatNum(p.pallets, 0)} палл.`);
-  if (p?.gross_weight_with_pallet != null) parts.push(`брутто с палл. ${formatNum(p.gross_weight_with_pallet, 2)}`);
-  if (!parts.length) return "";
-  return `<div class="cell-note" style="font-size:11px;color:#6b7280;font-weight:400">${escapeHtml(parts.join(", "))}</div>`;
-}
-
 const FIELD_RU = {
   article: "артикул",
   rolls: "рулоны",
@@ -1700,7 +1689,8 @@ function renderWorkspace() {
     const name = String(f.filename || "").toLowerCase().split(" / ")[0];
     const isPdf = name.endsWith(".pdf");
     const isExcel = /\.(xlsx|xls|xlsm)$/.test(name);
-    const clickable = parseStatus !== "skipped" && reviewNames.has(f.filename);
+    const hasOwnTable = reviewNames.has(f.filename);
+    const clickable = parseStatus !== "skipped";
     const span = document.createElement(clickable ? "button" : "span");
     span.type = clickable ? "button" : undefined;
     span.className = `badge ${f.doc_type ? "" : "unknown"} ${parseStatus === "ok" ? "" : parseStatus} ${clickable ? "clickable" : ""}`.trim();
@@ -1710,8 +1700,8 @@ function renderWorkspace() {
     let statusHint = "";
     if (parseStatus === "skipped") statusHint = " · пропущен";
     else if (parseStatus === "review") statusHint = " · требуется проверка";
-    else if (clickable) statusHint = " · таблица";
-    span.title = f.parse_message || (clickable ? "Открыть, как распознался файл" : "");
+    else if (hasOwnTable) statusHint = " · таблица";
+    span.title = f.parse_message || (clickable ? "Открыть итоговую таблицу" : "");
     span.setAttribute("aria-controls", "review-dialog");
     const named = String(f.filename || "");
     const showMessage = (named === "модель" || named === "сверка") && f.parse_message;
@@ -1723,7 +1713,7 @@ function renderWorkspace() {
     if (clickable) {
       span.addEventListener("click", (event) => {
         event.preventDefault();
-        openReviewPanel(f.filename);
+        openReviewPanel(hasOwnTable ? f.filename : "__final__");
       });
     }
     badges.appendChild(span);
@@ -1771,7 +1761,7 @@ function renderWorkspace() {
     tr.innerHTML = `
       <td class="row-no">${idx + 1}</td>
       ${longCell(articleLabel(item), "article")}
-      <td class="num ${fieldSeverity(errs, "rolls")}" data-edit="edit-rolls">${formatNum(p.rolls ?? p.boxes, 0)}${placeNote(p)}</td>
+      <td class="num ${fieldSeverity(errs, "rolls")}" data-edit="edit-rolls">${formatNum(p.rolls ?? p.boxes, 0)}</td>
       <td class="num ${fieldSeverity(errs, "meters")}" data-edit="edit-qty">${formatNum(p.meters ?? c.qty)}</td>
       <td class="num ${fieldSeverity(errs, "width")}" data-edit="edit-width">${formatNum(p.width, 3)}</td>
       <td class="num ${fieldSeverity(errs, "area")}" data-edit="edit-area">${formatNum(p.area, 3)}</td>
