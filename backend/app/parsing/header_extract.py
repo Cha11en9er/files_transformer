@@ -41,7 +41,7 @@ HEADER_KEYS = (
     "buyer_address",
 )
 
-_CATALOG_NAME = re.compile(r"сводн|справоч|catalog|\bописание\b", re.I)
+_CATALOG_NAME = re.compile(r"сводн|справоч|catalog|catalogue|price\s*list|pricelist|прайс", re.I)
 
 _INVOICE_NO = re.compile(
     r"(?:inv\.?\s*no\.?|invoice\s*(?:no\.?|nr\.?|number)|invoice\s*:|to\s+invoice|"

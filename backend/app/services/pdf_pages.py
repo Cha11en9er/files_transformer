@@ -279,6 +279,9 @@ def collect_vision_images(paths: list[Path], dest_dir: Path) -> list[VisionPage]
             break
         kind = sniff_kind(str(path))
         quota = min(share, MAX_IMAGES - len(collected))
+        lowered = path.name.lower()
+        if any(token in lowered for token in ("сводная", "справочник", "catalog", "catalogue", "price list", "pricelist", "прайс")):
+            continue
         try:
             if kind == "pdf":
                 collected.extend(
@@ -290,9 +293,6 @@ def collect_vision_images(paths: list[Path], dest_dir: Path) -> list[VisionPage]
                     )
                 )
             elif kind == "excel":
-                lowered = path.name.lower()
-                if any(token in lowered for token in ("сводная", "справочник", "catalog", "catalogue")):
-                    continue
                 collected.extend(_workbook_photos(path, dest_dir, quota))
             elif kind == "image":
                 from PIL import Image, ImageOps

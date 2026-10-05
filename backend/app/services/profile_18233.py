@@ -113,7 +113,7 @@ def _extract_family_from_pl_design(design: str) -> str:
 
 def _is_catalog_filename(filename: str) -> bool:
     name = (filename or "").lower()
-    return any(token in name for token in ("сводная", "справочник", "catalog", "catalogue"))
+    return any(token in name for token in ("сводная", "справочник", "catalog", "catalogue", "price list", "pricelist", "прайс"))
 
 
 def _split_category_article(design: str) -> tuple[str, str]:

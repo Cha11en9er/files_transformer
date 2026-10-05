@@ -245,6 +245,12 @@ def test_printed_currency_goes_to_header() -> None:
     assert header_from_draft({"currency": "CNY", "currency_printed": "RMB"}, [])["currency"] == "RMB"
 
 
+def test_price_list_filename_is_a_catalog() -> None:
+    assert is_reference_name("Price list.pdf", set())
+    assert is_reference_name("прайс механизмов.pdf", set())
+    assert not is_reference_name("Invoice.pdf", set())
+
+
 def test_review_tab_shows_rows_of_its_own_file() -> None:
     tables = {
         "pack.xlsx / Page1": {"rows": [{"article": "A", "rolls": 1}], "note": "", "text": "", "total_rows": 1},
