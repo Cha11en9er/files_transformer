@@ -2,7 +2,15 @@ import re
 from decimal import Decimal, ROUND_HALF_UP
 
 from prepare_transform_code.fields import LOT_FIELDS
-from prepare_transform_code.lines import Line, _is_contents, _letters, _plain_score, _product_title, part_key
+from prepare_transform_code.lines import (
+    Line,
+    _is_contents,
+    _letters,
+    _plain_score,
+    _product_title,
+    description_holds,
+    part_key,
+)
 
 
 def build_lots(base_lines, packing_lines, spec_lines=None):
@@ -610,9 +618,9 @@ def _richer(left, right):
         return left if _plain_score(left) >= _plain_score(right) else right
     if not left:
         return right
-    if not right or right.casefold() in left.casefold():
+    if not right or description_holds(left, right):
         return left
-    if left.casefold() in right.casefold():
+    if description_holds(right, left):
         return right
     if "/" in right:
         head, _, tail = right.partition("/")

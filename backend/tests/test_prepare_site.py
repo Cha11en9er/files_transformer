@@ -102,6 +102,25 @@ def test_missing_currency_does_not_become_yuan() -> None:
     assert export_currency_word_ru("USD") == "долл. США"
 
 
+def test_different_factories_are_not_joined_into_the_header() -> None:
+    header = header_from_draft({}, [_lot(producer="Factory One"), _lot(producer="Factory Two")])
+    assert header["manufacturer"] == ""
+    single = header_from_draft({}, [_lot(producer="Only Plant")])
+    assert single["manufacturer"] == "Only Plant"
+
+
+def test_color_brand_and_size_reach_the_row() -> None:
+    row = lots_to_rows(
+        [_lot(finish="Matte black", brand="Micama", size="180-185, XL:2", package_type="мешок", producer="Plant A")],
+        [],
+    )[0]
+    assert row["commercial_data"]["color"] == "Matte black"
+    assert row["commercial_data"]["size"] == "180-185, XL:2"
+    assert row["customs_data"]["brand"] == "Micama"
+    assert row["customs_data"]["manufacturer"] == "Plant A"
+    assert row["packing_data"]["package_type"] == "мешок"
+
+
 def test_draft_currency_reaches_the_header() -> None:
     # Валюта у колонки цены — USD. Она не должна теряться перед экспортом (иначе профиль ставит RMB).
     draft = {"currency": "USD", "seller": "ACME", "contract": "C-1"}
@@ -311,3 +330,105 @@ def test_model_add_with_comma_decimals_builds_rows() -> None:
     assert len(rows) == 1
     assert rows[0]["commercial_data"]["price"] == 3.85
     assert rows[0]["packing_data"]["net_weight"] == 64.5
+
+
+def test_dt_sheet_follows_the_scheme_and_leaves_gaps_empty() -> None:
+    from app.services.export_tsd import dt_headers, dt_rows
+
+    lots = [
+        _lot(
+            vendor="A1",
+            model="M-1",
+            description="Long name",
+            producer="Factory One",
+            brand="Micama",
+            pieces=10,
+            unit="pcs",
+            price=2,
+            amount=20,
+            packages=3,
+            package_type="картонная коробка",
+            pallet_count=2,
+            net=4,
+            gross=5,
+            hs="1111111111",
+            origin="CN",
+            size="180-185, XL:2",
+        ),
+        _lot(
+            vendor="A2",
+            description="Other",
+            producer="Factory Two",
+            pieces=1,
+            unit="set",
+            price=4,
+            amount=4,
+            packages=1,
+            package_type="мешок",
+            net=1,
+            gross=1.5,
+            hs="2222222222",
+        ),
+        _lot(vendor="A3", pieces=1, packages=1),
+    ]
+    items = lots_to_rows(lots, [])
+    headers = dt_headers()
+    rows = dt_rows(
+        items,
+        {
+            "invoice_no": "INV-9",
+            "invoice_date": "2026-01-05",
+            "currency": "USD",
+            "container": "CONT1",
+            "manufacturer": "Factory One / Factory Two",
+        },
+    )
+    assert headers[:6] == ["№", "Код ТН ВЭД", "Описание", "Описание в группе", "Изготовитель", "ТЗ"]
+    assert headers.count("Описание") == 2
+    assert headers.count("") == 3
+    assert "ИТС по запросу" in headers and "Декларация соответствия" in headers
+    assert "CT" not in headers
+    body, total = rows[:-1], rows[-1]
+    at = headers.index
+
+    def col(name, row):
+        return row[at(name)]
+
+    assert [col("Изготовитель", row) for row in body] == ["Factory One", "Factory Two", None]
+    assert col("Код упаковки", body[0]) == "картонная коробка"
+    assert col("Код упаковки", body[1]) == "мешок"
+    assert all(col("Кол-во упак", row) != "CT" and col("Код упаковки", row) != "CT" for row in body)
+    assert col("кол-во мест", body[0]) == col("Кол-во упак", body[0]) == 3
+    assert col("Описание в группе", body[0]) is None
+    assert col("Описание", body[0]) == "Long name"
+    second_description = [i for i, name in enumerate(headers) if name == "Описание"][1]
+    assert body[0][second_description] is None
+    assert col("ТЗ", body[0]) is None
+    assert col("марка", body[0]) == "Micama"
+    assert col("модель", body[0]) == "M-1"
+    assert col("модель", body[1]) is None
+    assert col("поддоны кол-во", body[0]) == 2
+    assert col("поддоны кол-во", body[1]) is None
+    assert col("серийный номер", body[0]) is None
+    assert col("номер инвойса", body[0]) is None
+    assert col("дата инвойса", body[0]) is None
+    assert col("Валюта инвойса", body[0]) is None
+    assert col("контейнер", body[0]) is None
+    assert col("номера контейнеры", body[0]) is None
+    assert col("нетто без упаковки", body[0]) is None
+    assert col("доп.единица", body[0]) is None
+    assert col("Код наличия упаковки", body[0]) is None
+    assert col("ИТС по запросу", body[0]) is None
+    assert col("ИТС цена/нетто", body[0]) is None
+    assert col("Декларация соответствия", body[0]) is None
+    assert col("кол-во товара", total) == 12
+    assert col("кол-во мест", total) == 5
+    assert col("нетто", total) == 5
+    assert col("брутто", total) == 6.5
+    assert col("ст-ть товара", total) == 24
+    assert col("цена за ед. товара", total) is None
+    assert col("артикул", total) is None
+    assert col("Код ТН ВЭД", total) is None
+    assert col("Описание", total) is None
+    assert col("страна происхождения", total) is None
+    assert "Factory One / Factory Two" not in [col("Изготовитель", row) for row in rows]

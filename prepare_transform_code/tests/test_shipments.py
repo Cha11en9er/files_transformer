@@ -204,6 +204,14 @@ class LanguageTest(unittest.TestCase):
         buyer = party_after('BUYER: LIMITED LIABILITY COMPANY "TD 21 VEK" DATE: 22.12.2025')
         self.assertIn("TD 21 VEK", buyer["buyer"])
         self.assertNotIn("DATE", buyer["buyer"])
+        self.assertEqual(column_of("Trade mark / Торговая марка"), "brand")
+        self.assertEqual(column_of("Marks"), "brand")
+        self.assertEqual(column_of("маркировка"), "vendor")
+        sides = party_after("THE BUYER: RECIPIENT:\nLogiya DV LLC Master LLC")
+        self.assertIn("Logiya", sides["buyer"])
+        self.assertNotIn("Master", sides["buyer"])
+        self.assertIn("Master", sides["consignee"])
+        self.assertNotIn("Logiya", sides["consignee"])
         self.assertEqual(_INVOICE_NO.search("No INVOICE RU30006").group(1), "RU30006")
         self.assertEqual(_INVOICE_NO.search("INVOICE NO: SG1251").group(1), "SG1251")
         self.assertEqual(_INVOICE_NO.search("INVOICE No. CI240301RU").group(1), "CI240301RU")
@@ -1998,6 +2006,109 @@ class DocumentTablesTest(unittest.TestCase):
         self.assertEqual(len(packing["rows"]), 16)
         self.assertEqual(len(invoice["rows"]), 1)
         self.assertEqual(result["currency_printed"], "USD")
+
+
+class FormRulesTest(unittest.TestCase):
+    def test_clothing_size_grid_restarts_and_keeps_both_labels(self):
+        from openpyxl import Workbook
+
+        book = Workbook()
+        sheet = book.active
+        sheet.append(["Item / Артикул", "Color", "180-185, XL", "180-185,X L", "Qty", "Price", "Amount"])
+        sheet.append(["SP-1", "black", 200, 199, 399, 10, 3990])
+        sheet.append(["Item / Артикул", "Color", "14-16 см, 4XS", "Qty", "Price", "Amount"])
+        sheet.append(["SP-2", "red", 50, 50, 5, 250])
+        sheet.append(["Item / Артикул", "Color", "Qty", "Price", "Amount"])
+        sheet.append(["BAG-1", "blue", 10, 3, 30])
+        path = Path(self._dir()) / "grid.xlsx"
+        book.save(path)
+        from prepare_transform_code.exceldoc import read_excel
+
+        lines = read_excel(path)[0]["lines"]
+        self.assertEqual(len(lines), 3)
+        self.assertEqual(lines[0].pieces, 399)
+        self.assertIn("180-185, XL:200", lines[0].size)
+        self.assertIn("180-185,X L:199", lines[0].size)
+        self.assertNotIn("4XS", lines[0].size)
+        self.assertEqual(lines[1].pieces, 50)
+        self.assertIn("14-16 см, 4XS:50", lines[1].size)
+        self.assertNotIn("XL", lines[1].size)
+        self.assertEqual(lines[2].pieces, 10)
+        self.assertEqual(lines[2].size, "")
+
+    def test_zero_volume_column_is_empty_when_weight_is_filled(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.exceldoc import read_excel
+
+        book = Workbook()
+        sheet = book.active
+        sheet.append(["Description", "Qty", "Price", "Amount", "N.W.", "G.W.", "CBM"])
+        sheet.append(["pipe", 10, 2, 20, 5, 6, 0])
+        sheet.append(["cap", 4, 1, 4, 1, 2, 0])
+        path = Path(self._dir()) / "zeros.xlsx"
+        book.save(path)
+        lines = read_excel(path)[0]["lines"]
+        self.assertEqual(len(lines), 2)
+        self.assertIsNone(lines[0].volume)
+        self.assertIsNone(lines[1].volume)
+        self.assertEqual(lines[0].net, 5)
+
+    def test_measured_volume_stays(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.exceldoc import read_excel
+
+        book = Workbook()
+        sheet = book.active
+        sheet.append(["Description", "Qty", "Price", "Amount", "N.W.", "CBM"])
+        sheet.append(["pipe", 10, 2, 20, 5, 1.5])
+        sheet.append(["cap", 4, 1, 4, 1, 0])
+        path = Path(self._dir()) / "mixed.xlsx"
+        book.save(path)
+        lines = read_excel(path)[0]["lines"]
+        self.assertEqual(lines[0].volume, 1.5)
+        self.assertEqual(lines[1].volume, 0)
+
+    def test_description_fragment_is_not_glued_twice(self):
+        from prepare_transform_code.join import _richer
+
+        self.assertEqual(_richer("Палатка/Tent", "Палатка"), "Палатка/Tent")
+        self.assertEqual(
+            _richer("SOFA FABRIC Velvet LUX", "Upholstery fabric, velvet"),
+            "SOFA FABRIC Velvet LUX // Upholstery fabric, velvet",
+        )
+
+    def test_other_articles_and_ref_errors_stay_out(self):
+        from openpyxl import Workbook
+
+        book = Workbook()
+        invoice = book.active
+        invoice.title = "Invoice"
+        invoice.append(["COMMERCIAL INVOICE"])
+        invoice.append(["Art No.", "Qty", "Price, RMB", "Amount"])
+        invoice.append(["A-1", 10, 2, 20])
+        foreign = book.create_sheet("alldata")
+        foreign.append(["Art No.", "Qty", "Price USD", "Amount", "проходная"])
+        foreign.append(["B-9", 3, 5, 15, 1])
+        broken = book.create_sheet("Other")
+        broken.append(["COMMERCIAL INVOICE"])
+        broken.append(["Art No.", "Description", "Qty", "Price", "Amount"])
+        broken.append(["Z-1", "foreign goods", "#REF!", "#REF!", "#REF!"])
+        path = Path(self._dir()) / "kit.xlsx"
+        book.save(path)
+        result = analyze(path.parent)
+        goods = [lot for lot in result["lots"] if not lot["freight"]]
+        self.assertEqual([lot["vendor"] for lot in goods], ["A-1"])
+        self.assertEqual(result["currency"], "CNY")
+        self.assertNotIn("USD", result["currencies"])
+
+    def _dir(self):
+        import tempfile
+
+        if not hasattr(self, "_folder"):
+            self._folder = tempfile.mkdtemp()
+        return self._folder
 
 
 def _only(folder, names):

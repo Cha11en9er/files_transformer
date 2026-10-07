@@ -129,6 +129,9 @@ def invoice_headers(ccy: str = "CNY") -> list[str]:
         "Unit",
         f"Price ({ccy})" if ccy else "Price",
         f"Amount ({ccy})" if ccy else "Amount",
+        "Brand / Торговая марка",
+        "Size / Размер",
+        "Customs code 2 / Второй код",
     ]
 
 
@@ -149,25 +152,36 @@ def packing_headers() -> list[str]:
     ]
 
 
-def spec_headers() -> list[str]:
+def spec_headers(ccy: str = "") -> list[str]:
+    price = f"Unit Price / Цена за единицу ({ccy})" if ccy else "Unit Price / Цена за единицу"
+    amount = f"Amount / Cтоимость ({ccy})" if ccy else "Amount / Cтоимость"
     return [
         "No",
         "Item/ Артикул",
         "Description/ Наименование",
         "Quantity, ctns/ Количество, коробок",
-        "CT",
+        "Package / Вид упаковки",
         "Quantity, unit/ Количество, единиц",
         "Unit/Единица измерения",
         "Netto weight, kg/ Вес нетто, кг",
         "GROSS weight, kg/ Вес брутто, кг",
-        "Unit Price / Цена за единицу",
-        "Amount / Cтоимость",
+        price,
+        amount,
         "Customs code / Таможенный код",
+        "Size / Размер",
+        "Brand / Торговая марка",
     ]
 
 
 def description_headers() -> list[str]:
-    return ["Item/ Артикул", "Description/ Наименование", "Manufacturer", "Country"]
+    return [
+        "Item/ Артикул",
+        "Description/ Наименование",
+        "Manufacturer",
+        "Country",
+        "Brand / Торговая марка",
+        "Size / Размер",
+    ]
 
 
 def _invoice_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[tuple[int, int]], list[tuple[str, int, int]]]:
@@ -192,6 +206,9 @@ def _invoice_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[t
                     line.get("unit") or (_unit(item) if first else None),
                     _fnum(line.get("price"), 4),
                     _fnum(line.get("amount")),
+                    (customs.get("brand") if first else None),
+                    ((line.get("size") or commercial.get("size")) if first else None),
+                    (_second_code(customs) if first else None),
                 ]
             )
         item_spans.append((start, len(rows) - 1))
@@ -211,6 +228,9 @@ def _invoice_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[t
                 None,
                 None,
                 _fnum(sum(float(r[8] or 0) for r in body)),
+                None,
+                None,
+                None,
             ]
         )
     return rows, item_spans, pack_spans
@@ -287,7 +307,7 @@ def _spec_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[tupl
                     (article_with_color(item.get("article"), line.get("color") or (item.get("commercial_data") or {}).get("color")) if first else None),
                     _desc(item) if first else None,
                     _count(line.get("boxes") if line.get("boxes") not in (None, "") else (_cartons(item) if first else None)),
-                    "CT" if first or line.get("boxes") not in (None, "") else None,
+                    (packing.get("package_type") or None) if first or line.get("boxes") not in (None, "") else None,
                     _count(line.get("qty")),
                     line.get("unit") or (_unit(item) if first else None),
                     _fnum(line.get("net_weight") if line.get("net_weight") not in (None, "") else (packing.get("net_weight") if first else None)),
@@ -295,6 +315,8 @@ def _spec_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[tupl
                     _fnum(line.get("price") if line.get("price") not in (None, "") else (commercial.get("price") if first else None), 4),
                     _fnum(line.get("amount") if line.get("amount") not in (None, "") else (commercial.get("amount") if first else None)),
                     (customs.get("tnved_code") or customs.get("hs_code")) if first else None,
+                    (commercial.get("size") or None) if first else None,
+                    (customs.get("brand") or None) if first else None,
                 ]
             )
         item_spans.append((start, len(rows) - 1))
@@ -317,6 +339,8 @@ def _spec_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[tupl
                 None,
                 _fnum(sum(float(r[10] or 0) for r in body)),
                 None,
+                None,
+                None,
             ]
         )
     return rows, item_spans, pack_spans
@@ -334,19 +358,42 @@ def spec_rows(items: list[dict[str, Any]]) -> list[list[Any]]:
     return _spec_table(items)[0]
 
 
+def _own_value(row_value: Any, header_value: Any) -> str:
+    """Своё значение строки. Список всех заводов через слэш в пустую клетку не подставляется."""
+    row = str(row_value or "").strip()
+    if row:
+        return row
+    head = str(header_value or "").strip()
+    if " / " in head:
+        return ""
+    return head
+
+
+def _second_code(customs: dict[str, Any]) -> str | None:
+    seen: list[str] = []
+    for key in ("tnved_code", "hs_code"):
+        value = str(customs.get(key) or "").strip()
+        if value and value not in seen:
+            seen.append(value)
+    if len(seen) < 2:
+        return None
+    return seen[1]
+
+
 def description_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> list[list[Any]]:
-    # Operator header overrides row manufacturer when set.
-    manufacturer = (header or {}).get("manufacturer") or "BEIJING GOLDLUCK CO., LTD"
-    country = (header or {}).get("country") or "CN"
+    header = header or {}
     rows: list[list[Any]] = []
     for item in items:
         customs = item.get("customs_data") or {}
+        commercial = item.get("commercial_data") or {}
         rows.append(
             [
-                article_with_color(item.get("article"), (item.get("commercial_data") or {}).get("color")),
+                article_with_color(item.get("article"), commercial.get("color")),
                 _desc(item),
-                (header or {}).get("manufacturer") or customs.get("manufacturer") or manufacturer,
-                customs.get("country") or country,
+                _own_value(customs.get("manufacturer"), header.get("manufacturer")),
+                _own_value(customs.get("country"), header.get("country")),
+                customs.get("brand") or None,
+                commercial.get("size") or None,
             ]
         )
     return rows
@@ -354,21 +401,29 @@ def description_rows(items: list[dict[str, Any]], header: dict[str, Any] | None)
 
 def _write_letterhead(ws, kind: str, header: dict[str, Any] | None, cols: int) -> None:
     header = header or {}
-    seller = header.get("seller") or "BEIJING GOLDLUCK CO., LTD"
+    seller = header.get("seller") or ""
     address = header.get("seller_address") or ""
-    if not header.get("seller") and not address:
-        address = "RM.317, NO.33 DENGSHIKOU STREET, DONGCHENG DISTRICT, BEIJING, CHINA"
     buyer = header.get("buyer") or ""
     buyer_address = header.get("buyer_address") or ""
     contract = header.get("contract_no") or ""
     invoice_no = header.get("invoice_no") or ""
     date = header.get("invoice_date") or header.get("date") or ""
     container = header.get("container_no") or header.get("container") or ""
-    ws.append([seller])
-    style_letterhead_row(ws, ws.max_row, cols, company=True)
-    ws.append([address])
-    style_letterhead_row(ws, ws.max_row, cols)
-    ws.append([])
+    consignee = header.get("consignee") or header.get("recipient") or ""
+    consignee_address = header.get("consignee_address") or ""
+    delivery = header.get("delivery_terms") or ""
+    payment = header.get("payment_terms") or ""
+    manufacturer = header.get("manufacturer") or ""
+    if " / " in str(manufacturer):
+        manufacturer = ""
+    if seller:
+        ws.append([seller])
+        style_letterhead_row(ws, ws.max_row, cols, company=True)
+    if address:
+        ws.append([address])
+        style_letterhead_row(ws, ws.max_row, cols)
+    if seller or address:
+        ws.append([])
     if kind == "specification":
         ws.append([f"Specification / Спецификация №: {invoice_no} dated {date}".strip()])
         style_letterhead_row(ws, ws.max_row, cols, title=True)
@@ -394,7 +449,47 @@ def _write_letterhead(ws, kind: str, header: dict[str, Any] | None, cols: int) -
         if container:
             ws.append([None, *pad, f"Container No.: {container}"])
             style_split_letterhead(ws, ws.max_row, cols, split_at=split)
+        if consignee or consignee_address:
+            ws.append([f"Recipient: {consignee}", *pad, f"Add: {consignee_address}"])
+            style_split_letterhead(ws, ws.max_row, cols, split_at=split)
+        if delivery:
+            ws.append([f"Terms of delivery: {delivery}"])
+            style_letterhead_row(ws, ws.max_row, cols)
+        if payment:
+            ws.append([f"Terms of payment: {payment}"])
+            style_letterhead_row(ws, ws.max_row, cols)
+        if manufacturer:
+            ws.append([f"Manufacturer: {manufacturer}"])
+            style_letterhead_row(ws, ws.max_row, cols)
+    if kind == "specification":
+        if buyer:
+            ws.append([f"Buyer: {buyer}"])
+            style_letterhead_row(ws, ws.max_row, cols)
+        if delivery:
+            ws.append([f"Terms of delivery: {delivery}"])
+            style_letterhead_row(ws, ws.max_row, cols)
+        if payment:
+            ws.append([f"Terms of payment: {payment}"])
+            style_letterhead_row(ws, ws.max_row, cols)
     ws.append([])
+
+
+def _write_under_table(ws, header: dict[str, Any] | None, cols: int) -> None:
+    """Текст под таблицей: базис, оплата, банк. Это не товарная строка."""
+    header = header or {}
+    chunks = []
+    if header.get("delivery_terms"):
+        chunks.append(f"Terms of delivery: {header['delivery_terms']}")
+    if header.get("payment_terms"):
+        chunks.append(f"Terms of payment: {header['payment_terms']}")
+    if header.get("bank"):
+        chunks.append(f"Bank: {header['bank']}")
+    if not chunks:
+        return
+    ws.append([])
+    for chunk in chunks:
+        ws.append([chunk])
+        style_letterhead_row(ws, ws.max_row, cols)
 
 
 def _append_table(
@@ -460,14 +555,16 @@ def _append_table(
 
 
 def export_beijing_book(items: list[dict[str, Any]], output_path, header: dict[str, Any] | None = None):
-    ccy = currency_from_sources(items, header) or "CNY"
+    ccy = currency_from_sources(items, header) or ""
     inv_h = invoice_headers(ccy)
+    spec_h = spec_headers(ccy)
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
     inv_rows, inv_spans, inv_pack = _invoice_table(items)
     _write_letterhead(ws, "invoice", header, len(inv_h))
     _append_table(ws, inv_h, inv_rows, item_spans=inv_spans, identity_cols=(1, 2, 3, 4))
+    _write_under_table(ws, header, len(inv_h))
 
     ws_pl = wb.create_sheet("Packing list")
     pl_rows, pl_spans, pl_pack = _packing_table(items)
@@ -481,23 +578,26 @@ def export_beijing_book(items: list[dict[str, Any]], output_path, header: dict[s
         identity_cols=(1, 2, 3),
         pack_cols=(7, 8, 9, 10, 11),
     )
+    _write_under_table(ws_pl, header, len(packing_headers()))
 
     ws_spec = wb.create_sheet("Specification")
     spec_body, spec_spans, spec_pack = _spec_table(items)
-    _write_letterhead(ws_spec, "specification", header, len(spec_headers()))
+    _write_letterhead(ws_spec, "specification", header, len(spec_h))
     _append_table(
         ws_spec,
-        spec_headers(),
+        spec_h,
         spec_body,
         item_spans=spec_spans,
         pack_spans=spec_pack,
         identity_cols=(1, 2, 3, 12),
         pack_cols=(4, 8, 9),
     )
+    _write_under_table(ws_spec, header, len(spec_h))
 
     ws_desc = wb.create_sheet("описание")
     _write_letterhead(ws_desc, "description", header, len(description_headers()))
     _append_table(ws_desc, description_headers(), description_rows(items, header))
+    _write_under_table(ws_desc, header, len(description_headers()))
 
     unfreeze_workbook(wb)
     output_path.parent.mkdir(parents=True, exist_ok=True)

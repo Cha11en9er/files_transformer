@@ -245,6 +245,7 @@ def build_export_preview(
                 "profile_type": "BEIJING",
                 "files": [tsd_preview(products, header, f"ТСД {stem}.xlsx")],
             }
+        ccy = currency_from_sources(products, header) or ""
         return {
             "profile_type": "BEIJING",
             "files": [
@@ -253,11 +254,11 @@ def build_export_preview(
                     "sheets": [
                         {
                             "title": "Invoice",
-                            "headers": invoice_headers(currency_from_sources(products, header) or ""),
+                            "headers": invoice_headers(ccy),
                             "rows": invoice_rows(products),
                         },
                         {"title": "Packing list", "headers": packing_headers(), "rows": packing_rows(products)},
-                        {"title": "Specification", "headers": spec_headers(), "rows": spec_rows(products)},
+                        {"title": "Specification", "headers": spec_headers(ccy), "rows": spec_rows(products)},
                         {"title": "описание", "headers": description_headers(), "rows": description_rows(products, header)},
                     ],
                 }

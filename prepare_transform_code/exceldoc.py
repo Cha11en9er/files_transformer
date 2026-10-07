@@ -9,6 +9,7 @@ from prepare_transform_code.fields import (
     is_header_row,
     is_row_index,
     is_shipper_code,
+    is_size_label,
     is_stop_label,
     role_of,
     roles_of,
@@ -92,6 +93,8 @@ def _role(name, rows):
     found = role_of(head)
     if found != "unknown":
         return found
+    if _calculation(rows):
+        return "draft"
     return "unknown"
 
 
@@ -103,6 +106,15 @@ def _opening_roles(rows):
         if text:
             lines.append(text)
     return roles_of("\n".join(lines))
+
+
+def _calculation(rows):
+    """Колонки проходной, дороги и цены с транспортом — расчёт, не товарный лист."""
+    blob = _join(rows[:8]).lower()
+    return any(
+        mark in blob
+        for mark in ("проходн", "инвойс без дороги", "цена за штуку округл", "стоимость с транспортом")
+    )
 
 
 def _opening_role(rows):
@@ -182,7 +194,7 @@ def _lines(rows):
     pair_unit = _qty_unit(rows[header_idx][mapping["qty"]]) if "qty" in mapping else ""
     header_cells = rows[header_idx]
     lines = []
-    scale = None
+    scale = _label_scale(header_cells, mapping)
     carried = ""
     body = rows[header_idx + 1 :]
     for row in body:
@@ -190,6 +202,15 @@ def _lines(rows):
         if not texts:
             continue
         if is_header_row(row):
+            # Вторая строка той же шапки (перевод) колонками не заменяет первую.
+            # Повтор шапки уже после товара начинает новую размерную сетку.
+            if lines:
+                mapped, _score = _map_row(row)
+                if _header_ready(mapped):
+                    mapping = mapped
+                    header_cells = row
+                    pair_unit = _qty_unit(row[mapping["qty"]]) if "qty" in mapping else ""
+                    scale = _label_scale(row, mapping)
             continue
         if any(is_stop_label(cell) for cell in texts):
             rolls = _roll_total(texts)
@@ -416,7 +437,27 @@ def _size_run(row, scale):
         if count is None or abs(count) < 1e-9:
             continue
         parts.append(f"{token}:{_num_token(count)}")
+    # В подписи уже есть запятая (180-185, XL). Пары тогда делит точка с запятой.
+    if any("," in part.split(":", 1)[0] for part in parts):
+        return "; ".join(parts)
     return ", ".join(parts)
+
+
+def _printed_label(cell):
+    return " ".join(str(cell).replace("\n", " ").split())
+
+
+def _label_scale(row, mapping):
+    """Колонки с подписью размера как на бланке. Две одинаковые подписи — две клетки."""
+    used = {col for col in mapping.values() if isinstance(col, int)}
+    found = []
+    for col, cell in enumerate(row):
+        if col in used or cell in (None, ""):
+            continue
+        if not is_size_label(cell):
+            continue
+        found.append((col, _printed_label(cell)))
+    return found or None
 
 
 def _num_token(number):
@@ -434,46 +475,55 @@ def _bare_measurement(cell):
     return re.search(r"cbm|m3|м3|куб", raw) is None
 
 
+def _map_row(row):
+    mapped = {}
+    score = 0
+    for col, cell in enumerate(row):
+        name = column_of(cell)
+        if not name:
+            continue
+        if name == "hs" and is_shipper_code(cell):
+            if "hs_alt" not in mapped:
+                mapped["hs_alt"] = col
+                # Строка-маркер, не число: цикл по колонкам берёт только int.
+                mapped["_hs_alt_shipper"] = "1"
+            continue
+        if name == "hs" and "hs" in mapped and "hs_alt" not in mapped:
+            mapped["hs_alt"] = col
+            continue
+        if name == "description" and "description" in mapped and "description_2" not in mapped:
+            mapped["description_2"] = col
+            continue
+        if name == "vendor" and "vendor" in mapped and "model" not in mapped:
+            # «Маркировка» с названием фирмы — печать, не вторая модель.
+            if not stamp_header(cell):
+                mapped["model"] = col
+            continue
+        if name in mapped:
+            if name == "volume" and _bare_measurement(row[mapped["volume"]]) and not _bare_measurement(cell):
+                mapped["volume"] = col
+            continue
+        mapped[name] = col
+        score += 2 if name in {"description", "qty", "vendor", "price"} else 1
+    if "hs" not in mapped and "hs_alt" in mapped:
+        mapped["hs"] = mapped.pop("hs_alt")
+        mapped.pop("_hs_alt_shipper", None)
+    return mapped, score
+
+
+def _header_ready(mapped):
+    identity = {"description", "vendor", "model"} & set(mapped)
+    measures = {"qty", "price", "packages"} & set(mapped)
+    return bool(identity and measures)
+
+
 def _header(rows):
     best = None
     best_score = 0
     best_idx = None
     for index, row in enumerate(rows[:40]):
-        mapped = {}
-        score = 0
-        for col, cell in enumerate(row):
-            name = column_of(cell)
-            if not name:
-                continue
-            if name == "hs" and is_shipper_code(cell):
-                if "hs_alt" not in mapped:
-                    mapped["hs_alt"] = col
-                    # Строка-маркер, не число: цикл по колонкам берёт только int.
-                    mapped["_hs_alt_shipper"] = "1"
-                continue
-            if name == "hs" and "hs" in mapped and "hs_alt" not in mapped:
-                mapped["hs_alt"] = col
-                continue
-            if name == "description" and "description" in mapped and "description_2" not in mapped:
-                mapped["description_2"] = col
-                continue
-            if name == "vendor" and "vendor" in mapped and "model" not in mapped:
-                # «Маркировка» с названием фирмы — печать, не вторая модель.
-                if not stamp_header(cell):
-                    mapped["model"] = col
-                continue
-            if name in mapped:
-                if name == "volume" and _bare_measurement(row[mapped["volume"]]) and not _bare_measurement(cell):
-                    mapped["volume"] = col
-                continue
-            mapped[name] = col
-            score += 2 if name in {"description", "qty", "vendor", "price"} else 1
-        identity = {"description", "vendor", "model"} & set(mapped)
-        measures = {"qty", "price", "packages"} & set(mapped)
-        if "hs" not in mapped and "hs_alt" in mapped:
-            mapped["hs"] = mapped.pop("hs_alt")
-            mapped.pop("_hs_alt_shipper", None)
-        if score > best_score and identity and measures:
+        mapped, score = _map_row(row)
+        if score > best_score and _header_ready(mapped):
             best = mapped
             best_score = score
             best_idx = index

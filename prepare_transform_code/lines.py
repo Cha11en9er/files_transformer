@@ -208,14 +208,31 @@ def _cell_text(value):
     return collapse_letter_spacing(" ".join(str(value).replace("\n", " ").split()))
 
 
+_EXCEL_ERROR = re.compile(r"^#(?:REF!|VALUE!|N/A|NAME\?|DIV/0!|NULL!|NUM!|GETTING_DATA!)$", re.I)
+
+
+def description_holds(current, extra):
+    """Кусок, который уже есть по одну сторону слэша, вторым описанием не клеится."""
+    current_n = " ".join(str(current or "").casefold().split())
+    extra_n = " ".join(str(extra or "").casefold().split())
+    if not current_n or not extra_n:
+        return False
+    if extra_n in current_n:
+        return True
+    parts = [part.strip() for part in re.split(r"\s*/+\s*", current_n) if part.strip()]
+    return extra_n in parts
+
+
 def assign_cell(line, name, value, header_is_package=False):
     if value is None or value == "":
         return
-    if isinstance(value, str) and value.startswith("="):
+    if isinstance(value, str) and (value.startswith("=") or _EXCEL_ERROR.match(value.strip())):
         return
     if name == "description":
         text = " ".join(str(value).replace("\n", " ").split())
         if not text:
+            return
+        if line.description and description_holds(line.description, text):
             return
         if line.description and text not in line.description:
             line.description = line.description + " // " + text
@@ -329,7 +346,19 @@ def fold_parts(lines):
             continue
         folded.append(_collapse_group(group))
         index = cursor
+    _blank_zero_volume(folded)
     return folded
+
+
+def _blank_zero_volume(lines):
+    """Нули во всей колонке объёма при ненулевом весе — пустая графа, не измеренный ноль."""
+    volumes = [line.volume for line in lines if line.volume is not None]
+    if not volumes or any(abs(value) > 1e-9 for value in volumes):
+        return
+    if not any((line.net or 0) or (line.gross or 0) for line in lines):
+        return
+    for line in lines:
+        line.volume = None
 
 
 def _drop_description_echoes(lines):

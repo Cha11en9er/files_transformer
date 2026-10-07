@@ -368,13 +368,16 @@ def fill_from_catalog(lots: list[dict[str, Any]], catalog: CatalogIndex) -> None
                 lot["description"] = text
 
 
-def _one_producer(lots: list[dict[str, Any]]) -> str:
+def _shared_producer(lots: list[dict[str, Any]]) -> str:
+    """Один завод на всю поставку можно в шапку. Разные заводы строк в одну строку не склеивать."""
     found: list[str] = []
     for lot in lots:
         value = str(lot.get("producer") or "").strip()
         if value and value not in found:
             found.append(value)
-    return " / ".join(found)
+    if len(found) == 1:
+        return found[0]
+    return ""
 
 
 def header_from_draft(draft: dict[str, Any], lots: list[dict[str, Any]]) -> dict[str, str]:
@@ -392,9 +395,12 @@ def header_from_draft(draft: dict[str, Any], lots: list[dict[str, Any]]) -> dict
         "invoice_no": text("invoice_no"),
         "invoice_date": text("invoice_date"),
         "delivery_terms": text("delivery"),
+        "consignee": text("consignee"),
+        "payment_terms": text("payment"),
+        "bank": text("bank"),
         # Валюта черновика — та, что у колонки цены, в написании документа (RMB, а не CNY). Иначе экспорт ставит дефолт.
         "currency": text("currency_printed") or text("currency"),
-        "manufacturer": _one_producer(lots),
+        "manufacturer": text("manufacturer") or _shared_producer(lots),
     }
 
 
@@ -581,6 +587,12 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
             commercial["price"] = lot.get("price")
         if _filled(lot.get("amount")):
             commercial["amount"] = lot.get("amount")
+        if _filled(lot.get("finish")):
+            commercial["color"] = lot.get("finish")
+        if _filled(lot.get("size")):
+            commercial["size"] = lot.get("size")
+        if _filled(lot.get("model")):
+            commercial["model"] = lot.get("model")
         if _filled(lot.get("packages")):
             packing["rolls"] = lot.get("packages")
         # Вид места и паллеты — отдельно от числа мест. Иначе «2150 коробок и 20 паллет» превращается в 2150 рулонов.
@@ -621,6 +633,8 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
             customs["description_ru"] = desc_ru
         if _filled(lot.get("producer")):
             customs["manufacturer"] = lot.get("producer")
+        if _filled(lot.get("brand")):
+            customs["brand"] = lot.get("brand")
         if _filled(lot.get("origin")):
             customs["country"] = lot.get("origin")
         errors = []
