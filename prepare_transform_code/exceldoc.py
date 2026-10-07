@@ -16,6 +16,7 @@ from prepare_transform_code.fields import (
 )
 from prepare_transform_code.lines import (
     Line,
+    apply_mfr_brand_cell,
     assign_cell,
     attach_pallet,
     fold_parts,
@@ -231,6 +232,9 @@ def _lines(rows):
                 continue
             field = "description" if name == "description_2" else name
             if field == "vendor" and is_row_index(header_cells[col] if col < len(header_cells) else "", row[col]):
+                continue
+            header_text = header_cells[col] if col < len(header_cells) else ""
+            if apply_mfr_brand_cell(line, header_text, row[col]):
                 continue
             assign_cell(line, field, row[col], header_is_package=False)
         if _section_title(line.description):
@@ -579,20 +583,55 @@ def _xls(path):
 
 def _fill_merges(rows, merges):
     """Пустая клетка под текстом в той же колонке слитого диапазона его получает.
-    Число вниз не копируется: количество и вес, закрывающие несколько строк, не становятся числом каждой из них."""
+    Число вниз не копируется: количество и вес, закрывающие несколько строк, не становятся числом каждой из них.
+    Код ТН ВЭД в слитой клетке относится к строкам блока. Число мест, если верхняя строка блока пустая, садится на первую строку с товаром."""
     for rlo, rhi, clo, chi in merges:
         if rhi - rlo < 2:
             continue
         for c in range(clo, chi):
             source = None
+            source_at = None
             for r in range(rlo, rhi):
                 if r >= len(rows):
                     break
                 row = rows[r]
                 if c < len(row) and row[c] not in (None, ""):
                     source = row[c]
+                    source_at = r
                     break
-            if source in (None, "") or _pure_number(source):
+            if source in (None, ""):
+                continue
+            if _hs_identity(source):
+                for r in range(rlo, rhi):
+                    if r >= len(rows):
+                        break
+                    row = rows[r]
+                    while len(row) <= c and len(row) < 40:
+                        row.append(None)
+                    if c < len(row) and row[c] in (None, ""):
+                        row[c] = source
+                continue
+            if _pure_number(source):
+                goods_at = None
+                for r in range(rlo, rhi):
+                    if r >= len(rows):
+                        break
+                    row = rows[r]
+                    others = [cell for i, cell in enumerate(row) if i != c and cell not in (None, "")]
+                    if others:
+                        goods_at = r
+                        break
+                if (
+                    goods_at is not None
+                    and source_at is not None
+                    and goods_at != source_at
+                ):
+                    dest = rows[goods_at]
+                    while len(dest) <= c and len(dest) < 40:
+                        dest.append(None)
+                    if c < len(dest) and dest[c] in (None, ""):
+                        dest[c] = source
+                        rows[source_at][c] = None
                 continue
             for r in range(rlo, rhi):
                 if r >= len(rows):
@@ -613,3 +652,16 @@ def _pure_number(value):
     if not text or re.search(r"[A-Za-zА-Яа-яЁё]", text):
         return False
     return parse_number(text) is not None
+
+
+def _hs_identity(value):
+    """8-12 цифр в слитой клетке — код товара блока, не количество каждой строки."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        if abs(value - round(value)) > 1e-9:
+            return False
+        digits = str(abs(int(round(value))))
+        return 8 <= len(digits) <= 12
+    text = str(value or "").strip().replace(" ", "").replace(".", "")
+    return bool(re.fullmatch(r"\d{8,12}", text))

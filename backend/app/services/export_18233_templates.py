@@ -133,6 +133,11 @@ def element_spec_headers(ccy: str = "CNY") -> list[str]:
         "G.W, kg / Вес Брутто, кг",
         f"Price per unit / Цена за единицу, {word}",
         f"Total price / Цена, {word}",
+        "Brand / Торговая марка",
+        "Manufacturer / Производитель",
+        "Country of origin / Страна происхождения",
+        "Color / Цвет",
+        "Size / Размер",
     ]
 
 
@@ -564,6 +569,11 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
                     gw,
                     price,
                     amount,
+                    customs.get("brand") or "",
+                    customs.get("manufacturer") or "",
+                    customs.get("country") or "",
+                    commercial.get("color") or "",
+                    commercial.get("size") or "",
                 ]
             )
         sums["rolls"] += float(rolls or 0)
@@ -607,6 +617,11 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
                 _r2(sums["gw"]),
                 None,
                 _r2(sums["amount"]),
+                None,
+                None,
+                None,
+                None,
+                None,
             ]
         )
     return rows
@@ -925,9 +940,10 @@ def fill_specification_template(
         else:
             _write_mapped_row(ws, data_start + offset, colmap, values)
         extra = {
-            "country": (header or {}).get("country") or ((products[offset].get("customs_data") if offset < len(products) else {}) or {}).get("country") or "КИТАЙ",
+            "country": ((products[offset].get("customs_data") if offset < len(products) else {}) or {}).get("country")
+            or (header or {}).get("country")
+            or "",
             "manufacturer": ((products[offset].get("customs_data") if offset < len(products) else {}) or {}).get("manufacturer")
-            or (header or {}).get("manufacturer")
             or "",
         }
         if offset < len(products):
@@ -946,6 +962,12 @@ def fill_specification_template(
                         _set_cell(ws, data_start + offset, col, products[offset].get("article"))
                     elif "hs" in title:
                         _set_cell(ws, data_start + offset, col, (products[offset].get("customs_data") or {}).get("hs_code"))
+                    elif "brand" in title or "марка" in title or "товарный знак" in title:
+                        _set_cell(ws, data_start + offset, col, (products[offset].get("customs_data") or {}).get("brand"))
+                    elif "color" in title or "цвет" in title:
+                        _set_cell(ws, data_start + offset, col, (products[offset].get("commercial_data") or {}).get("color"))
+                    elif "size" in title or "размер" in title:
+                        _set_cell(ws, data_start + offset, col, (products[offset].get("commercial_data") or {}).get("size"))
     if data_start + len(rows) - 1 != total_row:
         # total already written as last data row
         pass

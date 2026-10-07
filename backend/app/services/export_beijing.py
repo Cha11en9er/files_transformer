@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
@@ -17,6 +19,11 @@ from app.services.export_style import (
     unfreeze_workbook,
 )
 from app.services.field_map import is_factory_note, parse_number
+
+_ROOT = Path(__file__).resolve().parents[3]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from prepare_transform_code.fields import is_factory_list
 
 NUM_FMT = "0.00"
 NUM_FMT_4 = "0.0000"
@@ -361,10 +368,10 @@ def spec_rows(items: list[dict[str, Any]]) -> list[list[Any]]:
 def _own_value(row_value: Any, header_value: Any) -> str:
     """Своё значение строки. Список всех заводов через слэш в пустую клетку не подставляется."""
     row = str(row_value or "").strip()
-    if row:
+    if row and not is_factory_list(row):
         return row
     head = str(header_value or "").strip()
-    if " / " in head:
+    if not head or is_factory_list(head) or " / " in head:
         return ""
     return head
 
@@ -414,7 +421,7 @@ def _write_letterhead(ws, kind: str, header: dict[str, Any] | None, cols: int) -
     delivery = header.get("delivery_terms") or ""
     payment = header.get("payment_terms") or ""
     manufacturer = header.get("manufacturer") or ""
-    if " / " in str(manufacturer):
+    if " / " in str(manufacturer) or is_factory_list(manufacturer):
         manufacturer = ""
     if seller:
         ws.append([seller])

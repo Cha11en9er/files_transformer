@@ -212,6 +212,45 @@ class LanguageTest(unittest.TestCase):
         self.assertNotIn("Master", sides["buyer"])
         self.assertIn("Master", sides["consignee"])
         self.assertNotIn("Logiya", sides["consignee"])
+        delayed = party_after(
+            "THE BUYER: RECIPIENT:\n"
+            "THE DELIVERY BASIS: DAP Ussuriysk\n"
+            "Logiya DV LLC Master LLC\n"
+            "Address: 690091, Russia, Vladivostok\n"
+            "Address: 196006, Russia, St. Petersburg, Zastavskaya 22"
+        )
+        self.assertIn("Logiya", delayed["buyer"])
+        self.assertNotIn("Master", delayed["buyer"])
+        self.assertIn("Master", delayed["consignee"])
+        self.assertNotIn("Logiya", delayed["consignee"])
+        three = party_after(
+            "SELLER: BUYER: CONSINGNEE:\n"
+            "WELCOME YAPI MAKINA SANAYI TICARET LIMITED SIRKETI «Techexpo» LLC Master LLC"
+        )
+        self.assertIn("WELCOME YAPI", three["seller"])
+        self.assertIn("SIRKETI", three["seller"])
+        self.assertIn("Techexpo", three["buyer"])
+        self.assertNotIn("Master", three["buyer"])
+        self.assertIn("Master", three["consignee"])
+        from prepare_transform_code.fields import is_factory_list, is_mfr_brand_header
+        from prepare_transform_code.lines import Line, apply_mfr_brand_cell, description_holds
+
+        self.assertTrue(is_factory_list("Utmaster Co., Ltd / ZHEJIANG WOXIN / CIXI YUXIAO / Anhui Jianghuai"))
+        self.assertFalse(is_factory_list("Utmaster Import and Export Co., Ltd / foodsol"))
+        self.assertTrue(is_mfr_brand_header("MANUFACTURER / BRAND / Производитель"))
+        cell = Line()
+        apply_mfr_brand_cell(cell, "MANUFACTURER / BRAND", "Utmaster Import and Export Co., Ltd / foodsol")
+        self.assertIn("Utmaster", cell.producer)
+        self.assertEqual(cell.brand, "foodsol")
+        listed = Line()
+        apply_mfr_brand_cell(
+            listed,
+            "MANUFACTURER / BRAND",
+            "Utmaster Co., Ltd / ZHEJIANG WOXIN / CIXI YUXIAO / Anhui Jianghuai",
+        )
+        self.assertFalse(listed.producer)
+        self.assertTrue(description_holds("Палатка/Tent", "Палатка"))
+        self.assertTrue(description_holds("Палатка / Tent // Палатка", "Палатка"))
         self.assertEqual(_INVOICE_NO.search("No INVOICE RU30006").group(1), "RU30006")
         self.assertEqual(_INVOICE_NO.search("INVOICE NO: SG1251").group(1), "SG1251")
         self.assertEqual(_INVOICE_NO.search("INVOICE No. CI240301RU").group(1), "CI240301RU")
@@ -1077,6 +1116,17 @@ class Shipment20Test(unittest.TestCase):
         self.assertNotIn("Package 1", lot["description"])
         self.assertEqual(sum(1 for doc in result["documents"] if doc["role"] == "packing"), 11)
         self.assertTrue(all(doc["line_count"] == 1 for doc in result["documents"] if doc["line_count"]))
+
+
+class SpecCodeOverlayTest(unittest.TestCase):
+    def test_hs_comes_from_specification_by_name(self):
+        from prepare_transform_code.join import build_lots
+        from prepare_transform_code.lines import Line
+
+        invoice = [Line(description="BAR PROFILE", pieces=10, price=2, amount=20)]
+        spec = [Line(description="BAR PROFILE SILVER", pieces=10, hs="7604299000")]
+        lots, _freights = build_lots(invoice, [], spec)
+        self.assertEqual(lots[0]["hs"], "7604299000")
 
 
 class ForeignSheetTest(unittest.TestCase):

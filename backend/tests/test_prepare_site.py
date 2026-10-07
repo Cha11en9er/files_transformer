@@ -107,6 +107,13 @@ def test_different_factories_are_not_joined_into_the_header() -> None:
     assert header["manufacturer"] == ""
     single = header_from_draft({}, [_lot(producer="Only Plant")])
     assert single["manufacturer"] == "Only Plant"
+    listed = header_from_draft(
+        {"consignee": "Master LLC", "consignee_address": "Zastavskaya 22"},
+        [_lot(producer="Utmaster Co., Ltd / ZHEJIANG WOXIN / CIXI YUXIAO / Anhui Jianghuai")],
+    )
+    assert listed["manufacturer"] == ""
+    assert listed["consignee"] == "Master LLC"
+    assert listed["consignee_address"] == "Zastavskaya 22"
 
 
 def test_color_brand_and_size_reach_the_row() -> None:
@@ -140,6 +147,15 @@ def test_empty_model_currency_does_not_wipe_the_draft() -> None:
     payload = {"header": {"currency": ""}}
     out = overlay_model_header(header, payload)
     assert out["currency"] == "USD"
+
+
+def test_model_can_set_consignee_apart_from_buyer() -> None:
+    header = {"buyer": "Logiya DV LLC", "consignee": "Logiya DV LLC"}
+    payload = {"header": {"consignee": "Master LLC", "consignee_address": "Zastavskaya 22"}}
+    out = overlay_model_header(header, payload)
+    assert out["consignee"] == "Master LLC"
+    assert out["consignee_address"] == "Zastavskaya 22"
+    assert out["buyer"] == "Logiya DV LLC"
 
 
 def test_reference_file_stays_out_of_goods() -> None:
@@ -403,8 +419,8 @@ def test_dt_sheet_follows_the_scheme_and_leaves_gaps_empty() -> None:
     assert col("Описание", body[0]) == "Long name"
     second_description = [i for i, name in enumerate(headers) if name == "Описание"][1]
     assert body[0][second_description] is None
-    assert col("ТЗ", body[0]) is None
-    assert col("марка", body[0]) == "Micama"
+    assert col("ТЗ", body[0]) == "Micama"
+    assert col("марка", body[0]) is None
     assert col("модель", body[0]) == "M-1"
     assert col("модель", body[1]) is None
     assert col("поддоны кол-во", body[0]) == 2

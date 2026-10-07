@@ -10,6 +10,7 @@ alwaysApply: true
 ```
 python study_tools/dump_shipment.py "documents/7_pravka/Дегон"
 python study_tools/dump_shipment.py "documents/7_pravka/Дегон" --rows 80 --pdf-pages 1 --no-pdf
+python study_tools/dump_shipment.py --headers documents_final documents/4_pravka documents/5_pravka documents/6_pravka documents/7_pravka "documents/я_тестирую"
 ```
 
 Снимок каждый раз перезаписывает `study_tools/out/dump.txt`. Распаковка zip лежит в `study_tools/out/unzip` и на следующем запуске очищается. Второй скрипт и второй файл вывода не заводить.

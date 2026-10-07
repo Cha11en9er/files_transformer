@@ -7,6 +7,8 @@ column — the same shape as a finished-goods invoice/packing/specification PDF.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
@@ -20,6 +22,11 @@ from app.services.export_style import (
     unfreeze_workbook,
 )
 from app.services.field_map import is_factory_note, parse_number
+
+_ROOT = Path(__file__).resolve().parents[3]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from prepare_transform_code.fields import is_factory_list
 
 def _party_address(text: str | None, *, seller: bool) -> str:
     return split_party_address(text, seller=seller) or ""
@@ -130,7 +137,9 @@ def _mfr(item: dict[str, Any], header: dict[str, Any] | None) -> str:
     customs = item.get("customs_data") or {}
     row = str(customs.get("manufacturer") or "").strip()
     head = str((header or {}).get("manufacturer") or "").strip()
-    if " / " in head:
+    if is_factory_list(row):
+        row = ""
+    if is_factory_list(head) or " / " in head:
         head = ""
     name = row or head
     brand = str(customs.get("brand") or "").strip()
@@ -589,10 +598,10 @@ def _plain(value: Any) -> str:
 def _dt_producer(item: dict[str, Any], header: dict[str, Any] | None) -> str:
     """Завод своей строки. Список заводов и марка в эту клетку не клеятся."""
     row = _plain((item.get("customs_data") or {}).get("manufacturer"))
-    if row:
+    if row and not is_factory_list(row):
         return row
     head = _plain((header or {}).get("manufacturer"))
-    if not head or "/" in head:
+    if not head or is_factory_list(head) or "/" in head:
         return ""
     return head
 
@@ -619,8 +628,9 @@ def _dt_values(item: dict[str, Any], header: dict[str, Any] | None, index: int) 
         "Код ТН ВЭД": _hs(item) or None,
         "Описание": _desc(item) or None,
         "Изготовитель": _dt_producer(item, header) or None,
+        "ТЗ": _plain(customs.get("brand")) or None,
         "артикул": _dt_article(item) or None,
-        "марка": _plain(customs.get("brand")) or None,
+        "марка": None,
         "модель": _plain(commercial.get("model")) or None,
         "размер": _plain(commercial.get("size")) or None,
         "кол-во товара": _count(_qty(item)),

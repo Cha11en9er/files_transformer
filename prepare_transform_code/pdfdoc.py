@@ -4,6 +4,7 @@ import pdfplumber
 
 from prepare_transform_code.fields import (
     column_of,
+    is_factory_list,
     is_header_row,
     is_row_index,
     is_shipper_code,
@@ -14,6 +15,7 @@ from prepare_transform_code.fields import (
 )
 from prepare_transform_code.lines import (
     Line,
+    apply_mfr_brand_cell,
     assign_cell,
     attach_pallet,
     fold_parts,
@@ -246,6 +248,8 @@ def _table_lines(table, boxes, words, table_box, inherited):
                 header_cell = table[header_idx][col]
             if name == "vendor" and is_row_index(header_cell, row[col]):
                 continue
+            if apply_mfr_brand_cell(line, header_cell, row[col]):
+                continue
             assign_cell(line, name, row[col], header_is_package=(mapping.get("packages") == col))
         unit_col = mapping.get("unit")
         mapped_cols = {col for key, col in mapping.items() if isinstance(col, int)}
@@ -407,6 +411,8 @@ def _assign_shared(line, names, value):
     """Один столбец, две подписи. Слэш делит клетку. Без слэша одно число — и модель, и артикул."""
     text = " ".join(str(value or "").replace("\n", " ").split())
     if not text:
+        return
+    if "producer" in names and is_factory_list(text):
         return
     parts = [part.strip() for part in re.split(r"\s*/\s*", text) if part.strip()]
     if len(parts) >= 2:
@@ -674,6 +680,8 @@ def _band_line(band, columns):
         if not text or not col["name"]:
             continue
         if col["name"] == "vendor" and is_row_index(col["text"], text):
+            continue
+        if apply_mfr_brand_cell(line, col["text"], text):
             continue
         assign_cell(line, col["name"], text, header_is_package=(col["name"] == "packages"))
         if col["name"] == "price" and line.amount is None:

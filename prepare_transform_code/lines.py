@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass, field
 
+from prepare_transform_code.fields import is_factory_list, is_mfr_brand_header
 from prepare_transform_code.numbers import (
     collapse_letter_spacing,
     is_package_text,
@@ -219,8 +220,27 @@ def description_holds(current, extra):
         return False
     if extra_n in current_n:
         return True
-    parts = [part.strip() for part in re.split(r"\s*/+\s*", current_n) if part.strip()]
-    return extra_n in parts
+    parts = [part.strip() for part in re.split(r"\s*(?://|/+)\s*", current_n) if part.strip()]
+    return extra_n in parts or any(extra_n in part for part in parts)
+
+
+def apply_mfr_brand_cell(line, header, value):
+    """MANUFACTURER / BRAND: до слэша завод строки, после слэша знак. Список заводов не класть."""
+    if not is_mfr_brand_header(header):
+        return False
+    raw = " ".join(str(value).replace("\n", " ").split()) if value not in (None, "") else ""
+    if not raw or is_factory_list(raw):
+        return True
+    parts = [part.strip() for part in re.split(r"\s*/\s*", raw) if part.strip()]
+    if len(parts) >= 2:
+        if not line.producer:
+            line.producer = parts[0]
+        mark = " / ".join(parts[1:])
+        if mark and mark not in {"-", "—", "–", "/"} and not line.brand:
+            line.brand = mark
+    elif not line.producer:
+        line.producer = raw
+    return True
 
 
 def assign_cell(line, name, value, header_is_package=False):
@@ -244,6 +264,8 @@ def assign_cell(line, name, value, header_is_package=False):
         # Колонка CODE с числом из 8–10 цифр — это ТН ВЭД, не артикул.
         if name == "vendor" and text and not line.hs and re.fullmatch(r"\d{8,10}", text):
             line.hs = text
+            return
+        if name == "producer" and is_factory_list(text):
             return
         if name == "brand" and text in {"-", "—", "–", "/"}:
             return
