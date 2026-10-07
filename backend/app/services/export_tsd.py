@@ -125,17 +125,26 @@ def _ru_desc(item: dict[str, Any]) -> str:
 
 
 def _mfr(item: dict[str, Any], header: dict[str, Any] | None) -> str:
-    # Operator header is the shipment-level override; then per-row customs.
-    header_mfr = str((header or {}).get("manufacturer") or "").strip()
-    if header_mfr:
-        return header_mfr
+    """Завод строки. Список всех заводов поставки в клетку не подставляется.
+    Колонка MANUFACTURER / BRAND: до слэша завод, после слэша марка."""
     customs = item.get("customs_data") or {}
-    return str(customs.get("manufacturer") or "")
+    row = str(customs.get("manufacturer") or "").strip()
+    head = str((header or {}).get("manufacturer") or "").strip()
+    if " / " in head:
+        head = ""
+    name = row or head
+    brand = str(customs.get("brand") or "").strip()
+    if brand and brand.casefold() not in name.casefold():
+        return f"{name} / {brand}".strip(" /")
+    return name
 
 
-def _country(item: dict[str, Any]) -> str:
+def _country(item: dict[str, Any], header: dict[str, Any] | None = None) -> str:
     customs = item.get("customs_data") or {}
-    return str(customs.get("country") or "CN")
+    row = str(customs.get("country") or "").strip()
+    if row:
+        return row
+    return str((header or {}).get("country") or "").strip()
 
 
 def _net(item: dict[str, Any]) -> Any:
@@ -230,11 +239,13 @@ def _write_invoice_letterhead(ws, header: dict[str, Any], cols: int) -> None:
     ws.append([None, *pad, spec_line])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
     ws.append([])
+    recipient = header.get("consignee") or header.get("recipient") or ""
+    recipient_address = header.get("consignee_address") or header.get("recipient_address") or ""
     ws.append(["THE BUYER:", *pad, "RECIPIENT:"])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split)
-    ws.append([buyer, *pad, buyer])
+    ws.append([buyer, *pad, recipient])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
-    ws.append([f"Address: {buyer_address}".strip(), *pad, f"Address: {buyer_address}".strip()])
+    ws.append([f"Address: {buyer_address}".strip(), *pad, f"Address: {recipient_address}".strip()])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
     ws.row_dimensions[ws.max_row].height = 36
     if delivery:
@@ -267,9 +278,11 @@ def _write_packing_letterhead(ws, header: dict[str, Any], cols: int) -> None:
     style_letterhead_row(ws, ws.max_row, cols)
     ws.append([])
     split = min(5, cols)
+    recipient = header.get("consignee") or header.get("recipient") or ""
+    recipient_address = header.get("consignee_address") or header.get("recipient_address") or ""
     ws.append(["THE SELLER:", None, "THE BUYER:", None, "RECIPIENT:"])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split)
-    ws.append([seller, None, buyer, None, buyer])
+    ws.append([seller, None, buyer, None, recipient])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
     ws.append(
         [
@@ -277,7 +290,7 @@ def _write_packing_letterhead(ws, header: dict[str, Any], cols: int) -> None:
             None,
             f"Address: {buyer_address}".strip(),
             None,
-            f"Address: {buyer_address}".strip(),
+            f"Address: {recipient_address}".strip(),
         ]
     )
     style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
@@ -374,6 +387,7 @@ def spec_headers(ccy: str) -> list[str]:
         f"СТОИМОСТЬ, {ccy} / Amount, {ccy}",
         "ЕД.ИЗМ. / Unit",
         f"СТ-СТЬ {ccy} / Unit price, {ccy}",
+        "РАЗМЕР / Size",
     ]
 
 
@@ -386,7 +400,7 @@ def invoice_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
                 idx,
                 _hs(item),
                 _desc(item),
-                _country(item),
+                _country(item, header),
                 item.get("article") or "",
                 _mfr(item, header),
                 net,
@@ -434,7 +448,7 @@ def packing_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
                 net,
                 net,
                 _fnum(_gross(item)),
-                _country(item),
+                _country(item, header),
             ]
         )
     if rows:
@@ -466,7 +480,7 @@ def spec_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> lis
                 _desc(item),
                 item.get("article") or "",
                 _mfr(item, header),
-                _country(item),
+                _country(item, header),
                 _count(_qty(item)),
                 _unit(item),
                 _fnum(_gross(item)),
@@ -475,6 +489,7 @@ def spec_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> lis
                 _fnum(_price(item), 4),
                 _unit(item),
                 _fnum(_amount(item)),
+                (item.get("commercial_data") or {}).get("size") or None,
             ]
         )
     if rows:
@@ -493,6 +508,7 @@ def spec_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> lis
                 None,
                 None,
                 _fnum(sum(float(r[11] or 0) for r in body)),
+                None,
             ]
         )
     return rows
@@ -517,51 +533,140 @@ def description_rows(items: list[dict[str, Any]], header: dict[str, Any] | None)
     return rows
 
 
+# Порядок листа ДЛЯ ДТ. Пустой заголовок — столбец схемы без имени, имя ему не даём.
+# Суммируются только штуки, места, нетто, брутто и сумма. Кол-во упак — то же число мест.
+_DT_COUNT = {"кол-во товара", "кол-во мест", "Кол-во упак"}
+_DT_MONEY = {"брутто", "нетто", "ст-ть товара"}
+
+
 def dt_headers() -> list[str]:
     return [
+        "№",
         "Код ТН ВЭД",
         "Описание",
         "Описание в группе",
         "Изготовитель",
+        "ТЗ",
         "артикул",
+        "марка",
+        "модель",
+        "серийный номер",
+        "размер",
         "кол-во товара",
         "Ед.изм.",
         "цена за ед. товара",
         "кол-во мест",
+        "доп.единица",
+        "Код наличия упаковки",
+        "Код упаковки",
+        "Кол-во упак",
+        "контейнер",
+        "поддоны кол-во",
+        "номера контейнеры",
+        "признак заполнения",
+        "страна происхождения",
+        "брутто",
+        "нетто",
+        "нетто без упаковки",
+        "ст-ть товара",
+        "номер инвойса",
+        "дата инвойса",
+        "Валюта инвойса",
+        "Описание",
+        "",
+        "ИТС по запросу",
+        "ИТС цена/нетто",
+        "Декларация соответствия",
+        "",
+        "",
     ]
 
 
+def _plain(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _dt_producer(item: dict[str, Any], header: dict[str, Any] | None) -> str:
+    """Завод своей строки. Список заводов и марка в эту клетку не клеятся."""
+    row = _plain((item.get("customs_data") or {}).get("manufacturer"))
+    if row:
+        return row
+    head = _plain((header or {}).get("manufacturer"))
+    if not head or "/" in head:
+        return ""
+    return head
+
+
+def _dt_article(item: dict[str, Any]) -> str:
+    text = _plain(item.get("article"))
+    return "" if text == "-" else text
+
+
+def _dt_unit(item: dict[str, Any]) -> str:
+    commercial = item.get("commercial_data") or {}
+    packing = item.get("packing_data") or {}
+    return _plain(commercial.get("unit") or packing.get("unit"))
+
+
+def _dt_values(item: dict[str, Any], header: dict[str, Any] | None, index: int) -> dict[str, Any]:
+    commercial = item.get("commercial_data") or {}
+    packing = item.get("packing_data") or {}
+    customs = item.get("customs_data") or {}
+    places = _count(_packages(item))
+    pallets = packing.get("pallets")
+    return {
+        "№": index,
+        "Код ТН ВЭД": _hs(item) or None,
+        "Описание": _desc(item) or None,
+        "Изготовитель": _dt_producer(item, header) or None,
+        "артикул": _dt_article(item) or None,
+        "марка": _plain(customs.get("brand")) or None,
+        "модель": _plain(commercial.get("model")) or None,
+        "размер": _plain(commercial.get("size")) or None,
+        "кол-во товара": _count(_qty(item)),
+        "Ед.изм.": _dt_unit(item) or None,
+        "цена за ед. товара": _fnum(_price(item), 4),
+        "кол-во мест": places,
+        "Код упаковки": _plain(packing.get("package_type")) or None,
+        "Кол-во упак": places,
+        "поддоны кол-во": _count(pallets) if pallets not in (None, "") else None,
+        "страна происхождения": _plain(customs.get("country")) or None,
+        "брутто": _fnum(_gross(item)),
+        "нетто": _fnum(_net(item)),
+        "ст-ть товара": _fnum(_amount(item)),
+    }
+
+
 def dt_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> list[list[Any]]:
+    headers = dt_headers()
+    # Два столбца «Описание»: первое имя — длинное, второе короткое в лот не кладётся.
+    seen_description = False
+    keys: list[str] = []
+    for title in headers:
+        if title == "Описание" and seen_description:
+            keys.append("")
+            continue
+        if title == "Описание":
+            seen_description = True
+        keys.append(title)
     rows: list[list[Any]] = []
-    for item in items:
-        rows.append(
-            [
-                _hs(item),
-                _desc(item),
-                _ru_desc(item) or _desc(item),
-                _mfr(item, header),
-                item.get("article") or "",
-                _count(_qty(item)),
-                _unit(item),
-                _fnum(_price(item), 4),
-                _count(_packages(item)),
-            ]
-        )
-    if rows:
-        body = rows[:]
-        rows.append(
-            [
-                None,
-                None,
-                None,
-                None,
-                None,
-                _count(sum(float(r[5] or 0) for r in body)),
-                None,
-                None,
-                _count(sum(float(r[8] or 0) for r in body)),
-            ]
-        )
+    for index, item in enumerate(items, start=1):
+        values = _dt_values(item, header, index)
+        rows.append([values.get(key) if key else None for key in keys])
+    if not rows:
+        return rows
+    body = rows[:]
+    total: list[Any] = []
+    for pos, title in enumerate(headers):
+        if title not in _DT_COUNT and title not in _DT_MONEY:
+            total.append(None)
+            continue
+        nums = [float(row[pos]) for row in body if isinstance(row[pos], (int, float))]
+        if not nums:
+            total.append(None)
+            continue
+        total.append(_count(sum(nums)) if title in _DT_COUNT else _fnum(sum(nums)))
+    rows.append(total)
     return rows
 
 

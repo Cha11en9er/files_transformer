@@ -80,6 +80,10 @@ def analyze(folder):
     if invoice is None:
         invoice = _pick(documents, "proforma", prefer_pdf=True)
     specification = _pick(documents, "specification", prefer_pdf=False)
+    # Лист с #REF! и без чисел не база, если рядом есть таблица с количеством и ценой.
+    if invoice is not None and not _has_measures(invoice):
+        if specification is not None and _has_measures(specification):
+            invoice = None
     packings = [doc for doc in documents if _is_role(doc, "packing") and doc["lines"]]
     weight_conflict = len(packings) > 1 and _weights_differ(packings)
     packing_lines = []
@@ -103,12 +107,20 @@ def analyze(folder):
         flags.append("hs_conflict")
     if any(lot.get("packages_conflict") for lot in lots):
         flags.append("packages_conflict")
-    header_docs = [doc for doc in documents if _counts_for_header(doc, _header_anchors(documents))]
+    anchors = _header_anchors(documents)
+    base_vendors = _vendor_set(base)
+    header_docs = [
+        doc
+        for doc in documents
+        if _counts_for_header(doc, anchors) and _same_goods_sheet(doc, base_vendors)
+    ]
     plain = "\n".join((doc.get("raw_text") or doc.get("text") or "") for doc in header_docs)
     text = collapse_letter_spacing(plain)
     delivery, delivery_conflict = _delivery(plain)
     if delivery_conflict:
         flags.append("delivery_conflict")
+    payment, _payment_conflict = _payment(plain)
+    bank_line = _bank_line(plain)
     if len(_label_hits(plain, r"(?:manufacturer|manufactured(?:\s+by)?|производитель|произведено)\s*:")) > 1:
         flags.append("manufacturer_conflict")
     currencies = [
@@ -209,8 +221,11 @@ def analyze(folder):
         "director": _director(plain),
         "seller": parties.get("seller", ""),
         "buyer": parties.get("buyer", ""),
+        "consignee": parties.get("consignee", ""),
         "seller_address": seller_address,
         "buyer_address": buyer_address,
+        "payment": payment,
+        "bank": bank_line,
         "columns": list(LOT_FIELDS),
         "stated": stated,
     }
@@ -231,12 +246,37 @@ def _stated_totals(documents):
     return {key: value for key, value in merged.items() if value is not None}
 
 
+def _has_measures(doc):
+    for line in doc.get("lines") or []:
+        if getattr(line, "freight", False):
+            continue
+        for name in ("pieces", "price", "amount", "packages", "net", "gross"):
+            if getattr(line, name, None) is not None:
+                return True
+    return False
+
+
+def _same_goods_sheet(doc, base_vendors):
+    """Лист с другими артикулами не отдаёт в шапку свою валюту и стороны.
+    Спецификация этой поставки остаётся: её артикул часто записан иначе, чем в инвойсе, а контракт лежит там."""
+    if doc.get("role") == "specification" or "specification" in (doc.get("roles") or []):
+        return True
+    if not base_vendors:
+        return True
+    theirs = _vendor_set(doc.get("lines") or [])
+    if not theirs:
+        return True
+    return bool(theirs & base_vendors)
+
+
 def _pick(documents, role, prefer_pdf):
     found = [doc for doc in documents if _is_role(doc, role) and doc.get("lines")]
     if not found:
         return None
-    primary = [doc for doc in found if doc.get("role") == role]
-    pool = primary or found
+    measured = [doc for doc in found if _has_measures(doc)]
+    pool = measured or found
+    primary = [doc for doc in pool if doc.get("role") == role]
+    pool = primary or pool
     if prefer_pdf:
         pdfs = [doc for doc in pool if doc.get("kind") == "pdf"]
         if pdfs:
@@ -293,8 +333,9 @@ def _header_anchors(documents):
 
 
 def _counts_for_header(doc, anchors):
-    """Лист без строк и без артикула этой поставки в шапку, номер и валюту не входит."""
-    if doc.get("role") == "duplicate":
+    """Лист без строк и без артикула этой поставки в шапку, номер и валюту не входит.
+    Расчёт (проходная, дорога) в шапку не входит."""
+    if doc.get("role") in {"duplicate", "draft", "gtd_form", "customs_appendix"}:
         return False
     if doc.get("role") == "unknown" and not doc.get("lines"):
         if not anchors:
@@ -629,6 +670,33 @@ def _same_term(value, found):
         if head == other or head in item.upper() or other in value.upper():
             return True
     return False
+
+
+def _payment(text):
+    """Срок оплаты. Два разных срока остаются оба, один не выбирается."""
+    found = []
+    pattern = r"(?:terms of payment|payment terms|условия оплаты|порядок оплаты)\s*:?\s*([^\n]+)"
+    for match in re.finditer(pattern, text or "", re.I):
+        value = " ".join(match.group(1).split())
+        value = re.split(r"(?i)\b(?:bank|swift|seller|buyer)\b", value)[0].strip(" .:")
+        if value and value not in found:
+            found.append(value)
+    if not found:
+        return "", False
+    if len(found) == 1:
+        return found[0], False
+    return " / ".join(found), True
+
+
+def _bank_line(text):
+    found = []
+    for match in re.finditer(r"(?:^|\n)\s*(?:bank|банк)\s*:?\s*([^\n]+)", text or "", re.I):
+        value = " ".join(match.group(1).split())
+        if value and value not in found:
+            found.append(value)
+    if len(found) > 1:
+        return " / ".join(found)
+    return found[0] if found else ""
 
 
 def _container(text):

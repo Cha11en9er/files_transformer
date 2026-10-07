@@ -131,6 +131,101 @@ def test_beijing_export_has_no_and_spec_without_color(tmp_path: Path) -> None:
     assert "Color" not in "".join(str(h or "") for h in spec_header_row)
 
 
+def test_each_row_keeps_its_factory_package_and_currency(tmp_path: Path) -> None:
+    items = [
+        {
+            "article": "A1",
+            "commercial_data": {"qty": 2, "unit": "pcs", "price": 3, "amount": 6, "color": "red", "size": "180-185, XL:2"},
+            "packing_data": {"boxes": 1, "package_type": "мешок", "net_weight": 1, "gross_weight": 2},
+            "customs_data": {
+                "manufacturer": "Factory One",
+                "country": "CN",
+                "brand": "Micama",
+                "tnved_code": "1111111111",
+                "hs_code": "2222222222",
+            },
+        },
+        {
+            "article": "A2",
+            "commercial_data": {"qty": 4, "unit": "pcs", "price": 5, "amount": 20, "size": "14-16 см, 4XS:4"},
+            "packing_data": {"boxes": 2, "package_type": "коробка", "net_weight": 3, "gross_weight": 4},
+            "customs_data": {"manufacturer": "Factory Two", "country": "CN", "tnved_code": "3333333333"},
+        },
+    ]
+    out = tmp_path / "ed.xlsx"
+    export_beijing_book(
+        items,
+        out,
+        {
+            "invoice_no": "INV-1",
+            "currency": "USD",
+            "buyer": "Buyer LLC",
+            "consignee": "Master LLC",
+            "payment_terms": "30 days",
+            "delivery_terms": "FOB",
+        },
+    )
+    wb = load_workbook(out)
+    blob = " ".join(
+        str(cell or "")
+        for sheet in wb.worksheets
+        for row in sheet.iter_rows(values_only=True)
+        for cell in row
+    )
+    assert "BEIJING GOLDLUCK" not in blob.upper()
+    assert "CT" not in [cell for row in wb["Specification"].iter_rows(values_only=True) for cell in row]
+    assert "мешок" in blob and "коробка" in blob
+    assert "Factory One" in blob and "Factory Two" in blob
+    assert "Factory One / Factory Two" not in blob
+    assert "180-185, XL:2" in blob
+    assert "USD" in blob
+    assert "Master LLC" in blob
+    assert "30 days" in blob
+    desc = list(wb["описание"].iter_rows(values_only=True))
+    factories = [row[2] for row in desc if row and row[0] in {"A1", "A2"}]
+    assert factories == ["Factory One", "Factory Two"]
+
+
+def test_recipient_is_not_a_copy_of_the_buyer(tmp_path: Path) -> None:
+    from app.services.export_tsd import export_tsd_book
+
+    items = [
+        {
+            "article": "A1",
+            "commercial_data": {"qty": 2, "unit": "pcs", "price": 3, "amount": 6},
+            "packing_data": {"boxes": 1, "net_weight": 1, "gross_weight": 2},
+            "customs_data": {"manufacturer": "Plant A", "tnved_code": "1111111111", "country": "CN"},
+        },
+        {
+            "article": "A2",
+            "commercial_data": {"qty": 1, "unit": "pcs", "price": 4, "amount": 4},
+            "packing_data": {"boxes": 1, "net_weight": 1, "gross_weight": 1},
+            "customs_data": {"manufacturer": "Plant B", "tnved_code": "2222222222", "country": "CN"},
+        },
+    ]
+    out = tmp_path / "tsd.xlsx"
+    export_tsd_book(
+        items,
+        out,
+        {
+            "seller": "Haitao Co., Ltd",
+            "buyer": "Logiya DV LLC",
+            "buyer_address": "Vladivostok",
+            "consignee": "Master LLC",
+            "consignee_address": "Zastavskaya 22",
+            "currency": "USD",
+            "invoice_no": "INV-7",
+        },
+    )
+    wb = load_workbook(out)
+    inv = list(wb["INV"].iter_rows(values_only=True))
+    flat = [" ".join(str(cell or "") for cell in row) for row in inv]
+    recipient_rows = [row for row in flat if "Master LLC" in row]
+    assert recipient_rows
+    assert any("Zastavskaya 22" in row and "Vladivostok" in row for row in flat)
+    assert not any(row.count("Logiya DV LLC") > 1 for row in flat)
+
+
 def test_shipment_title_defaults_to_invoice_no() -> None:
     from app.services.export_style import resolve_shipment_title
 

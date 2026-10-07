@@ -23,7 +23,7 @@ COLUMNS = (
     ("order_ref", ("order number", "номер заказа", "bestellnummer", "n° de commande", "numero de pedido", "cust po", "customer po", "vendor po", "po no", "po number", "sipariş", "siparis")),
     ("hs", ("customs code", "customs tariff", "custom tariff", "shipper's custom", "product code", "h.s. code", "h.s.code", "hscode", "hs code", "zolltarif", "harmonized", "таможенный код", "код тн", "код товара", "тн вэд", "тнвэд", "海关")),
     ("origin", ("country of orig", "страна происхождения", "ursprung", "pays d'origine", "pais de origen", "paese di origine", "pais de origem", "kraj pochodzenia", "menşe", "mense", "原产")),
-    ("brand", ("trademark", "brand", "marque", "marca", "товарный знак")),
+    ("brand", ("trade marks", "trade mark", "trademark", "brand", "marque", "marca", "торговая марка", "товарный знак")),
     ("producer", ("equipment supplier", "поставщик оборудования", "manufacturer", "изготовитель", "producer", "производитель", "hersteller", "fabricant", "fabricante", "üretici", "uretici")),
     ("pallet", ("№№ паллет", "номера паллет", "pallet no", "pall nr", "pallet", "паллет")),
     ("package_type", ("вид упаковок", "kind of package", "вид упаковки", "упаковка")),
@@ -38,6 +38,7 @@ _PARTY = (
     ("seller", ("seller", "exporter", "экспортер", "продавец", "поставщик", "verkäufer", "verkaeufer", "vendeur", "vendedor", "venditore", "fornecedor", "satici", "satıcı", "sprzedawca", "verkoper", "säljare", "saljare", "продавець", "卖方")),
     ("buyer", ("bill to", "sold to", "buyer", "byuer", "importer", "импортер", "покупатель", "käufer", "kaeufer", "acheteur", "comprador", "acquirente", "alıcı", "alici", "nabywca", "koper", "köpare", "kopare", "покупець", "买方")),
 )
+_CONSIGNEE_WORDS = ("recipient", "consignee", "consingnee", "получатель", "грузополучатель")
 
 _ROLE_MARKS = (
     ("packing", ("PACKING AND WEIGHT", "PACKING LIST", "УПАКОВОЧН", "PACKLISTE", "LISTE DE COLISAGE", "LISTA DE EMBALAJE", "LISTA DI IMBALLAGGIO", "AMBALAJ LIST", "SEÇME LIST", "SECME LIST", "PAKLIJST", "PACKLISTA", "装箱单")),
@@ -158,8 +159,10 @@ def column_of(header):
             if len(text.split()) <= 3 and not re.search(r"\d", text):
                 return "vendor"
     # «Марка» целиком. «Маркировка» — это артикул, не бренд.
-    if re.search(r"(?<![а-яё])марка(?![а-яё])", text):
-        return "brand"
+    # Marks — короткие имена марки. marking и «маркировка» сюда не входят.
+    if re.search(r"(?<![а-яё])марка(?![а-яё])", text) or re.search(r"(?<![a-z])marks(?![a-z])", text):
+        if "маркиров" not in text and "marking" not in text:
+            return "brand"
     if text in {"тм", "tm"}:
         return "brand"
     if text.strip() in {"unit", "единица"} or any(token in text for token in ("ед. изм", "ед.изм", "изм", "единица", "birim")):
@@ -213,13 +216,34 @@ def is_stop_label(value):
     }
 
 
+def is_size_label(text):
+    """Подпись размера целиком, как напечатана: рост и буква. Голое число размера сюда не входит."""
+    raw = " ".join(str(text or "").replace("\n", " ").split())
+    if not raw or len(raw) > 60 or column_of(raw):
+        return False
+    if not re.search(r"\d+\s*[-–/]\s*\d+", raw):
+        return False
+    if re.search(r"\b(?:kg|kgs|кг|pcs|pc|set|ctn|cbm|usd|rmb|eur)\b", raw, re.I):
+        return False
+    return bool(
+        re.search(
+            r"(?i)(?:\b\d{0,2}xs\b|\bs\b|\bm\b|\bl\b|\bxl\b|\bxxl\b|\bxxxl\b|см|cm|обхват|размер)|[A-Za-z]\s+[A-Za-z]",
+            raw,
+        )
+    )
+
+
 def is_header_row(cells):
-    """Повтор шапки в теле. Длинное описание со словом внутри («nonwoven») товаром остаётся."""
+    """Повтор шапки в теле. Длинное описание со словом внутри («nonwoven») товаром остаётся.
+    Подпись размера с цифрами — шапка, не количество."""
     labels = 0
     numbers = 0
     for cell in cells:
         text = " ".join(str(cell or "").replace("\n", " ").split())
         if not text:
+            continue
+        if is_size_label(text):
+            labels += 1
             continue
         label = column_of(text) if len(text) <= 80 else None
         if label:
@@ -381,10 +405,12 @@ def _next_party_value(lines, index, party):
 
 
 def _paired_labels(line):
-    """«Buyer: Seller:» на одной строке. Имена идут следом в том же порядке."""
+    """«Buyer: Seller:» или «Buyer: Recipient:» на одной строке. Имена идут следом в том же порядке."""
     low = line.lower()
     hits = []
-    for role, words in _PARTY:
+    catalog = list(_PARTY) + [("consignee", _CONSIGNEE_WORDS)]
+    words_of = {role: words for role, words in catalog}
+    for role, words in catalog:
         match = next(
             (found_at for word in words if (found_at := re.search(rf"(?<!\w){re.escape(word)}(?!\w)", low, re.I))),
             None,
@@ -401,8 +427,9 @@ def _paired_labels(line):
         return None
     tail = line
     for role in roles:
-        for word in dict(_PARTY)[role]:
+        for word in words_of[role]:
             tail = re.sub(rf"(?i)(?<!\w){re.escape(word)}(?!\w)\s*:?", " ", tail)
+    tail = re.sub(r"(?i)\bthe\b", " ", tail)
     if re.sub(r"[\s:./\-]+", "", tail):
         return None
     return roles
@@ -418,7 +445,16 @@ def _split_companies(line):
     )
     if len(marks) < 2:
         return None
-    cut = marks[0].end()
+    cut = None
+    for mark in marks[:-1]:
+        left_try = line[: mark.end()].strip(" ,")
+        # «LLC NECARGO … LTD» — форма в начале названия, это не граница двух фирм.
+        if re.fullmatch(r"(?i)(?:llc|ltd|limited|inc|gmbh|ооо|ао|зао)\.?", left_try):
+            continue
+        cut = mark.end()
+        break
+    if cut is None:
+        return None
     left = line[:cut].strip(" ,")
     right = line[cut:].strip(" ,")
     translated = re.match(
