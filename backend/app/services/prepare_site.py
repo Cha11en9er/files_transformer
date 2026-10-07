@@ -370,10 +370,12 @@ def fill_from_catalog(lots: list[dict[str, Any]], catalog: CatalogIndex) -> None
 
 def _shared_producer(lots: list[dict[str, Any]]) -> str:
     """Один завод на всю поставку можно в шапку. Разные заводы строк в одну строку не склеивать."""
+    from prepare_transform_code.fields import is_factory_list
+
     found: list[str] = []
     for lot in lots:
         value = str(lot.get("producer") or "").strip()
-        if value and value not in found:
+        if value and value not in found and not is_factory_list(value):
             found.append(value)
     if len(found) == 1:
         return found[0]
@@ -396,6 +398,7 @@ def header_from_draft(draft: dict[str, Any], lots: list[dict[str, Any]]) -> dict
         "invoice_date": text("invoice_date"),
         "delivery_terms": text("delivery"),
         "consignee": text("consignee"),
+        "consignee_address": text("consignee_address"),
         "payment_terms": text("payment"),
         "bank": text("bank"),
         # Валюта черновика — та, что у колонки цены, в написании документа (RMB, а не CNY). Иначе экспорт ставит дефолт.
@@ -417,6 +420,8 @@ _MODEL_HEADER = (
     ("contract_date", "contract_date"),
     ("seller_address", "seller_address"),
     ("buyer_address", "buyer_address"),
+    ("consignee", "consignee"),
+    ("consignee_address", "consignee_address"),
     ("delivery", "delivery_terms"),
 )
 # Номер читается как напечатан. Латинская C вместо кириллической (и наоборот) номер не меняет.
@@ -513,6 +518,8 @@ _HEADER_LABEL = {
     "delivery_terms": "условие поставки",
     "seller_address": "адрес продавца",
     "buyer_address": "адрес покупателя",
+    "consignee": "получатель",
+    "consignee_address": "адрес получателя",
 }
 
 
@@ -632,7 +639,10 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
         if desc_ru:
             customs["description_ru"] = desc_ru
         if _filled(lot.get("producer")):
-            customs["manufacturer"] = lot.get("producer")
+            from prepare_transform_code.fields import is_factory_list as _factory_list
+
+            if not _factory_list(lot.get("producer")):
+                customs["manufacturer"] = lot.get("producer")
         if _filled(lot.get("brand")):
             customs["brand"] = lot.get("brand")
         if _filled(lot.get("origin")):

@@ -1,7 +1,7 @@
 import re
 from decimal import Decimal, ROUND_HALF_UP
 
-from prepare_transform_code.fields import LOT_FIELDS
+from prepare_transform_code.fields import LOT_FIELDS, is_factory_list
 from prepare_transform_code.lines import (
     Line,
     _is_contents,
@@ -342,8 +342,11 @@ def _merge_split(base, part, design_is_article=False):
         lot["model"] = part.vendor.strip()
         lot["vendor"] = part.description.strip()
     for name in ("model", "hs", "origin", "brand", "producer", "finish", "package_type", "pallet"):
-        if not lot.get(name) and getattr(base, name):
-            lot[name] = getattr(base, name)
+        value = getattr(base, name)
+        if name == "producer" and is_factory_list(value):
+            continue
+        if not lot.get(name) and value:
+            lot[name] = value
     lot["unit_net"] = _finer(part.unit_net, base.unit_net)
     _apply_unit(lot, base.unit, part.unit)
     lot["split_of"] = base.pieces
@@ -358,14 +361,20 @@ def _merge(base, packing):
     if getattr(packing, "family_total", False):
         # Вес и места семейства общие на несколько дизайнов. На один дизайн их не вешать.
         for name in ("vendor", "hs", "origin", "brand", "producer", "finish", "package_type", "width", "gsm"):
-            if not lot.get(name) and getattr(packing, name, None):
-                lot[name] = getattr(packing, name)
+            value = getattr(packing, name, None)
+            if name == "producer" and is_factory_list(value):
+                continue
+            if not lot.get(name) and value:
+                lot[name] = value
         _fill_family_name(lot, packing)
         _apply_unit(lot, base.unit, packing.unit)
         return lot
     for name in ("vendor", "model", "hs", "volume", "origin", "brand", "producer", "finish", "package_type", "pallet", "size", "width", "gsm"):
-        if not lot.get(name) and getattr(packing, name):
-            lot[name] = getattr(packing, name)
+        value = getattr(packing, name)
+        if name == "producer" and is_factory_list(value):
+            continue
+        if not lot.get(name) and value:
+            lot[name] = value
     lot["description"] = _richer(lot.get("description") or "", packing.description)
     _fill_family_name(lot, packing)
     lot["unit_net"] = _finer(lot.get("unit_net"), packing.unit_net)
@@ -407,6 +416,8 @@ def _overlay(lots, spec_lines):
             found = _best(probe, spec_lines, used)
         if found is None:
             found = _hs_only(probe, spec_lines, used)
+        if found is None:
+            found = _by_qty_desc(probe, spec_lines, used)
         if found is None:
             continue
         spec = spec_lines[found]
@@ -483,6 +494,27 @@ def _lot_subset(lots, target):
     return found[0] if found else None
 
 
+def _by_qty_desc(line, others, used):
+    """Код только на спецификации: та же штука и то же имя."""
+    name = _letters(line.description)
+    if line.pieces is None or not name:
+        return None
+    hits = []
+    for index, other in enumerate(others):
+        if index in used or other.freight:
+            continue
+        if not (other.hs or other.origin or other.producer or other.finish or other.brand):
+            continue
+        if other.pieces is not None and abs(line.pieces - other.pieces) > 0.05:
+            continue
+        other_name = _letters(other.description)
+        if other_name and (name == other_name or name in other_name or other_name in name):
+            hits.append(index)
+    if len(hits) == 1:
+        return hits[0]
+    return None
+
+
 def _hs_only(line, others, used):
     """Артикула нет. Код товара находит строку, только если такая строка одна."""
     hs = {code for code in _vendors(line) if code.startswith("hs:")}
@@ -539,6 +571,8 @@ def _take_fields(lot, spec, check=True):
             else:
                 lot[name] = _richer(lot[name], spec_value)
         elif not lot.get(name) and spec_value:
+            if name == "producer" and is_factory_list(spec_value):
+                continue
             lot[name] = spec_value
     if (
         spec.packages is not None

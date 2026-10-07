@@ -94,6 +94,9 @@ def column_of(header):
         # Длинная шапка описания начинается со слова «производитель», но это не колонка завода.
         if name == "producer" and any(word in text for word in ("наименование", "описание", "description")):
             continue
+        # Одна колонка MANUFACTURER / BRAND: основное имя завода, знак делится из клетки.
+        if name == "brand" and any(word in text for word in ("manufacturer", "изготовитель", "производитель")):
+            continue
         if name == "finish" and any(word in text for word in ("наименование", "описание", "description", "goods")):
             continue
         # «Finishing batch» — номер партии, не покрытие. «finish» внутри «finishing» не берём.
@@ -195,6 +198,42 @@ def _glue_broken_label(text):
     if joined not in {"package", "packages", "carton", "cartons", "brand", "netto", "gross"}:
         return text
     return " ".join(parts[:-2] + [joined])
+
+
+_COMPANY_MARK = re.compile(
+    r"(?i)\b(?:co\.?,?\s*ltd|ltd\.?|llc|limited|inc\.?|gmbh|ооо|ао|зао|corp\.?|corporation|company|factory|завод|фабрика)\b"
+)
+
+
+def is_factory_list(value):
+    """Три и больше имён через слэш — список заводов шапки, не завод этой строки."""
+    text = " ".join(str(value or "").split())
+    if not text or "/" not in text:
+        return False
+    parts = [part.strip() for part in re.split(r"\s*/\s*", text) if part.strip()]
+    if len(parts) < 3:
+        return False
+    marked = sum(1 for part in parts if _COMPANY_MARK.search(part))
+    return marked >= 2 or len(parts) >= 4 or sum(len(part) for part in parts) > 40
+
+
+def is_mfr_brand_header(header):
+    """Подпись колонки, где завод и знак стоят в одной клетке через слэш."""
+    text = " ".join(str(header or "").lower().replace("\n", " ").split())
+    has_mfr = any(word in text for word in ("manufacturer", "изготовитель", "производитель"))
+    has_mark = any(word in text for word in ("brand", "trade mark", "trademark", "товарный знак", "торговая марка"))
+    return has_mfr and has_mark
+
+
+def same_company(left, right):
+    """Одно имя фирмы, записанное чуть иначе. Короткий кусок не склеивает разные заводы."""
+    def key(text):
+        return re.sub(r"[^\w]+", "", " ".join(str(text or "").casefold().split()))
+
+    a, b = key(left), key(right)
+    if not a or not b or min(len(a), len(b)) < 12:
+        return False
+    return a in b or b in a
 
 
 def is_row_index(header, value):
@@ -332,7 +371,8 @@ def _cut_other_party(value, role):
     """На одной строке «Покупатель … Продавец …» — каждое имя до следующей подписи."""
     low = value.lower()
     cut = len(value)
-    for other, words in _PARTY:
+    catalog = list(_PARTY) + [("consignee", _CONSIGNEE_WORDS)]
+    for other, words in catalog:
         if other == role:
             continue
         for word in words:
@@ -394,11 +434,23 @@ def _prose_role(line, match):
     return bool(first and first.group(1)[:1].islower())
 
 
+_SKIP_BEFORE_PARTY = re.compile(
+    r"(?i)^(?:the\s+)?(?:delivery|terms of (?:delivery|payment)|базис|условие(?:\s+поставки)?|fob|exw|cif|cfr|dap|fca|cpt)\b"
+)
+
+
+def _looks_like_address(text):
+    return bool(re.search(r"(?i)\b(?:address|адрес|email|e-mail|bank|iban|swift|phone|inn|инн)\b", text or ""))
+
+
 def _next_party_value(lines, index, party):
     """Перевод той же подписи (Buyer, затем Покупатель) именем не является."""
     cursor = index + 1
-    while cursor < len(lines) and _bare_role(lines[cursor]) == party:
-        cursor += 1
+    while cursor < len(lines):
+        if _bare_role(lines[cursor]) == party or _SKIP_BEFORE_PARTY.match(lines[cursor]):
+            cursor += 1
+            continue
+        break
     if cursor >= len(lines) or _bare_role(lines[cursor]):
         return ""
     return _cut_other_party(lines[cursor][:160], party).strip(" /")
@@ -435,8 +487,12 @@ def _paired_labels(line):
     return roles
 
 
+_LEGAL_CONTINUE = re.compile(r"(?i)^(?:şirketi|sirketi|şti\.?|sti\.?)\b")
+_LEGAL_ONLY = re.compile(r"(?i)^(?:llc|ltd|limited|inc|gmbh|ооо|ао|зао)\.?$")
+
+
 def _split_companies(line):
-    """Две фирмы в одной строке: левая колонка кончилась на LLC, справа другая фирма."""
+    """Несколько фирм в одной строке: каждая кончается на LLC, LTD, LIMITED ŞIRKETI."""
     marks = list(
         re.finditer(
             r"(?i)\b(?:llc|ltd|limited|inc|gmbh|ооо|ао|зао|co\.,?\s*ltd)\b\.?",
@@ -445,28 +501,33 @@ def _split_companies(line):
     )
     if len(marks) < 2:
         return None
-    cut = None
-    for mark in marks[:-1]:
-        left_try = line[: mark.end()].strip(" ,")
+    parts = []
+    start = 0
+    for mark in marks:
+        end = mark.end()
+        rest_raw = line[end:]
+        rest = rest_raw.lstrip(" ,")
+        matched = _LEGAL_CONTINUE.match(rest)
+        if matched:
+            end += len(rest_raw) - len(rest) + matched.end()
+        chunk = line[start:end].strip(" ,")
         # «LLC NECARGO … LTD» — форма в начале названия, это не граница двух фирм.
-        if re.fullmatch(r"(?i)(?:llc|ltd|limited|inc|gmbh|ооо|ао|зао)\.?", left_try):
+        if _LEGAL_ONLY.fullmatch(chunk):
             continue
-        cut = mark.end()
-        break
-    if cut is None:
+        if not chunk:
+            continue
+        parts.append(chunk)
+        start = end
+        translated = re.match(
+            r"^\s*/\s*(?![A-Za-z])(?:.+?)(?:ооо|ао|зао)\b\.?\s*",
+            line[start:],
+            re.I,
+        )
+        if translated:
+            start += translated.end()
+    if len(parts) < 2:
         return None
-    left = line[:cut].strip(" ,")
-    right = line[cut:].strip(" ,")
-    translated = re.match(
-        r"^(?:/\s*)(?![A-Za-z])(?:.+?)(?:ооо|ао|зао)\b\.?\s*",
-        right,
-        re.I,
-    )
-    if translated:
-        right = right[translated.end() :].strip(" ,/")
-    if not left or not right:
-        return None
-    return left, right
+    return tuple(parts)
 
 
 def _row_label(line):
@@ -531,13 +592,28 @@ def _fill_parties(lines, found, alias):
     index = 0
     while index < len(lines):
         paired = _paired_labels(lines[index])
-        if paired and index + 1 < len(lines):
-            names = _split_companies(lines[index + 1])
-            if names and not _row_label(lines[index + 1]):
+        if paired:
+            names = None
+            skip = 0
+            for ahead in range(1, 8):
+                if index + ahead >= len(lines):
+                    break
+                candidate = lines[index + ahead]
+                if _row_label(candidate) and _row_label(candidate) not in paired:
+                    break
+                if _SKIP_BEFORE_PARTY.match(candidate):
+                    continue
+                if re.search(r"(?i)\b(?:address|адрес|email|e-mail|bank|iban|swift|phone|tel)\b", candidate):
+                    continue
+                names = _split_companies(candidate)
+                if names and not _row_label(candidate) and not any(_looks_like_address(part) for part in names):
+                    skip = ahead
+                    break
+            if names:
                 for role, name in zip(paired, names):
                     if role not in found and name:
                         found[role] = _dedupe_side_by_side(_trim_party(name))
-                index += 2
+                index += skip + 1
                 continue
         role = _row_label(lines[index])
         nxt = _row_label(lines[index + 1]) if role and index + 1 < len(lines) else None
@@ -551,8 +627,21 @@ def _fill_parties(lines, found, alias):
                 group.append(bare)
                 cursor += 1
             if len(group) >= 2:
+                split = _split_companies(lines[cursor]) if cursor < len(lines) else None
+                if split and (
+                    len(split) < len(group)
+                    or any(_looks_like_address(part) for part in split)
+                    or _looks_like_address(lines[cursor])
+                ):
+                    split = None
+                if split:
+                    for role, name in zip(group, split):
+                        if role not in found and name:
+                            found[role] = _dedupe_side_by_side(_trim_party(name))
+                    index = cursor + len(group)
+                    continue
                 for offset, party in enumerate(group):
-                    if party not in {"seller", "buyer"}:
+                    if party not in {"seller", "buyer", "consignee"}:
                         continue
                     value_at = cursor + offset
                     if party in found or value_at >= len(lines) or _row_label(lines[value_at]):
@@ -564,7 +653,8 @@ def _fill_parties(lines, found, alias):
                 continue
         line = lines[index]
         low = line.lower()
-        for party, words in _PARTY:
+        catalog = list(_PARTY) + ([("consignee", _CONSIGNEE_WORDS)] if not alias else [])
+        for party, words in catalog:
             if party in found:
                 continue
             words = [word for word in words if (word in _ALIAS_ROLE) == alias]

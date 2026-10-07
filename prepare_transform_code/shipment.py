@@ -4,7 +4,7 @@ from pathlib import Path
 
 from prepare_transform_code.exceldoc import read_excel
 from prepare_transform_code.join import build_lots
-from prepare_transform_code.fields import LOT_FIELDS, party_after
+from prepare_transform_code.fields import LOT_FIELDS, is_factory_list, party_after, same_company
 from prepare_transform_code.numbers import collapse_letter_spacing, currencies_of, currency_of, goods_currency
 from prepare_transform_code.pdfdoc import read_pdf
 
@@ -156,7 +156,9 @@ def analyze(folder):
             parties["buyer"] = addressed
     origin = _one_label(plain, r"(?:country\s+of\s+origin|origin(?:\s+of\s+goods)?)\s*:") or _of_origin(plain)
     producer = _one_label(plain, r"(?:manufacturer|manufactured(?:\s+by)?|производитель|произведено)\s*:")
-    seller_address, buyer_address = _address_blocks(plain)
+    if is_factory_list(producer):
+        producer = ""
+    seller_address, buyer_address, consignee_address = _address_blocks(plain)
     if not buyer_address:
         buyer_address = _party_continuation(plain, parties.get("buyer") or "")
     ship_to = _ship_to_address(plain)
@@ -174,10 +176,18 @@ def analyze(folder):
         flags.append("weight_suspect")
     if any(lot.get("conflicts") for lot in lots):
         flags.append("values_conflict")
+    own_producer = any(
+        lot.get("producer") and not is_factory_list(lot.get("producer")) for lot in lots
+    )
     for lot in lots:
         if origin and not lot.get("origin"):
             lot["origin"] = origin
-        if producer and not lot.get("producer"):
+        if (
+            producer
+            and not lot.get("producer")
+            and not own_producer
+            and not same_company(producer, parties.get("seller"))
+        ):
             lot["producer"] = producer
     proforma_nos = _proforma_nos(documents)
     stated = _stated_totals(documents)
@@ -224,6 +234,7 @@ def analyze(folder):
         "consignee": parties.get("consignee", ""),
         "seller_address": seller_address,
         "buyer_address": buyer_address,
+        "consignee_address": consignee_address,
         "payment": payment,
         "bank": bank_line,
         "columns": list(LOT_FIELDS),
@@ -716,7 +727,7 @@ def _address_blocks(text):
     """Адрес после подписи своей стороны. Без подписи первая клетка Address — продавец, вторая другая — покупатель."""
     lines = [" ".join(line.split()) for line in str(text or "").splitlines() if line.strip()]
     pending = []
-    assigned = {"seller": "", "buyer": ""}
+    assigned = {"seller": "", "buyer": "", "consignee": ""}
     fallback = []
     index = 0
     while index < len(lines):
@@ -740,16 +751,25 @@ def _address_blocks(text):
             fallback.append(value)
             if pending:
                 owner = pending.pop(0)
-                if not assigned[owner]:
+                if owner in assigned and not assigned[owner]:
                     assigned[owner] = value
         index += 1
-    if assigned["seller"] or assigned["buyer"]:
+    if assigned["seller"] or assigned["buyer"] or assigned["consignee"]:
         seller = _longer_address(assigned["seller"], fallback)
         buyer = _longer_address(assigned["buyer"], fallback)
+        consignee = _longer_address(assigned["consignee"], fallback)
         if not seller:
-            seller = next((item for item in fallback if item != buyer), "")
-        return seller, buyer
-    return (fallback[0] if fallback else "", fallback[1] if len(fallback) > 1 else "")
+            seller = next((item for item in fallback if item not in {buyer, consignee}), "")
+        if not buyer:
+            buyer = next((item for item in fallback if item not in {seller, consignee}), "")
+        if not consignee:
+            consignee = next((item for item in fallback if item not in {seller, buyer}), "")
+        return seller, buyer, consignee
+    return (
+        fallback[0] if fallback else "",
+        fallback[1] if len(fallback) > 1 else "",
+        fallback[2] if len(fallback) > 2 else "",
+    )
 
 
 def _postal_address(value):
@@ -782,13 +802,19 @@ _ADDRESS_VALUE = re.compile(
 def _party_side(line):
     if re.match(r"(?i)^(seller|buyer)['’]s\b", line or ""):
         return None
-    match = re.match(r"(?i)^(buyer|покупатель|importer|seller|продавец|exporter)\b", line or "")
+    match = re.match(
+        r"(?i)^(buyer|покупатель|importer|seller|продавец|exporter|recipient|consignee|получатель|грузополучатель)\b",
+        line or "",
+    )
     if not match:
         return None
     if len(line) > 48 and ":" not in line[:40]:
         return None
-    if match.group(1).lower() in {"buyer", "покупатель", "importer"}:
+    token = match.group(1).lower()
+    if token in {"buyer", "покупатель", "importer"}:
         return "buyer"
+    if token in {"recipient", "consignee", "получатель", "грузополучатель"}:
+        return "consignee"
     return "seller"
 
 
