@@ -2079,7 +2079,28 @@ function sourceColumnHeaders(file) {
 
 function sourceColumnValue(row, header) {
   if (row?.raw && row.raw[header] != null && row.raw[header] !== "") return row.raw[header];
-  return row?.[header];
+  if (row?.[header] != null && row[header] !== "") return row[header];
+  const h = String(header || "").toLowerCase();
+  const aliases = [
+    [["description", "наименован"], ["description"]],
+    [["hs", "code", "код", "тн"], ["hs_code", "customs_code"]],
+    [["qty", "q-ty", "quantity", "кол"], ["qty"]],
+    [["amount", "сумм"], ["amount"]],
+    [["price", "цена"], ["price"]],
+    [["netto", "net wt", "net_weight", "нетто"], ["net_weight"]],
+    [["brutto", "gross", "брутто"], ["gross_weight"]],
+    [["packag", "carton", "мест", "rolls"], ["rolls"]],
+    [["country", "origin", "стран"], ["country"]],
+    [["manufacturer", "изготов"], ["manufacturer"]],
+    [["model", "design", "art", "артикул"], ["article", "model"]],
+  ];
+  for (const [needles, keys] of aliases) {
+    if (!needles.some((n) => h.includes(n))) continue;
+    for (const key of keys) {
+      if (row?.[key] != null && row[key] !== "") return row[key];
+    }
+  }
+  return null;
 }
 
 document.addEventListener("click", (e) => {

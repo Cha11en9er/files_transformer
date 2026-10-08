@@ -569,20 +569,33 @@ button.badge {
   text-transform: uppercase;
   padding: 11px 10px;
   border-bottom: 1px solid #0c2430;
+  border-right: 1px solid #4a7388;
   white-space: nowrap;
   text-align: center;
 }
+#items-table thead th:last-child {
+  border-right: 0;
+}
 #items-table tbody td {
   padding: 10px 10px;
-  border-bottom: 1px solid #e4ebf1;
+  border-bottom: 1px solid #c5d3de;
+  border-right: 1px solid #c5d3de;
   vertical-align: middle;
   background: #fff;
+}
+#items-table tbody td:last-child {
+  border-right: 0;
 }
 #items-table tbody tr:nth-child(even) td {
   background: #f5f8fb;
 }
-#items-table tbody tr:hover td {
-  background: #eaf4f5;
+#items-table tbody td:hover {
+  background: #cfeef3 !important;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 1px var(--accent);
+  position: relative;
+  z-index: 1;
 }
 #items-table td.num,
 #items-table th.num {
@@ -608,9 +621,11 @@ button.badge {
   color: var(--ink);
   background: #fff !important;
 }
-#items-table tbody tr:nth-child(even) td.num,
-#items-table tbody tr:hover td.num {
+#items-table tbody tr:nth-child(even) td.num {
   background: #fff !important;
+}
+#items-table tbody td.num:hover {
+  background: #cfeef3 !important;
 }
 #items-table td.code {
   font-family: "IBM Plex Mono", ui-monospace, monospace;
@@ -666,8 +681,8 @@ button.badge {
   border-right: 1px solid #9a6414;
   text-align: center;
 }
-#items-table tbody tr:hover td.money {
-  background: #ffe8a8 !important;
+#items-table tbody td.money:hover {
+  background: #ffe08a !important;
 }
 #items-table td.row-no {
   color: #64748b;
@@ -1098,8 +1113,13 @@ pre {
 }
 .context-mini th, .context-mini td {
   border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
   padding: 4px 6px;
   text-align: left;
+}
+.context-mini th:last-child,
+.context-mini td:last-child {
+  border-right: 0;
 }
 .scan-tables {
   display: flex;
@@ -1143,7 +1163,11 @@ pre {
 #items-table tfoot td {
   font-weight: 600;
   border-top: 2px solid var(--line);
+  border-right: 1px solid #c5d3de;
   padding-top: 16px;
+}
+#items-table tfoot th:last-child {
+  border-right: 0;
 }
 #items-table tfoot .num,
 #items-table tfoot .money {
