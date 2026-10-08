@@ -23,7 +23,34 @@ const PROFILE_RU = {
   BEIJING: "Одна книга: Invoice + Packing list + Specification + Описание",
 };
 
-const state = { shipmentId: null, workspace: null, selectedItemId: null, pendingFiles: [], lastDupes: [], sessionLocked: false };
+const ROLE_FROM = {
+  invoice: "инвойса",
+  packing: "пакинга",
+  specification: "спецификации",
+};
+
+function emptyColumnLayout() {
+  return {
+    invoice: { hidden: [], extra: [] },
+    packing: { hidden: [], extra: [] },
+    specification: { hidden: [], extra: [] },
+  };
+}
+
+const state = {
+  shipmentId: null,
+  workspace: null,
+  selectedItemId: null,
+  pendingFiles: [],
+  lastDupes: [],
+  sessionLocked: false,
+  role: "invoice",
+  columnLayout: emptyColumnLayout(),
+  roleColumns: null,
+  roleColumnsKey: "",
+  pendingDelete: null,
+  pendingAdd: null,
+};
 const extraFiles = new WeakSet();
 
 const $ = (sel) => document.querySelector(sel);
@@ -326,9 +353,17 @@ function hideOldWorkspace() {
   state.shipmentId = null;
   state.workspace = null;
   state.selectedItemId = null;
+  state.role = "invoice";
+  state.columnLayout = emptyColumnLayout();
+  state.roleColumns = null;
+  state.roleColumnsKey = "";
   $("#workspace")?.classList.add("hidden");
   const tbody = $("#items-table tbody");
   if (tbody) tbody.innerHTML = "";
+  const thead = $("#items-table thead");
+  if (thead) thead.innerHTML = "";
+  const tfoot = $("#items-table tfoot");
+  if (tfoot) tfoot.innerHTML = "";
 }
 
 const fingerprints = new WeakMap();
@@ -1149,32 +1184,172 @@ function sumField(items, getter) {
   return any ? total : null;
 }
 
+function isFabricItems(items) {
+  const rows = (items || []).filter((item) => item?.article && item.article !== "-");
+  if (!rows.length) return false;
+  const hits = rows.filter((item) => {
+    const packing = item.packing_data || {};
+    return packing.width != null && packing.width !== "" || packing.meters != null && packing.meters !== "";
+  });
+  return hits.length >= Math.max(1, rows.length * 0.4);
+}
+
+function itemField(item, key) {
+  const commercial = item?.commercial_data || {};
+  const packing = item?.packing_data || {};
+  const customs = item?.customs_data || {};
+  if (key === "article") return articleLabel(item);
+  if (key === "description") return customs.description || customs.description_ru || customs.description_en;
+  if (key === "hs_code") return customs.hs_code;
+  if (key === "hs_alt") return customs.tnved_code;
+  if (key === "qty") return commercial.qty ?? packing.meters;
+  if (key === "packages") return packing.rolls ?? packing.boxes;
+  if (key === "unit") return commercial.unit;
+  if (key === "price") return commercial.price;
+  if (key === "amount") return commercial.amount;
+  if (key === "color") return commercial.color;
+  if (key === "size") return commercial.size;
+  if (key === "brand") return customs.brand;
+  if (key === "manufacturer") return customs.manufacturer;
+  if (key === "country") return customs.country;
+  if (key === "net_weight") return packing.net_weight;
+  if (key === "gross_weight") return packing.gross_weight;
+  if (key === "width") return packing.width;
+  if (key === "area") return packing.area;
+  if (key === "volume") return packing.volume;
+  if (key === "gsm") return packing.gsm;
+  if (key === "measurement") return packing.measurement;
+  if (key === "package_type") return packing.package_type;
+  if (key === "pcs_per_carton") return packing.pcs_per_carton;
+  return null;
+}
+
+const EDIT_FOR = {
+  article: "edit-article",
+  qty: "edit-qty",
+  packages: "edit-rolls",
+  width: "edit-width",
+  area: "edit-area",
+  net_weight: "edit-net-weight",
+  gross_weight: "edit-gross-weight",
+  price: "edit-price",
+  amount: "edit-amount",
+  hs_code: "edit-hs",
+  hs_alt: "edit-tnved",
+  description: "edit-desc-en",
+};
+
+function fallbackRoleColumns(role) {
+  const common = [
+    { key: "article", title: "Art No. / Артикул", kind: "text" },
+    { key: "description", title: "Description / Наименование", kind: "text" },
+    { key: "qty", title: "Quantity / Количество", kind: "num" },
+    { key: "packages", title: "Packages / Места", kind: "num" },
+    { key: "amount", title: "Amount / Сумма", kind: "money" },
+  ];
+  if (role === "packing") {
+    return [
+      ...common,
+      { key: "net_weight", title: "Net weight / Нетто", kind: "num" },
+      { key: "gross_weight", title: "Gross weight / Брутто", kind: "num" },
+    ];
+  }
+  if (role === "specification") {
+    return [
+      ...common,
+      { key: "hs_code", title: "HS code / Код ТН ВЭД", kind: "code" },
+      { key: "brand", title: "Brand / Торговая марка", kind: "text" },
+      { key: "manufacturer", title: "Manufacturer / Производитель", kind: "text" },
+      { key: "country", title: "Country / Страна", kind: "text" },
+      { key: "color", title: "Color / Цвет", kind: "text" },
+      { key: "size", title: "Size / Размер", kind: "text" },
+    ];
+  }
+  return [
+    ...common,
+    { key: "hs_code", title: "H.S. Code / Код ТН ВЭД", kind: "code" },
+    { key: "price", title: "Price / Цена", kind: "money" },
+    { key: "color", title: "Color / Цвет", kind: "text" },
+    { key: "brand", title: "Brand / Торговая марка", kind: "text" },
+  ];
+}
+
+function visibleRoleColumns() {
+  const role = state.role || "invoice";
+  const base = (state.roleColumns && state.roleColumns[role]) || fallbackRoleColumns(role);
+  const layout = state.columnLayout[role] || { hidden: [], extra: [] };
+  const hidden = new Set(layout.hidden || []);
+  const cols = base.filter((col) => !hidden.has(col.key));
+  (layout.extra || []).forEach((extra) => {
+    cols.push({
+      key: `extra:${extra.id}`,
+      title: extra.title,
+      kind: "text",
+      extra: true,
+    });
+  });
+  return cols;
+}
+
+function extraItemValue(item, columnId) {
+  return ((item.extra_columns || {})[state.role] || {})[columnId];
+}
+
+function formatRoleCell(item, col) {
+  const key = col.key || "";
+  const value = key.startsWith("extra:") ? extraItemValue(item, key.slice(6)) : itemField(item, key);
+  if (col.kind === "money") return formatMoney(value);
+  if (col.kind === "num") {
+    if (key === "packages") return formatNum(value, 0);
+    if (key === "width" || key === "area" || key === "volume") return formatNum(value, 3);
+    return formatNum(value);
+  }
+  if (value == null || value === "") return "-";
+  return escapeHtml(value);
+}
+
+function cellClassFor(col, errs) {
+  const bits = [];
+  if (col.kind === "num") bits.push("num");
+  if (col.kind === "money") bits.push("money");
+  if (col.kind === "code") bits.push("code");
+  if (col.key === "article") bits.push("article");
+  if (col.key === "description") bits.push("desc");
+  const field = col.key === "packages" ? "rolls" : col.key === "hs_alt" ? "tnved_code" : col.key;
+  const sev = fieldSeverity(errs, field);
+  if (sev) bits.push(sev);
+  return bits.join(" ");
+}
+
+async function ensureRoleColumns() {
+  const ws = state.workspace;
+  if (!ws) return;
+  const fabric = isFabricItems(ws.items || []);
+  const key = `${ws.profile_type}:${fabric}`;
+  if (state.roleColumnsKey === key && state.roleColumns) return;
+  const data = await api(
+    `/api/v1/shipments/columns?profile_type=${encodeURIComponent(ws.profile_type)}&fabric=${fabric ? "true" : "false"}`
+  );
+  state.roleColumns = data.roles;
+  state.roleColumnsKey = key;
+}
+
 function fillExcelTotals(items, review) {
   const row = $("#items-totals-row");
   if (!row) return;
   const stated = review?.totals || {};
-  const values = {
-    rolls: sumField(items, (item) => item.packing_data?.rolls ?? item.packing_data?.boxes),
-    meters: sumField(items, (item) => item.packing_data?.meters ?? item.commercial_data?.qty),
-    area: sumField(items, (item) => item.packing_data?.area),
-    net_weight: sumField(items, (item) => item.packing_data?.net_weight),
-    gross_weight: sumField(items, (item) => item.packing_data?.gross_weight),
-    amount: sumField(items, (item) => item.commercial_data?.amount),
-  };
-  const fileKey = {
-    rolls: "rolls",
-    meters: "meters",
-    area: "area",
-    net_weight: "net_weight",
-    gross_weight: "gross_weight",
-    amount: "amount",
-  };
+  const sumKeys = new Set(["packages", "qty", "area", "net_weight", "gross_weight", "amount", "volume"]);
   row.querySelectorAll("[data-total]").forEach((cell) => {
     const key = cell.getAttribute("data-total");
-    const value = values[key];
-    const fmt = key === "amount" ? formatMoney : (n) => formatNum(n, key === "rolls" ? 0 : 2);
+    if (!sumKeys.has(key)) {
+      cell.textContent = key === "article" ? "Итого" : "";
+      return;
+    }
+    const value = sumField(items, (item) => itemField(item, key));
+    const fmt = key === "amount" ? formatMoney : (n) => formatNum(n, key === "packages" ? 0 : 2);
     cell.textContent = fmt(value);
-    const fileValue = stated[fileKey[key]];
+    const fileKey = key === "packages" ? "rolls" : key === "qty" ? "meters" : key;
+    const fileValue = stated[fileKey];
     const fileNum = Number(fileValue);
     const tableNum = Number(value);
     const differs =
@@ -1225,46 +1400,33 @@ function recognizedRows(file) {
   });
 }
 
-function renderRecognizedTable(rows) {
+function renderRecognizedTable(rows, file) {
   const list = recognizedRows({ table: rows });
   if (!list.length) {
     return "<p class=\"hint\">В этом файле таблица товаров не собралась.</p>";
   }
+  const headers = sourceColumnHeaders(file || { table: rows });
+  const plus = file
+    ? (title) =>
+        `<button type="button" class="col-action" data-col-add="${escapeHtml(title)}" aria-label="Добавить столбец">+</button>`
+    : "";
   const body = list
     .slice(0, 250)
     .map((row, index) => {
-      const code = [row.hs_code, row.customs_code]
-        .filter(Boolean)
-        .filter((part, at, all) => all.indexOf(part) === at)
-        .join(" / ");
-      const desc = (row.freight ? "Сбор: " : "") + (row.description || "");
-      return `<tr>
-        <td class="row-no">${index + 1}</td>
-        <td>${escapeHtml(row.article || "-")}</td>
-        <td class="num">${contextCell(row.rolls ?? row.boxes)}</td>
-        <td class="num">${contextCell(row.qty ?? row.meters)}</td>
-        <td class="num">${contextCell(row.price)}</td>
-        <td class="money">${contextCell(row.amount)}</td>
-        <td class="num">${contextCell(row.net_weight)}</td>
-        <td class="num">${contextCell(row.gross_weight)}</td>
-        <td class="code">${escapeHtml(code || "-")}</td>
-        ${longCell(desc)}
-      </tr>`;
+      const cells = headers
+        .map((title) => `<td>${contextCell(sourceColumnValue(row, title))}</td>`)
+        .join("");
+      return `<tr><td class="row-no">${index + 1}</td>${cells}</tr>`;
     })
     .join("");
+  const head = headers
+    .map(
+      (title) =>
+        `<th><span class="th-inner">${escapeHtml(title)}${plus ? plus(title) : ""}</span></th>`
+    )
+    .join("");
   return `<div class="table-wrap"><table class="context-mini">
-    <thead><tr>
-      <th class="row-no">№</th>
-      <th>Артикул</th>
-      <th class="num">Места</th>
-      <th class="num">Кол-во</th>
-      <th class="num">Цена</th>
-      <th class="money">Сумма</th>
-      <th class="num">Нетто</th>
-      <th class="num">Брутто</th>
-      <th>Код</th>
-      <th>Описание</th>
-    </tr></thead>
+    <thead><tr><th class="row-no">№</th>${head}</tr></thead>
     <tbody>${body}</tbody>
   </table></div>`;
 }
@@ -1418,7 +1580,7 @@ function renderFilePane(file) {
       <strong>${escapeHtml(kind)} ${escapeHtml(file.filename || "")}</strong>
       <span class="hint">${escapeHtml([pages || sheets, file.meaning, `${n} строк`].filter(Boolean).join(" · "))}</span>
     </div>
-    ${renderRecognizedTable(file.table)}
+    ${renderRecognizedTable(file.table, file)}
     ${capped}
   `;
 }
@@ -1450,6 +1612,7 @@ function fillReviewDialog(ws, filename) {
   }
   if (wanted) {
     body.innerHTML = renderFilePane(wanted);
+    body.dataset.reviewFile = wanted.filename || "";
     return;
   }
   if (!finalRows.length) {
@@ -1746,32 +1909,55 @@ function renderWorkspace() {
   });
   renderHeaderChanges(ws, headerForm);
 
+  syncRoleTabs();
+  ensureRoleColumns()
+    .catch(() => {
+      state.roleColumns = state.roleColumns || {};
+    })
+    .finally(() => paintItemsTable());
+}
+
+function paintItemsTable() {
+  const ws = state.workspace;
+  if (!ws) return;
+  const cols = visibleRoleColumns();
+  const thead = $("#items-table thead");
   const tbody = $("#items-table tbody");
+  const tfoot = $("#items-table tfoot");
+  if (!thead || !tbody || !tfoot) return;
+  const headCells = [
+    `<th class="row-no">№</th>`,
+    ...cols.map(
+      (col) =>
+        `<th class="${col.kind === "num" ? "num" : col.kind === "money" ? "money" : ""}" data-col-key="${escapeHtml(col.key)}">
+          <span class="th-inner">${escapeHtml(col.title)}<button type="button" class="col-action" data-col-delete="${escapeHtml(col.key)}" aria-label="Удалить столбец">×</button></span>
+        </th>`
+    ),
+    `<th>Отметки</th>`,
+  ];
+  thead.innerHTML = `<tr>${headCells.join("")}</tr>`;
   tbody.innerHTML = "";
   (ws.items || []).forEach((item, idx) => {
     const tr = document.createElement("tr");
-    const c = item.commercial_data || {};
-    const p = item.packing_data || {};
-    const u = item.customs_data || {};
     const errs = item.validation_errors || [];
     tr.className = `item-row ${severityClass(errs)}`.trim();
     tr.dataset.id = item.id;
     tr.title = "Нажмите ячейку или «Изменить», чтобы править позицию";
-    const desc = u.description || u.description_ru || u.description_en || "-";
+    const body = cols
+      .map((col) => {
+        if (col.key === "article" || col.key === "description") {
+          const raw = itemField(item, col.key) || "-";
+          return longCell(raw, col.key === "article" ? "article" : "desc");
+        }
+        const edit = EDIT_FOR[col.key] ? ` data-edit="${EDIT_FOR[col.key]}"` : "";
+        const klass = cellClassFor(col, errs);
+        const text = col.kind === "money" && col.key === "price" ? formatPrice(itemField(item, col.key)) : formatRoleCell(item, col);
+        return `<td class="${klass}"${edit}>${text}</td>`;
+      })
+      .join("");
     tr.innerHTML = `
       <td class="row-no">${idx + 1}</td>
-      ${longCell(articleLabel(item), "article")}
-      <td class="num ${fieldSeverity(errs, "rolls")}" data-edit="edit-rolls">${formatNum(p.rolls ?? p.boxes, 0)}</td>
-      <td class="num ${fieldSeverity(errs, "meters")}" data-edit="edit-qty">${formatNum(p.meters ?? c.qty)}</td>
-      <td class="num ${fieldSeverity(errs, "width")}" data-edit="edit-width">${formatNum(p.width, 3)}</td>
-      <td class="num ${fieldSeverity(errs, "area")}" data-edit="edit-area">${formatNum(p.area, 3)}</td>
-      <td class="num ${fieldSeverity(errs, "net_weight")}" data-edit="edit-net-weight">${formatNum(p.net_weight)}</td>
-      <td class="num ${fieldSeverity(errs, "gross_weight")}" data-edit="edit-gross-weight">${formatNum(p.gross_weight)}</td>
-      <td class="money ${fieldSeverity(errs, "price")}" data-edit="edit-price">${formatPrice(c.price)}</td>
-      <td class="money ${fieldSeverity(errs, "amount")}" data-edit="edit-amount">${formatMoney(c.amount)}</td>
-      <td class="code ${fieldSeverity(errs, "hs_code")}" data-edit="edit-hs">${escapeHtml(u.hs_code || "-")}</td>
-      <td class="code ${fieldSeverity(errs, "tnved_code")}" data-edit="edit-tnved">${escapeHtml(u.tnved_code || "-")}</td>
-      ${longCell(desc, "desc")}
+      ${body}
       <td class="flags-cell">
         <button type="button" class="btn compact-btn item-edit-btn" data-edit-item="${escapeHtml(item.id)}">Изменить</button>
         ${renderFlags(errs)}
@@ -1779,6 +1965,15 @@ function renderWorkspace() {
     `;
     tbody.appendChild(tr);
   });
+  const totalCells = [
+    `<th></th>`,
+    ...cols.map((col) => {
+      const klass = col.kind === "num" ? "num" : col.kind === "money" ? "money" : "";
+      return `<th class="${klass}" data-total="${escapeHtml(col.key)}">${col.key === "article" ? "Итого" : ""}</th>`;
+    }),
+    `<th></th>`,
+  ];
+  tfoot.innerHTML = `<tr id="items-totals-row">${totalCells.join("")}</tr>`;
   fillExcelTotals(ws.items || [], ws.model_review);
 }
 
@@ -1790,12 +1985,102 @@ function toggleLongCell(td, open) {
 }
 
 $("#items-table")?.addEventListener("click", (e) => {
+  const del = e.target.closest("[data-col-delete]");
+  if (del) {
+    e.preventDefault();
+    e.stopPropagation();
+    askDeleteColumn(del.dataset.colDelete);
+    return;
+  }
   if (e.target.closest(".cell-short, .cell-hide")) return;
   const row = e.target.closest("tbody tr.item-row");
   if (!row?.dataset.id) return;
   const focusId = e.target.closest("[data-edit]")?.dataset.edit || "";
   openEdit(row.dataset.id, focusId);
 });
+
+$("#role-tabs")?.addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-role]");
+  if (!tab) return;
+  state.role = tab.dataset.role;
+  syncRoleTabs();
+  paintItemsTable();
+});
+
+function columnTitle(key) {
+  const cols = visibleRoleColumns();
+  const hit = cols.find((col) => col.key === key);
+  if (hit) return hit.title;
+  return key;
+}
+
+function askDeleteColumn(key) {
+  const roleName = ROLE_FROM[state.role] || state.role;
+  const title = columnTitle(key);
+  state.pendingDelete = { key, role: state.role };
+  const text = $("#column-delete-text");
+  if (text) text.textContent = `Вы точно хотите удалить столбец ${title} из ${roleName}?`;
+  openDialog($("#column-delete-dialog"));
+}
+
+function applyDeleteColumn() {
+  const pending = state.pendingDelete;
+  if (!pending) return;
+  const layout = state.columnLayout[pending.role] || { hidden: [], extra: [] };
+  if (String(pending.key).startsWith("extra:")) {
+    const id = pending.key.slice(6);
+    layout.extra = (layout.extra || []).filter((col) => col.id !== id);
+    (state.workspace?.items || []).forEach((item) => {
+      if (item.extra_columns && item.extra_columns[pending.role]) {
+        delete item.extra_columns[pending.role][id];
+      }
+    });
+  } else if (!layout.hidden.includes(pending.key)) {
+    layout.hidden = [...(layout.hidden || []), pending.key];
+  }
+  state.columnLayout[pending.role] = layout;
+  state.pendingDelete = null;
+  paintItemsTable();
+}
+
+$("#column-delete-form")?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  applyDeleteColumn();
+  $("#column-delete-dialog")?.close();
+});
+$("#column-delete-cancel")?.addEventListener("click", () => $("#column-delete-dialog")?.close());
+$("#column-add-roles")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-add-role]");
+  if (!btn) return;
+  previewAddColumn(btn.dataset.addRole);
+});
+$("#column-add-form")?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  applyAddColumn();
+  $("#column-add-dialog")?.close();
+});
+$("#column-add-cancel")?.addEventListener("click", () => $("#column-add-dialog")?.close());
+
+function sourceColumnHeaders(file) {
+  const fromFile = file?.headers || [];
+  if (fromFile.length) return fromFile;
+  const seen = [];
+  const known = new Set();
+  (file?.table || []).forEach((row) => {
+    Object.keys(row?.raw || {}).forEach((title) => {
+      if (known.has(title)) return;
+      known.add(title);
+      seen.push(title);
+    });
+  });
+  if (seen.length) return seen;
+  return ["article", "rolls", "qty", "price", "amount", "net_weight", "gross_weight", "hs_code", "description"];
+}
+
+function sourceColumnValue(row, header) {
+  if (row?.raw && row.raw[header] != null && row.raw[header] !== "") return row.raw[header];
+  return row?.[header];
+}
 
 document.addEventListener("click", (e) => {
   const hide = e.target.closest(".cell-hide");
@@ -1813,6 +2098,15 @@ document.addEventListener("click", (e) => {
 });
 
 $("#review-dialog")?.addEventListener("click", (e) => {
+  const add = e.target.closest("[data-col-add]");
+  if (add) {
+    e.preventDefault();
+    const filename = $("#review-dialog-body")?.dataset.reviewFile || "";
+    const { files } = reviewSources(state.workspace);
+    const file = findReviewFile(files, filename);
+    openAddColumn(add.dataset.colAdd, file);
+    return;
+  }
   const tab = e.target.closest("[data-review-file]");
   if (tab) {
     e.preventDefault();
@@ -2079,7 +2373,107 @@ function exportPayload() {
     profile_type: state.workspace.profile_type,
     header_fields: state.workspace.header_fields || {},
     items: state.workspace.items || [],
+    column_layout: state.columnLayout,
   };
+}
+
+function syncRoleTabs() {
+  document.querySelectorAll("#role-tabs .role-tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.role === state.role);
+  });
+}
+
+function syncAddRoleButtons() {
+  const beijing = String(state.workspace?.profile_type || "").toUpperCase() === "BEIJING";
+  const labels = beijing
+    ? { invoice: "Лист Invoice", packing: "Лист Packing list", specification: "Лист Specification" }
+    : { invoice: "Файл инвойс", packing: "Файл пакинг", specification: "Файл спецификация" };
+  document.querySelectorAll("#column-add-roles [data-add-role]").forEach((btn) => {
+    btn.textContent = labels[btn.dataset.addRole] || btn.textContent;
+  });
+}
+
+async function openAddColumn(header, file) {
+  if (!file || !state.workspace) return;
+  state.pendingAdd = { header, file, preview: null, role: null };
+  const title = $("#column-add-title");
+  if (title) title.textContent = `Столбец «${header}» из ${file.filename || "файла"}`;
+  const match = $("#column-add-match");
+  if (match) match.textContent = "Выберите файл или лист, затем проверьте склейку.";
+  const confirmBtn = $("#column-add-confirm");
+  if (confirmBtn) confirmBtn.disabled = true;
+  syncAddRoleButtons();
+  document.querySelectorAll("#column-add-roles [data-add-role]").forEach((btn) => {
+    btn.classList.remove("primary");
+  });
+  openDialog($("#column-add-dialog"));
+}
+
+async function previewAddColumn(role) {
+  const pending = state.pendingAdd;
+  if (!pending || !state.workspace) return;
+  pending.role = role;
+  document.querySelectorAll("#column-add-roles [data-add-role]").forEach((btn) => {
+    btn.classList.toggle("primary", btn.dataset.addRole === role);
+  });
+  const match = $("#column-add-match");
+  const confirmBtn = $("#column-add-confirm");
+  if (match) match.textContent = "Сверяю строки источника с таблицей после склейки…";
+  if (confirmBtn) confirmBtn.disabled = true;
+  try {
+    const preview = await api("/api/v1/shipments/columns/attach", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: state.workspace.items || [],
+        source_rows: pending.file.table || [],
+        column: pending.header,
+      }),
+    });
+    pending.preview = preview;
+    const keyHint = {
+      "article+qty": "по артикулу и количеству",
+      "article-sum": "по артикулу: количество источника равно сумме лотов",
+      article: "по артикулу, значение копируется на все лоты этой позиции",
+      "description+qty": "по названию и количеству",
+      "description-sum": "по названию: количество источника равно сумме лотов",
+      description: "по названию",
+      order: "по порядку строк",
+    };
+    if (match) {
+      let text =
+        `В источнике ${preview.source_rows} строк, в таблице ${preview.item_rows}. ` +
+        `Склейка ${keyHint[preview.key] || preview.key}: заполнено ${preview.matched} из ${preview.item_rows}.`;
+      if (preview.unmatched_source) {
+        text += ` Из источника не вошло ${preview.unmatched_source}.`;
+      }
+      match.textContent = text;
+    }
+    if (confirmBtn) confirmBtn.disabled = preview.matched < 1;
+  } catch (err) {
+    if (match) match.textContent = `Не удалось склеить столбец: ${humanizeClientError(err.message)}`;
+  }
+}
+
+function applyAddColumn() {
+  const pending = state.pendingAdd;
+  if (!pending?.preview || !pending.role || !state.workspace) return;
+  const layout = state.columnLayout[pending.role] || { hidden: [], extra: [] };
+  const id = pending.preview.column_id;
+  layout.extra = [...(layout.extra || []), { id, title: pending.header }];
+  state.columnLayout[pending.role] = layout;
+  const values = pending.preview.values || {};
+  (state.workspace.items || []).forEach((item) => {
+    const value = values[String(item.id)];
+    if (value == null || value === "") return;
+    item.extra_columns = item.extra_columns || {};
+    item.extra_columns[pending.role] = { ...(item.extra_columns[pending.role] || {}), [id]: value };
+  });
+  state.role = pending.role;
+  state.pendingAdd = null;
+  syncRoleTabs();
+  paintItemsTable();
+  showToast("Столбец добавлен в конец таблицы", { kind: "ok" });
 }
 
 $("#header-form").addEventListener("submit", async (e) => {

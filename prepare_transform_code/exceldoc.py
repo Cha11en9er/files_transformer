@@ -18,6 +18,7 @@ from prepare_transform_code.lines import (
     Line,
     apply_mfr_brand_cell,
     assign_cell,
+    capture_row_extra,
     attach_pallet,
     fold_parts,
     hs_text,
@@ -243,6 +244,7 @@ def _lines(rows):
             run = _size_run(row, scale)
             if run:
                 line.size = run
+        capture_row_extra(line, header_cells, row)
         if pair_unit and not line.unit:
             line.unit = pair_unit
         _unit_beside_divisor(line, row, mapping)

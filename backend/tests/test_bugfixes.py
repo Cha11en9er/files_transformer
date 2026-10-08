@@ -118,7 +118,7 @@ def test_6211_export_uses_etalon_columns_and_totals(tmp_path: Path) -> None:
 
     inv_ws = load_workbook(inv).active
     headers = [str(inv_ws.cell(24, c).value or "") for c in range(1, 11)]
-    assert headers[1].upper() == "DESIGN"
+    assert "DESIGN" in headers[1].upper()
     assert "ROLLS" in headers[3].upper()
     assert "TOTAL M2" in headers[5].upper()
     letterhead = " ".join(str(inv_ws.cell(r, 1).value or "") for r in range(1, 23))
@@ -133,7 +133,7 @@ def test_6211_export_uses_etalon_columns_and_totals(tmp_path: Path) -> None:
 
     pl_ws = load_workbook(pl).active
     pl_headers = [str(pl_ws.cell(9, c).value or "") for c in range(1, 9)]
-    assert pl_headers[1].upper() == "DESIGN"
+    assert "DESIGN" in pl_headers[1].upper()
     assert "G/M" in pl_headers[2].upper()
     pl_designs = [str(pl_ws.cell(r, 2).value or "") for r in range(10, pl_ws.max_row + 1)]
     assert any("SOFA FABRIC" in d and "Sherlock" in d for d in pl_designs)

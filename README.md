@@ -41,4 +41,6 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8010
 
 Remote: `https://github.com/Cha11en9er/files_transformer.git`
 
-VPS: `root@87.251.86.53`, каталог `/opt/files_transformer`, systemd `excel-transformer` (:8010) и `opencode` (:4096).
+Боевой сайт: ветка `prod_update`, каталог `/opt/files_transformer_update`, systemd `excel-transformer-update`, порт 8200. OpenCode на :4096 не трогать.
+
+Порт 8100 больше не используется. На нём стояла ветка `prod`, коммит `733c7354d5cde6728a8d12249a9e743ea129262a` («Do not invent RMB when the shipment currency is USD or unknown», 5 октября 2026).

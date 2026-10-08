@@ -103,16 +103,17 @@ def test_beijing_export_has_no_and_spec_without_color(tmp_path: Path) -> None:
     inv_header_row = None
     spec_header_row = None
     for row in invoice.iter_rows(min_row=1, max_row=20, values_only=True):
-        if row and row[0] == "No":
+        if row and row[0] and "No" in str(row[0]):
             inv_header_row = list(row)
             break
     for row in spec.iter_rows(min_row=1, max_row=20, values_only=True):
-        if row and row[0] == "No":
+        if row and row[0] and "No" in str(row[0]):
             spec_header_row = list(row)
             break
-    assert inv_header_row[0] == "No"
-    assert "Color" in inv_header_row
-    assert spec_header_row[0] == "No"
+    assert inv_header_row[0] and "No" in str(inv_header_row[0])
+    assert "№" in str(inv_header_row[0])
+    assert any("Color" in str(h or "") for h in inv_header_row)
+    assert spec_header_row[0] and "No" in str(spec_header_row[0])
     assert spec_headers() == [h for h in spec_header_row if h]
     assert "Color" not in spec_header_row
     body = None
@@ -295,7 +296,7 @@ def test_beijing_export_filename_and_table_borders(tmp_path: Path) -> None:
     invoice = wb["Invoice"]
     header_row = None
     for row in invoice.iter_rows(min_row=1, max_row=20):
-        if row and row[0].value == "No":
+        if row and row[0].value and "No" in str(row[0].value):
             header_row = row
             break
     assert header_row is not None
