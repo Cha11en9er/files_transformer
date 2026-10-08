@@ -43,6 +43,7 @@ def read_pdf(path):
     found_lines = []
     stated = {}
     inherited = None
+    inherited_columns = None
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
             text = collapse_overprint(page.extract_text() or "")
@@ -61,7 +62,7 @@ def read_pdf(path):
                     page_found.extend(page_lines)
                     stated = _merge_stated(stated, page_stated)
                 if not page_found:
-                    page_found = _borderless(words)
+                    page_found, inherited_columns = _borderless(words, inherited_columns)
             finally:
                 _COMMA_IS_DECIMAL.reset(comma_token)
                 _DOT_IS_DECIMAL.reset(dot_token)
@@ -228,6 +229,8 @@ def _table_lines(table, boxes, words, table_box, inherited):
             if name not in aliases[col] and name not in used:
                 aliases[col].append(name)
         cursor += 1
+    if header_idx is not None:
+        mapping["_header_row"] = list(table[header_idx])
     lines = []
     stated = {}
     for offset, row in enumerate(table[cursor:]):
@@ -239,14 +242,13 @@ def _table_lines(table, boxes, words, table_box, inherited):
             break
         line = Line(source="pdf")
         shared = _shared_columns(mapping)
+        header_cells = table[header_idx] if header_idx is not None else mapping.get("_header_row") or []
         for name, col in mapping.items():
             if name.startswith("_") or not isinstance(col, int) or col >= len(row):
                 continue
             if col in shared:
                 continue
-            header_cell = ""
-            if header_idx is not None and header_idx < len(table) and col < len(table[header_idx]):
-                header_cell = table[header_idx][col]
+            header_cell = header_cells[col] if col < len(header_cells) else ""
             if name == "vendor" and is_row_index(header_cell, row[col]):
                 continue
             if apply_mfr_brand_cell(line, header_cell, row[col]):
@@ -271,8 +273,8 @@ def _table_lines(table, boxes, words, table_box, inherited):
         for col in mapping.get("_description_extra") or []:
             if col < len(row):
                 assign_cell(line, "description", row[col])
-        if header_idx is not None and header_idx < len(table):
-            capture_row_extra(line, table[header_idx], row)
+        if header_cells:
+            capture_row_extra(line, header_cells, row)
         if line.hs_alt and mapping.get("_hs_alt_shipper"):
             line.hs_alt_shipper = True
         pull_article(line)
@@ -530,7 +532,7 @@ def _merge_stated(left, right):
     return out
 
 
-def _borderless(words):
+def _borderless(words, inherited_columns=None):
     """Таблица без линий. Слова одной строки стоят на одной высоте, колонки — друг под другом."""
     bands = _bands(words)
     header_at = None
@@ -545,12 +547,20 @@ def _borderless(words):
             best = len(names)
             header_at = index
             columns = cols
+    start = 0
     if header_at is None or not columns:
-        return []
+        if not inherited_columns:
+            return [], inherited_columns
+        columns = inherited_columns
+    else:
+        start = header_at + 1
     lines = []
-    for band in bands[header_at + 1 :]:
+    for band in bands[start:]:
         if any(is_stop_label(word["text"]) for word in band):
             break
+        texts = [word["text"] for word in band]
+        if is_header_row(texts):
+            continue
         line = _band_line(band, columns)
         if line is None:
             continue
@@ -561,8 +571,8 @@ def _borderless(words):
         if measured:
             lines.append(line)
     if not _amounts_match(lines) or not _named_goods(lines):
-        return []
-    return lines
+        return [], inherited_columns
+    return lines, columns
 
 
 def _named_goods(lines):

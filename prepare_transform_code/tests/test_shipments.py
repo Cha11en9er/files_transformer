@@ -1414,6 +1414,14 @@ class HmkInvoiceTest(unittest.TestCase):
         self.assertEqual(first["pieces"], 360)
         self.assertAlmostEqual(first["price"], 0.1304)
         self.assertAlmostEqual(first["amount"], 46.94)
+        inv_table = result["document_tables"]["INV_WAY04.pdf"]
+        self.assertEqual(len(inv_table["rows"]), 13)
+        later = inv_table["rows"][7]
+        self.assertEqual(later["article"], "67003")
+        self.assertTrue(later.get("raw"))
+        self.assertIn("67003", " ".join(str(value) for value in later["raw"].values()))
+        pak_table = result["document_tables"]["PAK_WAY04.pdf"]
+        self.assertTrue(pak_table["rows"][8].get("raw"))
 
 
 class FabricFamilyTest(unittest.TestCase):
