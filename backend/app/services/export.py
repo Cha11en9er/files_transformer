@@ -17,6 +17,19 @@ from app.parsing.header_extract import (
     currency_from_sources,
     export_header_fields,
 )
+from app.services.bilingual import bilingual, label
+from app.services.column_layout import (
+    BEIJING_INVOICE_KEYS,
+    BEIJING_PACKING_KEYS,
+    BEIJING_SPEC_KEYS,
+    ELEMENT_INVOICE_KEYS,
+    ELEMENT_PACKING_KEYS,
+    ELEMENT_SPEC_KEYS,
+    FABRIC_INVOICE_KEYS,
+    FABRIC_PACKING_KEYS,
+    FABRIC_SPEC_KEYS,
+    apply_sheet_layout,
+)
 from app.services.export_18233_templates import (
     _detect_kit,
     _layout_kit,
@@ -91,141 +104,46 @@ def _kit_label(items: list[dict[str, Any]], header: dict[str, Any] | None) -> st
     return ""
 
 
-def _description_text(item: dict[str, Any]) -> str:
-    customs = item.get("customs_data") or {}
-    en = customs.get("description_en")
-    ru = customs.get("description_ru")
-    if en and ru and not is_factory_note(en) and not is_factory_note(ru):
-        return f"{en}/{ru}"
-    for key in ("description", "description_en", "description_ru"):
-        value = customs.get(key)
-        if value and not is_factory_note(value):
-            return str(value)
-    return ""
-
-
-def _qty_of(item: dict[str, Any]) -> Any:
-    commercial = item.get("commercial_data") or {}
-    packing = item.get("packing_data") or {}
-    if commercial.get("qty") not in (None, ""):
-        return commercial.get("qty")
-    return packing.get("meters")
-
-
-def _unit_of(item: dict[str, Any]) -> str:
-    commercial = item.get("commercial_data") or {}
-    packing = item.get("packing_data") or {}
-    return str(commercial.get("unit") or packing.get("unit") or "")
-
-
-def _places_of(item: dict[str, Any]) -> Any:
-    packing = item.get("packing_data") or {}
-    traces = item.get("source_traces") or {}
-    pl = traces.get("packing_list_group") or traces.get("invoice") or {}
-    return packing.get("rolls") or packing.get("boxes") or pl.get("rolls")
-
-
-def _packing_design(item: dict[str, Any]) -> str:
-    traces = item.get("source_traces") or {}
-    pl = traces.get("packing_list_group") or {}
-    design = pl.get("design")
-    if design and not is_factory_note(design):
-        return str(design).replace(" / ", "\n")
-    article = item.get("article") or ""
-    category = pl.get("category")
-    if category and not is_factory_note(category):
-        family = article.split()[0] if article else article
-        return f"{category}\n{family}".strip()
-    return str(article)
-
-
-def _item_rows(items: list[dict[str, Any]], kind: str) -> list[list[Any]]:
-    rows: list[list[Any]] = []
-    for item in items:
-        commercial = item.get("commercial_data") or {}
-        packing = item.get("packing_data") or {}
-        customs = item.get("customs_data") or {}
-        article = item.get("article") or item.get("normalized_article") or ""
-        if kind == "invoice":
-            rows.append(
-                [
-                    article,
-                    item.get("model"),
-                    commercial.get("color"),
-                    _qty_of(item),
-                    _unit_of(item),
-                    commercial.get("price"),
-                    commercial.get("amount"),
-                    commercial.get("currency"),
-                    customs.get("hs_code"),
-                ]
-            )
-        elif kind == "packing":
-            rows.append(
-                [
-                    article,
-                    packing.get("rolls") or packing.get("boxes"),
-                    packing.get("meters") if packing.get("meters") is not None else commercial.get("qty"),
-                    packing.get("area"),
-                    packing.get("net_weight"),
-                    packing.get("gross_weight"),
-                    packing.get("volume"),
-                ]
-            )
-        elif kind == "specification":
-            rows.append(
-                [
-                    article,
-                    commercial.get("color"),
-                    packing.get("rolls") or packing.get("boxes"),
-                    packing.get("meters") if packing.get("meters") is not None else commercial.get("qty"),
-                    packing.get("area"),
-                    packing.get("net_weight"),
-                    packing.get("gross_weight"),
-                    customs.get("tnved_code") or customs.get("hs_code"),
-                    customs.get("description_en"),
-                    customs.get("description_ru"),
-                ]
-            )
-        elif kind == "description":
-            rows.append(
-                [
-                    article,
-                    customs.get("tnved_code"),
-                    customs.get("description_en"),
-                    customs.get("description_ru"),
-                    customs.get("country"),
-                    customs.get("manufacturer"),
-                ]
-            )
-    return rows
-
-
 def _aligned_invoice_rows(
     items: list[dict[str, Any]],
     fabric: bool = True,
     header: dict[str, Any] | None = None,
+    column_layout: dict[str, Any] | None = None,
 ) -> tuple[list[str], list[list[Any]]]:
     headers = preview_headers("626-1" if fabric else "18312", items, header)["invoice"]
-    return headers, invoice_table_rows(items, fabric)
+    keys = FABRIC_INVOICE_KEYS if fabric else ELEMENT_INVOICE_KEYS
+    headers, _keys, rows = apply_sheet_layout(
+        headers, keys, invoice_table_rows(items, fabric), items, column_layout, "invoice"
+    )
+    return headers, rows
 
 
 def _aligned_packing_rows(
     items: list[dict[str, Any]],
     fabric: bool = True,
     header: dict[str, Any] | None = None,
+    column_layout: dict[str, Any] | None = None,
 ) -> tuple[list[str], list[list[Any]]]:
     headers = preview_headers("626-1" if fabric else "18312", items, header)["packing"]
-    return headers, packing_table_rows(items, fabric)
+    keys = FABRIC_PACKING_KEYS if fabric else ELEMENT_PACKING_KEYS
+    headers, _keys, rows = apply_sheet_layout(
+        headers, keys, packing_table_rows(items, fabric), items, column_layout, "packing"
+    )
+    return headers, rows
 
 
 def _aligned_spec_rows(
     items: list[dict[str, Any]],
     fabric: bool = True,
     header: dict[str, Any] | None = None,
+    column_layout: dict[str, Any] | None = None,
 ) -> tuple[list[str], list[list[Any]]]:
     headers = preview_headers("626-1" if fabric else "18312", items, header)["specification"]
-    return headers, spec_table_rows(items, fabric)
+    keys = FABRIC_SPEC_KEYS if fabric else ELEMENT_SPEC_KEYS
+    headers, _keys, rows = apply_sheet_layout(
+        headers, keys, spec_table_rows(items, fabric), items, column_layout, "specification"
+    )
+    return headers, rows
 
 
 def build_export_preview(
@@ -234,31 +152,37 @@ def build_export_preview(
     profile_type: str,
     header: dict[str, Any] | None = None,
     shipment_title: str = "export",
+    column_layout: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """JSON preview of files that export() will write. No PDF/txt."""
     products = _product_items(items)
     header = prepare_export_header(products, header)
     if str(profile_type).upper() in {"BEIJING", "PROFILETYPE.BEIJING"}:
         stem = safe_export_stem(shipment_title)
-        if is_tsd_layout(products, header):
+        if is_tsd_layout(products):
             return {
                 "profile_type": "BEIJING",
-                "files": [tsd_preview(products, header, f"ТСД {stem}.xlsx")],
+                "files": [tsd_preview(products, header, f"ТСД {stem}.xlsx", column_layout)],
             }
         ccy = currency_from_sources(products, header) or ""
+        inv_h, _k, inv_r = apply_sheet_layout(
+            invoice_headers(ccy), BEIJING_INVOICE_KEYS, invoice_rows(products), products, column_layout, "invoice"
+        )
+        pl_h, _k, pl_r = apply_sheet_layout(
+            packing_headers(), BEIJING_PACKING_KEYS, packing_rows(products), products, column_layout, "packing"
+        )
+        spec_h, _k, spec_r = apply_sheet_layout(
+            spec_headers(ccy), BEIJING_SPEC_KEYS, spec_rows(products), products, column_layout, "specification"
+        )
         return {
             "profile_type": "BEIJING",
             "files": [
                 {
                     "filename": f"{stem} для ЭД.xlsx",
                     "sheets": [
-                        {
-                            "title": "Invoice",
-                            "headers": invoice_headers(ccy),
-                            "rows": invoice_rows(products),
-                        },
-                        {"title": "Packing list", "headers": packing_headers(), "rows": packing_rows(products)},
-                        {"title": "Specification", "headers": spec_headers(ccy), "rows": spec_rows(products)},
+                        {"title": "Invoice", "headers": inv_h, "rows": inv_r},
+                        {"title": "Packing list", "headers": pl_h, "rows": pl_r},
+                        {"title": "Specification", "headers": spec_h, "rows": spec_r},
                         {"title": "описание", "headers": description_headers(), "rows": description_rows(products, header)},
                     ],
                 }
@@ -270,9 +194,9 @@ def build_export_preview(
     fabric = is_fabric_layout(layout, products)
     suffix = f" {kit}" if kit else ""
     stem = safe_export_stem(shipment_title)
-    inv_h, inv_r = _aligned_invoice_rows(products, fabric, header)
-    pl_h, pl_r = _aligned_packing_rows(products, fabric, header)
-    spec_h, spec_r = _aligned_spec_rows(products, fabric, header)
+    inv_h, inv_r = _aligned_invoice_rows(products, fabric, header, column_layout)
+    pl_h, pl_r = _aligned_packing_rows(products, fabric, header, column_layout)
+    spec_h, spec_r = _aligned_spec_rows(products, fabric, header, column_layout)
     return {
         "profile_type": "18233",
         "files": [
@@ -328,7 +252,11 @@ def _write_letterhead(ws, kind: str, header: dict[str, Any] | None, cols: int = 
     seller_address = header.get("seller_address") or ""
     warehouse = header.get("warehouse_address") or ""
     delivery_date = header.get("delivery_date") or ""
-    title = {"invoice": "INVOICE", "packing": "PACKING LIST", "specification": "SPECIFICATION"}.get(kind, kind.upper())
+    title = {
+        "invoice": bilingual("INVOICE", "ИНВОЙС"),
+        "packing": bilingual("PACKING LIST", "УПАКОВОЧНЫЙ ЛИСТ"),
+        "specification": bilingual("SPECIFICATION", "СПЕЦИФИКАЦИЯ"),
+    }.get(kind, kind.upper())
     if seller:
         ws.append([seller])
         style_letterhead_row(ws, ws.max_row, cols, company=True)
@@ -337,7 +265,7 @@ def _write_letterhead(ws, kind: str, header: dict[str, Any] | None, cols: int = 
         style_letterhead_row(ws, ws.max_row, cols)
     ws.append([])
     if kind == "specification":
-        spec_title = f"SPECIFICATION №{invoice_no}".strip()
+        spec_title = f"{bilingual('SPECIFICATION', 'СПЕЦИФИКАЦИЯ')} №{invoice_no}".strip()
         if date:
             spec_title = f"{spec_title} dd {date}"
         ws.append([spec_title])
@@ -352,57 +280,57 @@ def _write_letterhead(ws, kind: str, header: dict[str, Any] | None, cols: int = 
     split = min(6, cols)
     if contract:
         dated = f" dd {contract_date}" if contract_date else ""
-        ws.append([f"Contract №：{contract}{dated}"])
+        ws.append([f"{label('contract_word')} №：{contract}{dated}"])
         style_letterhead_row(ws, ws.max_row, cols)
-    ws.append(["Buyer:", None, None, None, None, "Seller:"])
+    ws.append([label("buyer", colon=True), None, None, None, None, label("seller", colon=True)])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split)
     ws.append([buyer, None, None, None, None, seller])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
     if buyer_address or seller_address:
-        ws.append(["Address:", None, None, None, None, "Address:"])
+        ws.append([label("address", colon=True), None, None, None, None, label("address", colon=True)])
         style_split_letterhead(ws, ws.max_row, cols, split_at=split)
         ws.append([buyer_address, None, None, None, None, seller_address])
         style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
         ws.row_dimensions[ws.max_row].height = 36
     if warehouse:
-        ws.append([None, None, None, None, None, "Warehouse address:"])
+        ws.append([None, None, None, None, None, label("warehouse", colon=True)])
         style_split_letterhead(ws, ws.max_row, cols, split_at=split)
         ws.append([None, None, None, None, None, warehouse])
         style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
     if payment:
-        ws.append([f"Terms of payment: {payment}"])
+        ws.append([f"{label('payment', colon=True)} {payment}"])
         style_letterhead_row(ws, ws.max_row, cols)
     if delivery:
-        ws.append([f"Terms of delivery: {delivery}"])
+        ws.append([f"{label('delivery', colon=True)} {delivery}"])
         style_letterhead_row(ws, ws.max_row, cols)
     if delivery_date:
-        ws.append([f"Delivery date: {delivery_date}"])
+        ws.append([f"{label('delivery_date', colon=True)} {delivery_date}"])
         style_letterhead_row(ws, ws.max_row, cols)
     if manufacturer:
-        ws.append([f"Manufacturer: {manufacturer}"])
+        ws.append([f"{label('manufacturer', colon=True)} {manufacturer}"])
         style_letterhead_row(ws, ws.max_row, cols)
     ws.append([])
     if kind == "specification":
         spec_row = _pad_row(
             cols,
-            (1, "инв номер:"),
+            (1, f"{label('invoice_no', colon=True)}"),
             (2, invoice_no),
-            (cols - 1, "дата:"),
+            (cols - 1, f"{label('date', colon=True)}"),
             (cols, date),
         )
         ws.append(spec_row)
     else:
-        spec_no = f"SPECIFICATION № {invoice_no}".strip()
+        spec_no = f"{bilingual('SPECIFICATION', 'СПЕЦИФИКАЦИЯ')} № {invoice_no}".strip()
         if date:
             spec_no = f"{spec_no} {date}"
         ws.append([spec_no])
         style_letterhead_row(ws, ws.max_row, cols)
         left_incoterm = delivery or ""
-        contract_line = f"Contract No {contract}".strip()
+        contract_line = f"{label('contract')} {contract}".strip()
         if contract_date:
             contract_line = f"{contract_line} dd {contract_date}".strip()
-        _append_right_pair(ws, left_incoterm, "INV.NO.", invoice_no, cols)
-        _append_right_pair(ws, contract_line, "DATE:", date, cols)
+        _append_right_pair(ws, left_incoterm, label("inv_no"), invoice_no, cols)
+        _append_right_pair(ws, contract_line, label("date", colon=True), date, cols)
     ws.append([])
 
 
@@ -419,15 +347,16 @@ def _write_packing_letterhead(ws, header: dict[str, Any], cols: int) -> None:
     if buyer_address:
         block = f"{buyer}\n{buyer_address}" if buyer else buyer_address
     if block:
-        prefix = "" if str(block).lower().startswith("buyer") else "Buyer:"
+        low = str(block).lower()
+        prefix = "" if low.startswith("buyer") or low.startswith("покупател") else f"{label('buyer', colon=True)} "
         ws.append([f"{prefix}{block}"])
         style_letterhead_row(ws, ws.max_row, cols)
         ws.row_dimensions[ws.max_row].height = 48
-    contract_line = f"Contract No {contract}".strip() if contract else ""
+    contract_line = f"{label('contract')} {contract}".strip() if contract else ""
     if contract and contract_date:
-        contract_line = f"Contract No {contract} dd {contract_date}"
-    _append_right_pair(ws, delivery, "INV.NO.", invoice_no, cols)
-    _append_right_pair(ws, contract_line, "DATE:", date, cols)
+        contract_line = f"{label('contract')} {contract} dd {contract_date}"
+    _append_right_pair(ws, delivery, label("inv_no"), invoice_no, cols)
+    _append_right_pair(ws, contract_line, label("date", colon=True), date, cols)
     ws.append([])
 
 
@@ -468,15 +397,20 @@ def prepare_export_header(
     return export_header_fields(header or {}, items or [])
 
 
-def export_beijing(items: list[dict[str, Any]], output_path: Path, header: dict[str, Any] | None = None) -> Path:
+def export_beijing(
+    items: list[dict[str, Any]],
+    output_path: Path,
+    header: dict[str, Any] | None = None,
+    column_layout: dict[str, Any] | None = None,
+) -> Path:
     products = _product_items(items)
     header = prepare_export_header(products, header)
-    if is_tsd_layout(products, header):
+    if is_tsd_layout(products):
         stem = output_path.stem
         if "для ЭД" in stem:
             output_path = output_path.with_name(f"ТСД {stem.replace(' для ЭД', '')}.xlsx")
-        return export_tsd_book(products, output_path, header)
-    return export_beijing_book(products, output_path, header)
+        return export_tsd_book(products, output_path, header, column_layout=column_layout)
+    return export_beijing_book(products, output_path, header, column_layout=column_layout)
 
 
 def export_18233(
@@ -484,6 +418,7 @@ def export_18233(
     output_dir: Path,
     header: dict[str, Any] | None = None,
     shipment_title: str = "18233",
+    column_layout: dict[str, Any] | None = None,
 ) -> list[Path]:
     """Three Excel files with the same product rows. No txt/PDF stubs."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -495,9 +430,9 @@ def export_18233(
     suffix = f" {kit}" if kit else ""
     stem = safe_export_stem(shipment_title)
     writers = {
-        "invoice": lambda rows: _aligned_invoice_rows(rows, fabric, header),
-        "packing": lambda rows: _aligned_packing_rows(rows, fabric, header),
-        "specification": lambda rows: _aligned_spec_rows(rows, fabric, header),
+        "invoice": lambda: _aligned_invoice_rows(products, fabric, header, column_layout),
+        "packing": lambda: _aligned_packing_rows(products, fabric, header, column_layout),
+        "specification": lambda: _aligned_spec_rows(products, fabric, header, column_layout),
     }
     paths: list[Path] = []
     names = [
@@ -506,7 +441,7 @@ def export_18233(
         (f"{stem}{suffix} СПЕЦИФИКАЦИЯ С ЦВЕТАМИ.xlsx", "specification"),
     ]
     for filename, kind in names:
-        headers, rows = writers[kind](products)
+        headers, rows = writers[kind]()
         paths.append(
             _save_simple_book(
                 output_dir / filename,

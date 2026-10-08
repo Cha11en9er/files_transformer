@@ -17,6 +17,7 @@ from prepare_transform_code.lines import (
     Line,
     apply_mfr_brand_cell,
     assign_cell,
+    capture_row_extra,
     attach_pallet,
     fold_parts,
     is_bare_total,
@@ -270,6 +271,8 @@ def _table_lines(table, boxes, words, table_box, inherited):
         for col in mapping.get("_description_extra") or []:
             if col < len(row):
                 assign_cell(line, "description", row[col])
+        if header_idx is not None and header_idx < len(table):
+            capture_row_extra(line, table[header_idx], row)
         if line.hs_alt and mapping.get("_hs_alt_shipper"):
             line.hs_alt_shipper = True
         pull_article(line)
@@ -697,6 +700,14 @@ def _band_line(band, columns):
         if col["name"] == "qty" and re.search(r"\b(mt|mts|meter|metre)\b", f"{col['text']} {text}", re.I):
             if "m2" not in col["text"].lower() and "mt2" not in col["text"].lower():
                 line.unit = line.unit or "meters"
+    extra = {}
+    for index, col in enumerate(columns):
+        title = " ".join(str(col.get("text") or "").split())
+        text = " ".join(buckets[index]).strip()
+        if title and text:
+            extra[title] = text
+    if extra:
+        line.extra = extra
     blob = " ".join(word["text"] for word in band)
     if line.pieces is not None and re.search(r"\b(mt|mts|meters?)\b", blob, re.I):
         line.unit = line.unit or "meters"

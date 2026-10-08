@@ -477,6 +477,70 @@ button.badge {
   to { transform: none; }
 }
 
+.table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 18px;
+  margin: 0 0 10px;
+}
+.role-tabs {
+  display: flex;
+  gap: 6px;
+}
+.role-tab {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.role-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.table-role-note {
+  margin: 0;
+}
+.th-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.col-action {
+  opacity: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 4px;
+}
+#items-table thead th:hover .col-action,
+.context-mini thead th:hover .col-action {
+  opacity: 1;
+}
+.col-action:hover {
+  background: rgba(255,255,255,0.18);
+}
+.context-mini thead th .col-action {
+  color: var(--accent);
+}
+.role-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
 .table-wrap {
   overflow: auto;
   border: 1px solid #b8c7d4;

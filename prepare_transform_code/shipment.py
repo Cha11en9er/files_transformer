@@ -1134,9 +1134,17 @@ def _document_table(doc):
                 "gross_weight": line.gross,
                 "area": line.area,
                 "width": line.width,
+                "volume": line.volume,
                 "hs_code": line.hs,
                 "customs_code": line.hs_alt,
+                "brand": line.brand,
+                "manufacturer": line.producer,
+                "country": line.origin,
+                "color": line.finish,
+                "size": line.size,
+                "package_type": line.package_type,
                 "freight": bool(line.freight),
+                "raw": dict(line.extra or {}),
             }
         )
     note = ""
@@ -1146,9 +1154,18 @@ def _document_table(doc):
         note = "Код не прочитал этот файл (скан или картинка без текстового слоя). Его читает модель по фото."
     elif not lines:
         note = "Строк товара код в этом файле не нашёл."
+    headers: list[str] = []
+    seen = set()
+    for row in rows:
+        for title in (row.get("raw") or {}):
+            if title in seen:
+                continue
+            seen.add(title)
+            headers.append(title)
     return {
         "role": doc.get("role") or "",
         "rows": rows,
+        "headers": headers,
         "total_rows": len(lines),
         "note": note,
         "text": "" if rows else str(doc.get("text") or "")[:_TABLE_TEXT_LIMIT],

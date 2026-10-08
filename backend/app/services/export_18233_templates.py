@@ -12,6 +12,7 @@ from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
+from app.services.bilingual import bilingual, bilingual_title, rewrite_sheet_labels
 from app.parsing.header_extract import (
     currency_from_sources,
     export_currency_label,
@@ -39,23 +40,26 @@ NUM_FMT_3 = "0.000"
 
 
 def _price_headers(ccy: str) -> tuple[str, str]:
-    label = export_currency_label(ccy, hangzhou_style=True)
-    if label:
-        return f"UNIT PRICE({label})", f"AMOUNT({label})"
-    return "UNIT PRICE", "AMOUNT"
+    ccy_label = export_currency_label(ccy, hangzhou_style=True)
+    if ccy_label:
+        return (
+            f"{bilingual('Unit Price', 'Цена')} ({ccy_label})",
+            f"{bilingual('Amount', 'Сумма')} ({ccy_label})",
+        )
+    return bilingual("Unit Price", "Цена"), bilingual("Amount", "Сумма")
 
 
 def fabric_invoice_headers(ccy: str = "CNY") -> list[str]:
     price, amount = _price_headers(ccy)
     return [
-        "NO.",
-        "DESIGN",
-        "H.S. CODE",
-        "ROLLS",
-        "WIDTH M",
-        "TOTAL M2",
-        "METERS",
-        "UNIT MT/PIECE",
+        bilingual("No.", "№"),
+        bilingual("Design", "Дизайн"),
+        bilingual("H.S. Code", "Код ТН ВЭД"),
+        bilingual("Rolls", "Рулоны"),
+        bilingual("Width, m", "Ширина, м"),
+        bilingual("Total m²", "Кол-во кв.м"),
+        bilingual("Meters", "Метры"),
+        bilingual("Unit MT/Piece", "Ед. изм."),
         price,
         amount,
     ]
@@ -64,12 +68,12 @@ def fabric_invoice_headers(ccy: str = "CNY") -> list[str]:
 def element_invoice_headers(ccy: str = "CNY") -> list[str]:
     price, amount = _price_headers(ccy)
     return [
-        "NO.",
-        "DESIGN",
-        "H.S. CODE",
-        "PACKAGES",
-        "QUANTITY",
-        "UNIT M/PC",
+        bilingual("No.", "№"),
+        bilingual("Design", "Дизайн"),
+        bilingual("H.S. Code", "Код ТН ВЭД"),
+        bilingual("Packages", "Места"),
+        bilingual("Quantity", "Количество"),
+        bilingual("Unit M/Pc", "Ед. изм."),
         price,
         amount,
     ]
@@ -79,23 +83,23 @@ def element_invoice_headers(ccy: str = "CNY") -> list[str]:
 FABRIC_INVOICE_HEADERS = fabric_invoice_headers("CNY")
 ELEMENT_INVOICE_HEADERS = element_invoice_headers("CNY")
 FABRIC_PACKING_HEADERS = [
-    "No.",
-    "DESIGN",
-    "G/M",
-    "ROLLS",
-    "TOTAL METERS",
-    "NET WEIGHT/KG",
-    "GROSS WEIGHT/KG",
-    "Total M2",
+    bilingual("No.", "№"),
+    bilingual("Design", "Дизайн"),
+    bilingual("G/M", "г/м"),
+    bilingual("Rolls", "Рулоны"),
+    bilingual("Total meters", "Кол-во метров"),
+    bilingual("Net weight, kg", "Вес нетто, кг"),
+    bilingual("Gross weight, kg", "Вес брутто, кг"),
+    bilingual("Total m²", "Кол-во кв.м"),
 ]
 ELEMENT_PACKING_HEADERS = [
-    "No.",
-    "DESIGN",
-    "PACKAGES",
-    "QUANTITY",
-    "UNIT",
-    "NET WEIGHT/KG",
-    "GROSS WEIGHT/KG",
+    bilingual("No.", "№"),
+    bilingual("Design", "Дизайн"),
+    bilingual("Packages", "Места"),
+    bilingual("Quantity", "Количество"),
+    bilingual("Unit", "Ед. изм."),
+    bilingual("Net weight, kg", "Вес нетто, кг"),
+    bilingual("Gross weight, kg", "Вес брутто, кг"),
 ]
 def fabric_spec_headers(ccy: str = "CNY") -> list[str]:
     word = export_currency_word_ru(ccy)
@@ -790,6 +794,57 @@ def _fmt_for(field: str, value: Any = None) -> str | None:
     return None
 
 
+_HIDE_ALIASES = {
+    "packages": ("rolls", "packages"),
+    "qty": ("qty", "meters"),
+    "article": ("article", "design"),
+    "hs_alt": ("tnved_code", "hs_code"),
+    "net_weight": ("net_weight",),
+    "gross_weight": ("gross_weight",),
+    "hs_code": ("hs_code",),
+    "width": ("width",),
+    "area": ("area",),
+    "unit": ("unit",),
+    "price": ("price",),
+    "amount": ("amount",),
+    "gsm": ("gm", "gsm"),
+}
+
+
+def _apply_operator_columns(ws, header_row: int, colmap: dict[str, int], items: list[dict[str, Any]], column_layout, role: str) -> dict[str, int]:
+    from app.services.column_layout import extra_value, layout_for
+
+    layout = layout_for(column_layout, role)
+    for key in layout["hidden"]:
+        names = _HIDE_ALIASES.get(key, (key,))
+        for name in names:
+            col = colmap.get(name)
+            if col:
+                ws.column_dimensions[get_column_letter(col)].hidden = True
+                break
+    last = max(colmap.values(), default=0)
+    for col in range(last + 1, min((ws.max_column or last) + 1, last + 12)):
+        if str(ws.cell(header_row, col).value or "").strip():
+            last = col
+    for extra in layout["extra"]:
+        last += 1
+        title = bilingual_title(extra.get("title") or "Column")
+        _set_cell(ws, header_row, last, title)
+        col_id = str(extra.get("id") or "")
+        colmap[f"extra:{col_id}"] = last
+        for row in range(header_row + 1, (ws.max_row or header_row) + 1):
+            no = ws.cell(row, colmap.get("no", 1)).value
+            item = items[no - 1] if isinstance(no, int) and 1 <= no <= len(items) else None
+            _set_cell(ws, row, last, extra_value(item, role, col_id))
+    return colmap
+
+
+def _finish_role_sheet(ws, header_row: int, colmap: dict[str, int], items, column_layout, role: str) -> None:
+    colmap = _apply_operator_columns(ws, header_row, colmap, items, column_layout, role)
+    _style_table_header(ws, header_row, colmap)
+    rewrite_sheet_labels(ws, max_row=header_row, max_col=max(max(colmap.values(), default=16), 16))
+
+
 def _style_table_header(ws, header_row: int, colmap: dict[str, int]) -> None:
     """Customer edits: table-header titles bold, columns narrowed to 10-15."""
     last_col = max(colmap.values(), default=0)
@@ -904,6 +959,7 @@ def fill_specification_template(
     items: list[dict[str, Any]],
     header: dict[str, Any] | None,
     kit: str,
+    column_layout: dict[str, Any] | None = None,
 ) -> Path:
     shutil.copy2(template, output)
     wb = load_workbook(output)
@@ -972,7 +1028,7 @@ def fill_specification_template(
         # total already written as last data row
         pass
     _apply_letterhead(ws, header, kit, header_row)
-    _style_table_header(ws, header_row, colmap)
+    _finish_role_sheet(ws, header_row, colmap, products, column_layout, "specification")
 
     if len(wb.sheetnames) > 1:
         desc_ws = wb[wb.sheetnames[1]]
@@ -1027,6 +1083,7 @@ def fill_invoice_template(
     header: dict[str, Any] | None,
     kit: str,
     packing_groups: list[dict[str, Any]] | None = None,
+    column_layout: dict[str, Any] | None = None,
 ) -> Path:
     shutil.copy2(template, output)
     wb = load_workbook(output)
@@ -1050,7 +1107,7 @@ def fill_invoice_template(
             cell = ws.cell(data_start + offset, colmap.get("design", 2))
             cell.font = Font(bold=True)
     _apply_letterhead(ws, header, kit, header_row)
-    _style_table_header(ws, header_row, colmap)
+    _finish_role_sheet(ws, header_row, colmap, products, column_layout, "invoice")
     unfreeze_workbook(wb)
     wb.save(output)
     return output
@@ -1062,6 +1119,7 @@ def fill_packing_template(
     items: list[dict[str, Any]],
     header: dict[str, Any] | None,
     kit: str,
+    column_layout: dict[str, Any] | None = None,
 ) -> Path:
     shutil.copy2(template, output)
     wb = load_workbook(output)
@@ -1088,7 +1146,7 @@ def fill_packing_template(
             values["design"] = None
         _write_mapped_row(ws, data_start + offset, colmap, values)
     _apply_letterhead(ws, header, kit, header_row)
-    _style_table_header(ws, header_row, colmap)
+    _finish_role_sheet(ws, header_row, colmap, products, column_layout, "packing")
     unfreeze_workbook(wb)
     wb.save(output)
     return output
@@ -1099,6 +1157,7 @@ def export_18233_from_templates(
     output_dir: Path,
     header: dict[str, Any] | None = None,
     shipment_title: str = "18233",
+    column_layout: dict[str, Any] | None = None,
 ) -> list[Path]:
     if not materials_available():
         raise FileNotFoundError("MVP_18233 materials not found; cannot use эталон templates")
@@ -1116,8 +1175,8 @@ def export_18233_from_templates(
     spec_out = output_dir / f"{stem} {label} СПЕЦИФИКАЦИЯ С ЦВЕТАМИ.xlsx"
 
     paths = [
-        fill_invoice_template(templates["invoice"], inv_out, items, header, label),
-        fill_packing_template(templates["packing"], pl_out, items, header, label),
-        fill_specification_template(templates["specification"], spec_out, items, header, label),
+        fill_invoice_template(templates["invoice"], inv_out, items, header, label, column_layout=column_layout),
+        fill_packing_template(templates["packing"], pl_out, items, header, label, column_layout=column_layout),
+        fill_specification_template(templates["specification"], spec_out, items, header, label, column_layout=column_layout),
     ]
     return paths

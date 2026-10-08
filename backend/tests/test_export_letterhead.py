@@ -55,17 +55,21 @@ def test_packing_letterhead_is_compact_and_inv_in_last_columns(tmp_path: Path) -
     for r in range(1, 12):
         for c in range(1, 9):
             val = str(pl.cell(r, c).value or "").upper()
-            if val in {"INV.NO.", "INV.NO"}:
+            if "INV.NO" in val:
                 found_inv = True
                 assert c == 7
                 assert str(pl.cell(r, c + 1).value) == "ZFRMB26148-626-1"
-            if val == "DATE:":
+            if val.startswith("DATE") or val.startswith("DATE /"):
                 found_date = True
                 assert c == 7
                 assert "Aug.19" in str(pl.cell(r, c + 1).value)
     assert found_inv and found_date
 
-    header_row = next(r for r in range(1, 20) if str(pl.cell(r, 1).value or "").upper() in {"NO.", "NO"})
+    header_row = next(
+        r
+        for r in range(1, 20)
+        if str(pl.cell(r, 1).value or "").upper().startswith("NO")
+    )
     data_row = header_row + 1
     assert pl.cell(header_row, 1).font.bold
     assert not (pl.cell(data_row, 7).font.bold or False)

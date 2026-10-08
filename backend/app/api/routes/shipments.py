@@ -33,6 +33,7 @@ from app.parsing.pipeline import parse_upload
 from app.parsing.schemas import ParsedDocument
 from app.parsing.user_messages import humanize_exception, humanize_message
 from app.schemas.api import (
+    AttachColumnRequest,
     ExportRequest,
     FileOut,
     ItemOut,
@@ -447,6 +448,7 @@ def _items_from_rows(rows: list[dict[str, Any]]) -> list[ItemOut]:
                 normalized_article=row.get("normalized_article") or "",
                 commercial_data=row.get("commercial_data") or {},
                 packing_data=row.get("packing_data") or {},
+                extra_columns=row.get("extra_columns") or {},
                 customs_data=row.get("customs_data") or {},
                 source_traces=row.get("source_traces") or {},
                 validation_errors=flags,
@@ -909,16 +911,37 @@ def recognize_uploads(
         return Response(content=json.dumps(body, ensure_ascii=False, default=str), media_type="application/json")
 
 
+def _column_layout(payload: ExportRequest) -> dict[str, Any]:
+    raw = payload.column_layout or {}
+    return {key: value.model_dump() for key, value in raw.items()}
+
+
+@router.get("/columns")
+def role_table_columns(profile_type: str = "18233", fabric: bool = False) -> dict[str, Any]:
+    from app.services.column_layout import site_columns
+
+    return {"roles": site_columns(profile_type, fabric), "fabric": fabric}
+
+
+@router.post("/columns/attach")
+def attach_source_column(payload: AttachColumnRequest) -> dict[str, Any]:
+    from app.services.column_layout import attach_column
+
+    items = [item.model_dump(mode="json") for item in payload.items]
+    return attach_column(items, payload.source_rows or [], payload.column)
+
+
 @router.post("/export")
 def export_workspace(payload: ExportRequest) -> Response:
     items = [item.model_dump(mode="json") for item in payload.items]
     header = export_header_fields(payload.header_fields or {}, items)
     title = resolve_shipment_title(payload.title, header)
     safe_title = safe_export_stem(title)
+    layout = _column_layout(payload)
     with tempfile.TemporaryDirectory(prefix="export_") as tmp:
         out_dir = Path(tmp)
         if payload.profile_type == ProfileType.BEIJING:
-            paths = [export_beijing(items, out_dir / f"{safe_title} для ЭД.xlsx", header)]
+            paths = [export_beijing(items, out_dir / f"{safe_title} для ЭД.xlsx", header, column_layout=layout)]
         else:
             if materials_available():
                 try:
@@ -927,6 +950,7 @@ def export_workspace(payload: ExportRequest) -> Response:
                         out_dir,
                         header=header,
                         shipment_title=safe_title,
+                        column_layout=layout,
                     )
                 except Exception:
                     paths = export_18233(
@@ -934,6 +958,7 @@ def export_workspace(payload: ExportRequest) -> Response:
                         out_dir,
                         header=header,
                         shipment_title=safe_title,
+                        column_layout=layout,
                     )
             else:
                 paths = export_18233(
@@ -941,6 +966,7 @@ def export_workspace(payload: ExportRequest) -> Response:
                     out_dir,
                     header=header,
                     shipment_title=safe_title,
+                    column_layout=layout,
                 )
         zip_buf = BytesIO()
         with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -970,4 +996,5 @@ def export_preview(payload: ExportRequest) -> dict[str, Any]:
         profile_type=payload.profile_type.value,
         header=header,
         shipment_title=resolve_shipment_title(payload.title, header),
+        column_layout=_column_layout(payload),
     )

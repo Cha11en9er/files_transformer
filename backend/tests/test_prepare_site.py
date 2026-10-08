@@ -349,7 +349,7 @@ def test_model_add_with_comma_decimals_builds_rows() -> None:
 
 
 def test_dt_sheet_follows_the_scheme_and_leaves_gaps_empty() -> None:
-    from app.services.export_tsd import dt_headers, dt_rows
+    from app.services.export_tsd import _dt_key, dt_headers, dt_rows
 
     lots = [
         _lot(
@@ -399,16 +399,16 @@ def test_dt_sheet_follows_the_scheme_and_leaves_gaps_empty() -> None:
             "manufacturer": "Factory One / Factory Two",
         },
     )
-    assert headers[:6] == ["№", "Код ТН ВЭД", "Описание", "Описание в группе", "Изготовитель", "ТЗ"]
-    assert headers.count("Описание") == 2
-    assert headers.count("") == 3
-    assert "ИТС по запросу" in headers and "Декларация соответствия" in headers
-    assert "CT" not in headers
+    keys = [_dt_key(title) for title in headers]
+    assert keys[:6] == ["№", "Код ТН ВЭД", "Описание", "Описание в группе", "Изготовитель", "ТЗ"]
+    assert keys.count("Описание") == 2
+    assert keys.count("") == 3
+    assert "ИТС по запросу" in keys and "Декларация соответствия" in keys
+    assert "CT" not in keys
     body, total = rows[:-1], rows[-1]
-    at = headers.index
 
     def col(name, row):
-        return row[at(name)]
+        return row[keys.index(name)]
 
     assert [col("Изготовитель", row) for row in body] == ["Factory One", "Factory Two", None]
     assert col("Код упаковки", body[0]) == "картонная коробка"
@@ -417,7 +417,7 @@ def test_dt_sheet_follows_the_scheme_and_leaves_gaps_empty() -> None:
     assert col("кол-во мест", body[0]) == col("Кол-во упак", body[0]) == 3
     assert col("Описание в группе", body[0]) is None
     assert col("Описание", body[0]) == "Long name"
-    second_description = [i for i, name in enumerate(headers) if name == "Описание"][1]
+    second_description = [i for i, name in enumerate(keys) if name == "Описание"][1]
     assert body[0][second_description] is None
     assert col("ТЗ", body[0]) == "Micama"
     assert col("марка", body[0]) is None

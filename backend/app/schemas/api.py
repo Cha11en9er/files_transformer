@@ -59,6 +59,7 @@ class ItemOut(BaseModel):
     customs_data: dict[str, Any]
     source_traces: dict[str, Any] = Field(default_factory=dict)
     validation_errors: list[ValidationErrorOut] = Field(default_factory=list)
+    extra_columns: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     model_config = {"from_attributes": True}
 
@@ -177,11 +178,23 @@ class WorkspaceOut(BaseModel):
     verdict_run: dict[str, Any] = Field(default_factory=dict)
 
 
+class ColumnLayoutIn(BaseModel):
+    hidden: list[str] = Field(default_factory=list)
+    extra: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AttachColumnRequest(BaseModel):
+    items: list[ItemOut] = Field(default_factory=list)
+    source_rows: list[dict[str, Any]] = Field(default_factory=list)
+    column: str
+
+
 class ExportRequest(BaseModel):
     title: str = "export"
     profile_type: ProfileType
     header_fields: dict[str, Any] = Field(default_factory=dict)
     items: list[ItemOut] = Field(default_factory=list)
+    column_layout: dict[str, ColumnLayoutIn] = Field(default_factory=dict)
 
 
 class PermitCandidate(BaseModel):

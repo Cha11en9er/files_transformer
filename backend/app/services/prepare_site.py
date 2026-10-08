@@ -833,6 +833,11 @@ def review_files(
                 "gross_weight": packing.get("gross_weight"),
                 "hs_code": customs.get("hs_code"),
                 "description": customs.get("description"),
+                "brand": customs.get("brand"),
+                "manufacturer": customs.get("manufacturer"),
+                "country": customs.get("country"),
+                "color": commercial.get("color"),
+                "size": commercial.get("size"),
             }
         )
     pdfs = []
@@ -846,6 +851,7 @@ def review_files(
         entry = {
             "filename": name,
             "table": rows,
+            "headers": (own or {}).get("headers") or [],
             "note": (own or {}).get("note") or "",
             "text": "",
             "total_rows": (own or {}).get("total_rows") or len(rows),

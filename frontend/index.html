@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=40" />
+  <link rel="stylesheet" href="/assets/styles.css?v=42" />
 </head>
 <body>
   <div class="app">
@@ -108,24 +108,32 @@
         <p class="field-note header-note">Шапка выгрузки: покупатель, продавец, инвойс, контракт, оплата, производитель. Правки из этого блока уходят в Excel при выгрузке.</p>
         <div id="header-changes" class="header-changes" hidden></div>
         <form id="header-form" class="header-form">
-          <label>Покупатель <input name="buyer" /></label>
-          <label>Адрес покупателя <textarea name="buyer_address" rows="2"></textarea></label>
-          <label>Продавец <input name="seller" /></label>
-          <label>Адрес продавца <textarea name="seller_address" rows="2"></textarea></label>
-          <label>№ контракта <input name="contract_no" /></label>
-          <label>Дата контракта <input name="contract_date" /></label>
-          <label>№ инвойса <input name="invoice_no" /></label>
-          <label>Дата инвойса <input name="invoice_date" /></label>
-          <label>Условия поставки <input name="delivery_terms" /></label>
-          <label>Валюта <input name="currency" /></label>
-          <label>Условия оплаты <input name="payment_terms" /></label>
-          <label>Производитель <input name="manufacturer" /></label>
-          <label>Срок поставки <input name="delivery_date" /></label>
-          <label>Адрес склада <input name="warehouse_address" /></label>
+          <label>Buyer / Покупатель <input name="buyer" /></label>
+          <label>Buyer address / Адрес покупателя <textarea name="buyer_address" rows="2"></textarea></label>
+          <label>Seller / Продавец <input name="seller" /></label>
+          <label>Seller address / Адрес продавца <textarea name="seller_address" rows="2"></textarea></label>
+          <label>Contract No. / № контракта <input name="contract_no" /></label>
+          <label>Contract date / Дата контракта <input name="contract_date" /></label>
+          <label>Invoice No. / № инвойса <input name="invoice_no" /></label>
+          <label>Invoice date / Дата инвойса <input name="invoice_date" /></label>
+          <label>Terms of delivery / Условия поставки <input name="delivery_terms" /></label>
+          <label>Currency / Валюта <input name="currency" /></label>
+          <label>Terms of payment / Условия оплаты <input name="payment_terms" /></label>
+          <label>Manufacturer / Производитель <input name="manufacturer" /></label>
+          <label>Delivery date / Срок поставки <input name="delivery_date" /></label>
+          <label>Warehouse address / Адрес склада <input name="warehouse_address" /></label>
           <button type="submit" class="btn primary compact-btn btn-save-header">Сохранить</button>
         </form>
       </details>
 
+      <div class="table-toolbar">
+        <div class="role-tabs" id="role-tabs" role="tablist">
+          <button type="button" class="role-tab active" data-role="invoice">Инвойс</button>
+          <button type="button" class="role-tab" data-role="packing">Пакинг</button>
+          <button type="button" class="role-tab" data-role="specification">Спецификация</button>
+        </div>
+        <p class="field-note table-role-note">Таблица показывает столбцы выбранного файла. Наведите на название, чтобы удалить столбец.</p>
+      </div>
       <div class="legend table-legend">
         <span class="pill red">Расхождение</span>
         <span class="pill yellow">Пропуск или нет соответствия</span>
@@ -134,43 +142,9 @@
       </div>
       <div class="table-wrap">
         <table id="items-table">
-          <thead>
-            <tr>
-              <th class="row-no">№</th>
-              <th>Артикул</th>
-              <th class="num">Рулоны / места</th>
-              <th class="num">Метры / кол-во</th>
-              <th class="num">Ширина</th>
-              <th class="num">м²</th>
-              <th class="num">Нетто</th>
-              <th class="num">Брутто</th>
-              <th class="money">Цена</th>
-              <th class="money">Сумма</th>
-              <th>HS</th>
-              <th>ТН ВЭД</th>
-              <th>Описание</th>
-              <th>Отметки</th>
-            </tr>
-          </thead>
+          <thead></thead>
           <tbody></tbody>
-          <tfoot>
-            <tr id="items-totals-row">
-              <th></th>
-              <th>Итого Excel</th>
-              <th class="num" data-total="rolls">-</th>
-              <th class="num" data-total="meters">-</th>
-              <th></th>
-              <th class="num" data-total="area">-</th>
-              <th class="num" data-total="net_weight">-</th>
-              <th class="num" data-total="gross_weight">-</th>
-              <th></th>
-              <th class="money" data-total="amount">-</th>
-              <th></th>
-              <th></th>
-              <th></th>
-              <th></th>
-            </tr>
-          </tfoot>
+          <tfoot></tfoot>
         </table>
       </div>
       <footer class="table-foot" id="table-foot" aria-label="Подсказка по работе с таблицей">
@@ -225,6 +199,34 @@
 
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
-  <script src="/assets/app.js?v=57"></script>
+  <dialog id="column-delete-dialog">
+    <form method="dialog" class="dialog-form" id="column-delete-form">
+      <h3>Удаление столбца</h3>
+      <p id="column-delete-text" class="hint"></p>
+      <div class="actions">
+        <button type="button" class="btn" id="column-delete-cancel">Отмена</button>
+        <button type="submit" class="btn primary">Удалить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="column-add-dialog" class="review-dialog">
+    <form method="dialog" class="dialog-form" id="column-add-form">
+      <h3>Куда вы хотите добавить столбец</h3>
+      <p id="column-add-title" class="hint"></p>
+      <div class="role-pick" id="column-add-roles">
+        <button type="button" class="btn" data-add-role="invoice">Инвойс</button>
+        <button type="button" class="btn" data-add-role="packing">Пакинг</button>
+        <button type="button" class="btn" data-add-role="specification">Спецификация</button>
+      </div>
+      <p id="column-add-match" class="hint"></p>
+      <div class="actions">
+        <button type="button" class="btn" id="column-add-cancel">Отмена</button>
+        <button type="submit" class="btn primary" id="column-add-confirm" disabled>Добавить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/assets/app.js?v=60"></script>
 </body>
 </html>

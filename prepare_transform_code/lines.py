@@ -476,6 +476,21 @@ def _prefer_text(current, new):
     return new if _plain_score(new) > _plain_score(current) else current
 
 
+def capture_row_extra(line, headers, row):
+    """Keep printed column titles so the operator can move a source column onto a role."""
+    extra = {}
+    for col, header in enumerate(headers or []):
+        title = " ".join(str(header or "").replace("\n", " ").split())
+        if not title or col >= len(row):
+            continue
+        value = row[col]
+        if value in (None, ""):
+            continue
+        extra[title] = value
+    if extra:
+        line.extra = extra
+
+
 def _collapse_group(group):
     head = group[0]
     for line in group:

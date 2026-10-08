@@ -69,9 +69,9 @@ def test_18312_export_three_xlsx_same_articles(tmp_path: Path) -> None:
     inv_rows = preview["files"][0]["sheets"][0]["rows"]
     pack_rows = preview["files"][1]["sheets"][0]["rows"]
     spec_rows = preview["files"][2]["sheets"][0]["rows"]
-    assert inv_headers[1] == "DESIGN"
+    assert "DESIGN" in inv_headers[1].upper()
     assert "PACKAGES" in inv_headers[3].upper()
-    assert pack_headers[1] == "DESIGN"
+    assert "DESIGN" in pack_headers[1].upper()
     assert "Art." in spec_headers[2] or "Артикул" in spec_headers[2]
     product_inv = [row for row in inv_rows if isinstance(row[0], (int, float))]
     spec_products = [row for row in spec_rows if isinstance(row[0], (int, float))]

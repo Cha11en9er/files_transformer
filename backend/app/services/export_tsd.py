@@ -15,6 +15,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from app.parsing.header_extract import currency_from_sources, export_header_fields, split_party_address
+from app.services.bilingual import bilingual, label
+from app.services.column_layout import apply_sheet_layout
 from app.services.export_style import (
     style_data_table,
     style_letterhead_row,
@@ -37,7 +39,7 @@ NUM_FMT_4 = "0.0000"
 NUM_FMT_INT = "0"
 
 
-def is_tsd_layout(items: list[dict[str, Any]], header: dict[str, Any] | None = None) -> bool:
+def is_tsd_layout(items: list[dict[str, Any]]) -> bool:
     products = [item for item in items if item.get("article")]
     if len(products) < 2:
         return False
@@ -227,22 +229,22 @@ def _write_invoice_letterhead(ws, header: dict[str, Any], cols: int) -> None:
     ws.append([])
     split = min(7, cols)
     pad = [None] * max(split - 2, 0)
-    ws.append(["INVOICE:", *pad, invoice_no])
+    ws.append([label("invoice", colon=True), *pad, invoice_no])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split)
-    ws.append(["DATE:", *pad, date])
+    ws.append([label("date", colon=True), *pad, date])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split)
     ws.append([])
-    ws.append(["THE SELLER:"])
+    ws.append([label("the_seller", colon=True)])
     style_letterhead_row(ws, ws.max_row, cols)
-    ws.append([seller, *pad, "THE DELIVERY BASIS"])
+    ws.append([seller, *pad, label("delivery_basis")])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split)
-    contract_line = f"CONTRACT: {contract}".strip()
+    contract_line = f"{label('contract_word', colon=True)} {contract}".strip()
     if contract_date:
         contract_line = f"{contract_line} dd {contract_date}"
-    ws.append([f"Address: {seller_address}".strip(), *pad, contract_line])
+    ws.append([f"{label('address', colon=True)} {seller_address}".strip(), *pad, contract_line])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
     ws.row_dimensions[ws.max_row].height = 36
-    spec_line = f"SPECIFICATIONS from {invoice_no}".strip()
+    spec_line = f"{bilingual('Specifications from', 'Спецификация к')} {invoice_no}".strip()
     if date:
         spec_line = f"{spec_line} dd {date}"
     ws.append([None, *pad, spec_line])
@@ -250,19 +252,19 @@ def _write_invoice_letterhead(ws, header: dict[str, Any], cols: int) -> None:
     ws.append([])
     recipient = header.get("consignee") or header.get("recipient") or ""
     recipient_address = header.get("consignee_address") or header.get("recipient_address") or ""
-    ws.append(["THE BUYER:", *pad, "RECIPIENT:"])
+    ws.append([label("the_buyer", colon=True), *pad, label("recipient", colon=True)])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split)
     ws.append([buyer, *pad, recipient])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
-    ws.append([f"Address: {buyer_address}".strip(), *pad, f"Address: {recipient_address}".strip()])
+    ws.append([f"{label('address', colon=True)} {buyer_address}".strip(), *pad, f"{label('address', colon=True)} {recipient_address}".strip()])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
     ws.row_dimensions[ws.max_row].height = 36
     if delivery:
-        ws.append([f"Terms of delivery: {delivery}"])
+        ws.append([f"{label('delivery', colon=True)} {delivery}"])
         style_letterhead_row(ws, ws.max_row, cols)
     payment = header.get("payment_terms") or ""
     if payment:
-        ws.append([f"Terms of payment: {payment}"])
+        ws.append([f"{label('payment', colon=True)} {payment}"])
         style_letterhead_row(ws, ws.max_row, cols)
     ws.append([])
 
@@ -279,45 +281,45 @@ def _write_packing_letterhead(ws, header: dict[str, Any], cols: int) -> None:
     if seller:
         ws.append([seller])
         style_letterhead_row(ws, ws.max_row, cols, company=True)
-    ws.append(["PACKING LIST"])
+    ws.append([label("packing")])
     style_letterhead_row(ws, ws.max_row, cols, title=True)
-    ws.append([f"TO INVOICE: {invoice_no}".strip()])
+    ws.append([f"{bilingual('To invoice', 'К инвойсу')}: {invoice_no}".strip()])
     style_letterhead_row(ws, ws.max_row, cols)
-    ws.append([f"DATE: {date}".strip()])
+    ws.append([f"{label('date', colon=True)} {date}".strip()])
     style_letterhead_row(ws, ws.max_row, cols)
     ws.append([])
     split = min(5, cols)
     recipient = header.get("consignee") or header.get("recipient") or ""
     recipient_address = header.get("consignee_address") or header.get("recipient_address") or ""
-    ws.append(["THE SELLER:", None, "THE BUYER:", None, "RECIPIENT:"])
+    ws.append([label("the_seller", colon=True), None, label("the_buyer", colon=True), None, label("recipient", colon=True)])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split)
     ws.append([seller, None, buyer, None, recipient])
     style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
     ws.append(
         [
-            f"Address: {seller_address}".strip(),
+            f"{label('address', colon=True)} {seller_address}".strip(),
             None,
-            f"Address: {buyer_address}".strip(),
+            f"{label('address', colon=True)} {buyer_address}".strip(),
             None,
-            f"Address: {recipient_address}".strip(),
+            f"{label('address', colon=True)} {recipient_address}".strip(),
         ]
     )
     style_split_letterhead(ws, ws.max_row, cols, split_at=split, bold=False)
     ws.row_dimensions[ws.max_row].height = 48
-    contract_line = f"CONTRACT: {contract}".strip()
+    contract_line = f"{label('contract_word', colon=True)} {contract}".strip()
     if contract_date:
         contract_line = f"{contract_line} dd {contract_date}"
     ws.append([contract_line])
     style_letterhead_row(ws, ws.max_row, cols)
     if container:
-        ws.append([f"CONTAINER: {container}"])
+        ws.append([f"{label('container', colon=True)} {container}"])
         style_letterhead_row(ws, ws.max_row, cols)
     if delivery:
-        ws.append([f"Terms of delivery: {delivery}"])
+        ws.append([f"{label('delivery', colon=True)} {delivery}"])
         style_letterhead_row(ws, ws.max_row, cols)
     payment = header.get("payment_terms") or ""
     if payment:
-        ws.append([f"Terms of payment: {payment}"])
+        ws.append([f"{label('payment', colon=True)} {payment}"])
         style_letterhead_row(ws, ws.max_row, cols)
     ws.append([])
 
@@ -330,11 +332,11 @@ def _write_spec_letterhead(ws, header: dict[str, Any], cols: int) -> None:
     date = header.get("invoice_date") or header.get("date") or ""
     buyer = header.get("buyer") or ""
     seller = header.get("seller") or ""
-    ws.append([f"Приложение № {invoice_no}".strip()])
+    ws.append([f"{bilingual('Annex No.', 'Приложение №')} {invoice_no}".strip()])
     style_letterhead_row(ws, ws.max_row, cols, title=True)
-    contract_line = f"к контракту № {contract}".strip()
+    contract_line = f"{bilingual('To the contract No.', 'к контракту №')} {contract}".strip()
     if contract_date:
-        contract_line = f"{contract_line} от {contract_date}"
+        contract_line = f"{contract_line} {bilingual('dated', 'от')} {contract_date}"
     ws.append([contract_line])
     style_letterhead_row(ws, ws.max_row, cols)
     if date:
@@ -344,14 +346,21 @@ def _write_spec_letterhead(ws, header: dict[str, Any], cols: int) -> None:
         ws.append([f"{buyer} / {seller}".strip(" /")])
         style_letterhead_row(ws, ws.max_row, cols)
         ws.row_dimensions[ws.max_row].height = 36
-    ws.append(["1. Продавец продает, Покупатель покупает, а Получатель принимает товар согласно следующей спецификации:"])
+    ws.append(
+        [
+            bilingual(
+                "1. The Seller sells, the Buyer buys, and the Recipient accepts the goods according to the following specification:",
+                "1. Продавец продает, Покупатель покупает, а Получатель принимает товар согласно следующей спецификации:",
+            )
+        ]
+    )
     style_letterhead_row(ws, ws.max_row, cols)
     ws.append([])
 
 
 def invoice_headers(ccy: str) -> list[str]:
     return [
-        "№",
+        bilingual("No.", "№"),
         "CODE / Код ТН ВЭД",
         "DESCRIPTION / Описание",
         "COUNTRY OF ORIGIN / Страна происхождения",
@@ -368,7 +377,7 @@ def invoice_headers(ccy: str) -> list[str]:
 
 def packing_headers() -> list[str]:
     return [
-        "№",
+        bilingual("No.", "№"),
         "CODE / Код ТН ВЭД",
         "DESCRIPTION / Описание",
         "MANUFACTURER / Производитель",
@@ -524,7 +533,13 @@ def spec_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> lis
 
 
 def description_headers() -> list[str]:
-    return ["№", "Код ТН ВЭД", "Изготовитель / Торговая марка", "Модель / артикул", "Описание"]
+    return [
+        bilingual("No.", "№"),
+        bilingual("HS Code", "Код ТН ВЭД"),
+        bilingual("Manufacturer / Brand", "Изготовитель / Торговая марка"),
+        bilingual("Model / Article", "Модель / артикул"),
+        bilingual("Description", "Описание"),
+    ]
 
 
 def description_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> list[list[Any]]:
@@ -542,52 +557,53 @@ def description_rows(items: list[dict[str, Any]], header: dict[str, Any] | None)
     return rows
 
 
-# Порядок листа ДЛЯ ДТ. Пустой заголовок — столбец схемы без имени, имя ему не даём.
-# Суммируются только штуки, места, нетто, брутто и сумма. Кол-во упак — то же число мест.
+# Лист ДЛЯ ДТ копирует бланк: три клетки шапки в нём нарочно без названия.
+# Их нельзя выкинуть, иначе съедет порядок ИТС и декларации. Имя им не даём.
+_DT_UNNAMED = ""
 _DT_COUNT = {"кол-во товара", "кол-во мест", "Кол-во упак"}
 _DT_MONEY = {"брутто", "нетто", "ст-ть товара"}
 
 
 def dt_headers() -> list[str]:
     return [
-        "№",
-        "Код ТН ВЭД",
-        "Описание",
-        "Описание в группе",
-        "Изготовитель",
-        "ТЗ",
-        "артикул",
-        "марка",
-        "модель",
-        "серийный номер",
-        "размер",
-        "кол-во товара",
-        "Ед.изм.",
-        "цена за ед. товара",
-        "кол-во мест",
-        "доп.единица",
-        "Код наличия упаковки",
-        "Код упаковки",
-        "Кол-во упак",
-        "контейнер",
-        "поддоны кол-во",
-        "номера контейнеры",
-        "признак заполнения",
-        "страна происхождения",
-        "брутто",
-        "нетто",
-        "нетто без упаковки",
-        "ст-ть товара",
-        "номер инвойса",
-        "дата инвойса",
-        "Валюта инвойса",
-        "Описание",
-        "",
-        "ИТС по запросу",
-        "ИТС цена/нетто",
-        "Декларация соответствия",
-        "",
-        "",
+        bilingual("No.", "№"),
+        bilingual("HS Code", "Код ТН ВЭД"),
+        bilingual("Description", "Описание"),
+        bilingual("Group description", "Описание в группе"),
+        bilingual("Manufacturer", "Изготовитель"),
+        bilingual("Trade mark", "ТЗ"),
+        bilingual("Article", "артикул"),
+        bilingual("Brand", "марка"),
+        bilingual("Model", "модель"),
+        bilingual("Serial No.", "серийный номер"),
+        bilingual("Size", "размер"),
+        bilingual("Quantity", "кол-во товара"),
+        bilingual("Unit", "Ед.изм."),
+        bilingual("Unit price", "цена за ед. товара"),
+        bilingual("Packages", "кол-во мест"),
+        bilingual("Extra unit", "доп.единица"),
+        bilingual("Packing presence code", "Код наличия упаковки"),
+        bilingual("Packing code", "Код упаковки"),
+        bilingual("Number of packages", "Кол-во упак"),
+        bilingual("Container", "контейнер"),
+        bilingual("Pallets", "поддоны кол-во"),
+        bilingual("Container numbers", "номера контейнеры"),
+        bilingual("Fill mark", "признак заполнения"),
+        bilingual("Country of origin", "страна происхождения"),
+        bilingual("Gross", "брутто"),
+        bilingual("Net", "нетто"),
+        bilingual("Net without packing", "нетто без упаковки"),
+        bilingual("Goods value", "ст-ть товара"),
+        bilingual("Invoice No.", "номер инвойса"),
+        bilingual("Invoice date", "дата инвойса"),
+        bilingual("Invoice currency", "Валюта инвойса"),
+        bilingual("Description", "Описание"),
+        _DT_UNNAMED,
+        bilingual("ITS on request", "ИТС по запросу"),
+        bilingual("ITS price/net", "ИТС цена/нетто"),
+        bilingual("Declaration of conformity", "Декларация соответствия"),
+        _DT_UNNAMED,
+        _DT_UNNAMED,
     ]
 
 
@@ -647,18 +663,26 @@ def _dt_values(item: dict[str, Any], header: dict[str, Any] | None, index: int) 
     }
 
 
+def _dt_key(title: str) -> str:
+    text = str(title or "")
+    if " / " in text:
+        return text.split(" / ", 1)[-1]
+    return text
+
+
 def dt_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> list[list[Any]]:
     headers = dt_headers()
     # Два столбца «Описание»: первое имя — длинное, второе короткое в лот не кладётся.
     seen_description = False
     keys: list[str] = []
     for title in headers:
-        if title == "Описание" and seen_description:
+        key = _dt_key(title)
+        if key == "Описание" and seen_description:
             keys.append("")
             continue
-        if title == "Описание":
+        if key == "Описание":
             seen_description = True
-        keys.append(title)
+        keys.append(key)
     rows: list[list[Any]] = []
     for index, item in enumerate(items, start=1):
         values = _dt_values(item, header, index)
@@ -668,37 +692,102 @@ def dt_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> list[
     body = rows[:]
     total: list[Any] = []
     for pos, title in enumerate(headers):
-        if title not in _DT_COUNT and title not in _DT_MONEY:
+        key = _dt_key(title)
+        if key not in _DT_COUNT and key not in _DT_MONEY:
             total.append(None)
             continue
         nums = [float(row[pos]) for row in body if isinstance(row[pos], (int, float))]
         if not nums:
             total.append(None)
             continue
-        total.append(_count(sum(nums)) if title in _DT_COUNT else _fnum(sum(nums)))
+        total.append(_count(sum(nums)) if key in _DT_COUNT else _fnum(sum(nums)))
     rows.append(total)
     return rows
 
 
-def export_tsd_book(items: list[dict[str, Any]], output_path, header: dict[str, Any] | None = None):
+TSD_INV_KEYS = [
+    "no",
+    "hs_code",
+    "description",
+    "country",
+    "article",
+    "manufacturer",
+    "net_weight",
+    "net_primary",
+    "qty",
+    "price",
+    "unit",
+    "amount",
+]
+TSD_PL_KEYS = [
+    "no",
+    "hs_code",
+    "description",
+    "manufacturer",
+    "article",
+    "packages",
+    "qty",
+    "net_weight",
+    "net_primary",
+    "gross_weight",
+    "country",
+]
+TSD_SPEC_KEYS = [
+    "description",
+    "article",
+    "manufacturer",
+    "country",
+    "qty",
+    "unit",
+    "gross_weight",
+    "net_weight",
+    "net_primary",
+    "amount",
+    "unit_2",
+    "price",
+    "size",
+]
+
+
+def _tsd_role_tables(
+    items: list[dict[str, Any]],
+    header: dict[str, Any] | None,
+    column_layout: dict[str, Any] | None,
+) -> tuple[tuple[list[str], list[list[Any]]], tuple[list[str], list[list[Any]]], tuple[list[str], list[list[Any]]], dict[str, Any]]:
     header = export_header_fields(header or {}, items)
     ccy = _currency(items, header)
+    inv_h, _, inv_r = apply_sheet_layout(
+        invoice_headers(ccy), TSD_INV_KEYS, invoice_rows(items, header), items, column_layout, "invoice"
+    )
+    pl_h, _, pl_r = apply_sheet_layout(
+        packing_headers(), TSD_PL_KEYS, packing_rows(items, header), items, column_layout, "packing"
+    )
+    spec_h, _, spec_r = apply_sheet_layout(
+        spec_headers(ccy), TSD_SPEC_KEYS, spec_rows(items, header), items, column_layout, "specification"
+    )
+    return (inv_h, inv_r), (pl_h, pl_r), (spec_h, spec_r), header
+
+
+def export_tsd_book(
+    items: list[dict[str, Any]],
+    output_path,
+    header: dict[str, Any] | None = None,
+    column_layout: dict[str, Any] | None = None,
+):
+    (inv_h, inv_r), (pl_h, pl_r), (spec_h, spec_r), header = _tsd_role_tables(items, header, column_layout)
     wb = Workbook()
     ws = wb.active
     ws.title = "INV"
-    inv_h = invoice_headers(ccy)
     _write_invoice_letterhead(ws, header, len(inv_h))
-    _append_table(ws, inv_h, invoice_rows(items, header))
+    _append_table(ws, inv_h, inv_r)
 
     ws_pl = wb.create_sheet("PAK")
-    pl_h = packing_headers()
     _write_packing_letterhead(ws_pl, header, len(pl_h))
-    _append_table(ws_pl, pl_h, packing_rows(items, header))
+    _append_table(ws_pl, pl_h, pl_r)
 
     ws_spec = wb.create_sheet("Specification")
-    spec_h = spec_headers(ccy)
     _write_spec_letterhead(ws_spec, header, len(spec_h))
-    _append_table(ws_spec, spec_h, spec_rows(items, header))
+    _append_table(ws_spec, spec_h, spec_r)
 
     ws_desc = wb.create_sheet("ОПИСАНИЕ")
     _append_table(ws_desc, description_headers(), description_rows(items, header))
@@ -712,15 +801,19 @@ def export_tsd_book(items: list[dict[str, Any]], output_path, header: dict[str, 
     return output_path
 
 
-def tsd_preview(items: list[dict[str, Any]], header: dict[str, Any] | None, filename: str) -> dict[str, Any]:
-    header = export_header_fields(header or {}, items)
-    ccy = _currency(items, header)
+def tsd_preview(
+    items: list[dict[str, Any]],
+    header: dict[str, Any] | None,
+    filename: str,
+    column_layout: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    (inv_h, inv_r), (pl_h, pl_r), (spec_h, spec_r), header = _tsd_role_tables(items, header, column_layout)
     return {
         "filename": filename,
         "sheets": [
-            {"title": "INV", "headers": invoice_headers(ccy), "rows": invoice_rows(items, header)},
-            {"title": "PAK", "headers": packing_headers(), "rows": packing_rows(items, header)},
-            {"title": "Specification", "headers": spec_headers(ccy), "rows": spec_rows(items, header)},
+            {"title": "INV", "headers": inv_h, "rows": inv_r},
+            {"title": "PAK", "headers": pl_h, "rows": pl_r},
+            {"title": "Specification", "headers": spec_h, "rows": spec_r},
             {"title": "ОПИСАНИЕ", "headers": description_headers(), "rows": description_rows(items, header)},
             {"title": "ДЛЯ ДТ", "headers": dt_headers(), "rows": dt_rows(items, header)},
         ],
