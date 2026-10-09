@@ -5,6 +5,7 @@ from pathlib import Path
 from prepare_transform_code.exceldoc import read_excel
 from prepare_transform_code.join import build_lots
 from prepare_transform_code.fields import LOT_FIELDS, is_factory_list, party_after, same_company
+from prepare_transform_code.lines import owned_sum
 from prepare_transform_code.numbers import collapse_letter_spacing, currencies_of, currency_of, goods_currency
 from prepare_transform_code.pdfdoc import read_pdf
 
@@ -393,7 +394,7 @@ def _packing_lines(packings, weight_conflict, stated):
     matched = []
     for doc in packings:
         goods = [line for line in doc["lines"] if not line.freight and not line.measure_group]
-        total = sum(line.packages or 0 for line in goods)
+        total = owned_sum(goods, "packages")
         if abs(total - float(target)) <= 0.05:
             matched.append(doc)
     if len(matched) != 1:
@@ -414,7 +415,7 @@ def _weights_differ(packings):
     for doc in packings:
         goods = [line for line in doc["lines"] if not line.freight and not line.measure_group]
         totals.append(round(sum(line.gross or 0 for line in goods), 2))
-        package_totals.append(round(sum(line.packages or 0 for line in goods), 2))
+        package_totals.append(round(owned_sum(goods, "packages"), 2))
         # Строка без количества не должна ломать сортировку: None и число между собой не сравниваются.
         piece_sets.append(
             tuple(
@@ -658,7 +659,7 @@ def _contract_date(text):
         if not re.search(r"\b(?:contract|contrat|контракт)", line, re.I):
             continue
         found = re.search(
-            r"(\d{2}[./]\d{2}[./]\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})",
+            r"(\d{2}[./]\d{2}[./]\d{4}|(?:19|20)\d{2}-\d{2}-\d{2}|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+(?:19|20)\d{2})",
             line,
         )
         if found:
@@ -1010,6 +1011,7 @@ def _vendor_company(text):
 def _packages_miss_stated(lots, stated):
     """Сумма мест строк не сходится с напечатанным итогом — пустые слитые клетки или пропуск.
 
+    Продолжения слитой клетки в сумму не входят: 2 на 30 строк блока считается один раз.
     Расхождение на 1 при пустых строках блока часто шум итога (741 в TOTAL при 740 в строках).
     Явная дыра слитой клетки — это несколько мест, как 677 против 684.
     """
@@ -1019,9 +1021,13 @@ def _packages_miss_stated(lots, stated):
     goods = [lot for lot in lots if not lot.get("freight")]
     if not goods:
         return False
-    filled = [lot.get("packages") for lot in goods if lot.get("packages") not in (None, "")]
-    empty = len(goods) - len(filled)
-    total = sum(float(value) for value in filled) if filled else 0.0
+    owned = [
+        lot.get("packages")
+        for lot in goods
+        if lot.get("packages") not in (None, "") and not lot.get("packages_continued")
+    ]
+    empty = sum(1 for lot in goods if lot.get("packages") in (None, ""))
+    total = sum(float(value) for value in owned) if owned else 0.0
     return bool(empty) and abs(total - float(target)) > 1.01
 
 

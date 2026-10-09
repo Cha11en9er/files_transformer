@@ -219,7 +219,13 @@ def _goods_use_fabric_columns(items: list[dict[str, Any]] | None) -> bool | None
 
     None means there is not enough to decide. Never keys off a shop name or SKU.
     """
-    products = [item for item in (items or []) if item.get("article")]
+    products = [
+        item
+        for item in (items or [])
+        if item.get("article")
+        or (item.get("packing_data") or {}).get("meters") not in (None, "")
+        or (item.get("packing_data") or {}).get("width") not in (None, "")
+    ]
     if len(products) < 2:
         return None
     meters = sum(1 for item in products if (item.get("packing_data") or {}).get("meters") not in (None, ""))
@@ -267,7 +273,19 @@ def _ordered_products(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if (i.get("source_traces") or {}).get("invoice") or (i.get("source_traces") or {}).get("specification")
     ]
     if not products:
-        products = [i for i in items if i.get("article")]
+        # Артикула может не быть (только код и описание) — строки всё равно товар.
+        products = [
+            i
+            for i in items
+            if not (i.get("source_traces") or {}).get("fee")
+            and (
+                i.get("article")
+                or (i.get("customs_data") or {}).get("description")
+                or (i.get("customs_data") or {}).get("hs_code")
+                or (i.get("commercial_data") or {}).get("qty")
+                or (i.get("commercial_data") or {}).get("amount")
+            )
+        ]
     products.sort(key=lambda i: int(((i.get("source_traces") or {}).get("invoice") or {}).get("no") or 999))
     return products
 
@@ -355,6 +373,7 @@ def _collect_packing_groups(products: list[dict[str, Any]], fabric: bool) -> lis
                 "article": label,
                 "gm": packing.get("gm"),
                 "rolls": packing.get("rolls") or packing.get("boxes"),
+                "rolls_continued": packing.get("rolls_continued"),
                 "meters": packing.get("meters") if packing.get("meters") is not None else commercial.get("qty"),
                 "qty": commercial.get("qty") if commercial.get("qty") is not None else packing.get("meters"),
                 "unit": commercial.get("unit") or packing.get("unit"),
@@ -441,11 +460,13 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                         amount,
                     ]
                 )
-            group_rolls += float(rolls or 0)
+            if not packing.get("rolls_continued"):
+                group_rolls += float(rolls or 0)
             group_meters += float(meters or 0)
             group_qty += float(qty or 0)
             group_area += float(area or 0)
-            group_amount += float(amount or 0)
+            if not item.get("amount_continued"):
+                group_amount += float(amount or 0)
             no += 1
         first = group_items[0]
         label_name = (first.get("article") or fam).split()[0] if fabric else (first.get("article") or "")
@@ -479,13 +500,25 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                     group_amount,
                 ]
             )
-    total_rolls = _count(sum(float((i.get("packing_data") or {}).get("rolls") or 0) for i in products))
+    total_rolls = _count(
+        sum(
+            float((i.get("packing_data") or {}).get("rolls") or 0)
+            for i in products
+            if not (i.get("packing_data") or {}).get("rolls_continued")
+        )
+    )
     total_area = _r3(sum(float((i.get("packing_data") or {}).get("area") or 0) for i in products))
     total_meters = _r2(sum(float((i.get("packing_data") or {}).get("meters") or 0) for i in products))
     total_qty = _count(
         sum(float((i.get("commercial_data") or {}).get("qty") or (i.get("packing_data") or {}).get("meters") or 0) for i in products)
     )
-    total_amount = _r2(sum(float((i.get("commercial_data") or {}).get("amount") or 0) for i in products))
+    total_amount = _r2(
+        sum(
+            float((i.get("commercial_data") or {}).get("amount") or 0)
+            for i in products
+            if not i.get("amount_continued")
+        )
+    )
     if fabric:
         rows.append([None, "TOTAL:", None, total_rolls, None, total_area, total_meters, None, None, total_amount])
     else:
@@ -508,7 +541,8 @@ def packing_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
             rows.append([int(idx), design, _as_float(pl.get("gm")), rolls, meters, nw, gw, area])
         else:
             rows.append([int(idx), design, rolls, qty, pl.get("unit") or "", nw, gw])
-        sums["rolls"] += float(rolls or 0)
+        if not pl.get("rolls_continued"):
+            sums["rolls"] += float(rolls or 0)
         sums["meters"] += float(meters or 0)
         sums["qty"] += float(qty or 0)
         sums["nw"] += float(nw or 0)
@@ -580,13 +614,15 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
                     commercial.get("size") or "",
                 ]
             )
-        sums["rolls"] += float(rolls or 0)
+        if not packing.get("rolls_continued"):
+            sums["rolls"] += float(rolls or 0)
         sums["meters"] += float(meters or 0)
         sums["qty"] += float(qty or 0)
         sums["area"] += float(area or 0)
         sums["nw"] += float(nw or 0)
         sums["gw"] += float(gw or 0)
-        sums["amount"] += float(amount or 0)
+        if not item.get("amount_continued"):
+            sums["amount"] += float(amount or 0)
     if fabric:
         rows.append(
             [

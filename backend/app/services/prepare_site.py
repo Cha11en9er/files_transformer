@@ -136,6 +136,25 @@ def _filled(value: Any) -> bool:
     return True
 
 
+_EMPTY_MARKS = {"-", "—", "–", ".", "нет", "n/a", "na", "no brand", "отсутствует"}
+
+
+def _plain_token(value: Any) -> str:
+    """Прочерк в MODEL/ART из бланка — пусто, не артикул."""
+    text = " ".join(str(value or "").split()).strip()
+    if not text or text.casefold() in _EMPTY_MARKS:
+        return ""
+    return text
+
+
+def _lot_article(lot: dict[str, Any]) -> str:
+    for key in ("vendor", "model"):
+        token = _plain_token(lot.get(key))
+        if token:
+            return token
+    return ""
+
+
 def _row_cells(row: dict[str, Any]) -> list[Any]:
     """Те же клетки, что в таблице сайта. Прочерк вместо артикула — пустая клетка."""
     commercial = row.get("commercial_data") or {}
@@ -584,7 +603,7 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
     for lot in lots:
         if lot.get("freight"):
             continue
-        article = str(lot.get("vendor") or lot.get("model") or "").strip() or "-"
+        article = _lot_article(lot)
         desc_en, desc_ru, desc = _split_description(str(lot.get("description") or ""))
         pieces = lot.get("pieces")
         unit = str(lot.get("unit") or "").strip()
@@ -607,10 +626,13 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
             commercial["color"] = lot.get("finish")
         if _filled(lot.get("size")):
             commercial["size"] = lot.get("size")
-        if _filled(lot.get("model")):
-            commercial["model"] = lot.get("model")
+        model = _plain_token(lot.get("model"))
+        if model:
+            commercial["model"] = model
         if _filled(lot.get("packages")):
             packing["rolls"] = lot.get("packages")
+            if lot.get("packages_continued"):
+                packing["rolls_continued"] = True
         # Вид места и паллеты — отдельно от числа мест. Иначе «2150 коробок и 20 паллет» превращается в 2150 рулонов.
         if _filled(lot.get("package_type")):
             packing["package_type"] = lot.get("package_type")
@@ -662,18 +684,21 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
         if lot.get("unit_conflict"):
             errors.append(_flag("qty", "Подпись единицы разошлась, количество не пересчитано."))
         errors.extend(_lot_flags(lot))
-        rows.append(
-            {
-                "article": article,
-                "model": str(lot.get("model") or article),
-                "normalized_article": normalize_article(article),
-                "commercial_data": commercial,
-                "packing_data": packing,
-                "customs_data": customs,
-                "source_traces": {"sources": ["prepare"]},
-                "validation_errors": errors,
-            }
-        )
+        row = {
+            "article": article,
+            "model": model or article,
+            "normalized_article": normalize_article(article),
+            "commercial_data": commercial,
+            "packing_data": packing,
+            "customs_data": customs,
+            "source_traces": {"sources": ["prepare"]},
+            "validation_errors": errors,
+        }
+        if lot.get("amount_continued"):
+            row["amount_continued"] = True
+        if lot.get("pieces_continued"):
+            row["pieces_continued"] = True
+        rows.append(row)
     return rows
 
 
@@ -783,8 +808,8 @@ def fee_rows(freights: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
             customs["description_ru"] = desc_ru
         rows.append(
             {
-                "article": "-",
-                "model": "-",
+                "article": "",
+                "model": "",
                 "normalized_article": "",
                 "commercial_data": {"amount": amount},
                 "packing_data": {},

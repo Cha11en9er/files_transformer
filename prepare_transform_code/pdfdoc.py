@@ -83,6 +83,9 @@ def read_pdf(path):
         raw = side + "\n" + raw
     text = collapse_letter_spacing(raw)
     readable = _readable(text)
+    # Стык страниц: хвост слитого блока на следующей странице добираем уже по всему списку строк.
+    if readable:
+        _carry_open_span_tails(found_lines)
     lines = fold_parts(_share_measures(found_lines)) if readable else []
     settle_pallets(lines)
     role = role_of(text) if readable else "scan"
@@ -347,9 +350,9 @@ _SPAN_FILL = {
 def _recover_spanned_from_words(lines, line_rows, table, pdf_table, mapping, words):
     """Значение в середине высокой клетки или на стыке страниц: extract() его не кладёт в строку.
 
-    Число мест/суммы/штук — один раз на визуальный блок. Если соседняя строка уже держит
-    то же число и её клетка по высоте накрывает пустые строки блока, второе число не добавляем
-    (иначе 2 на 30 строк превращается в несколько двоек). Текст и код — на каждую пустую.
+    Без разграничительной строки одно визуальное значение относится ко всему блоку строк.
+    Текст и код — на каждую пустую. Число мест/суммы/штук тоже видно на каждой строке блока,
+    но в сумму входит один раз (span_continued у продолжений), иначе 2 на 30 строк даёт 60.
     """
     if not lines or not line_rows or not words or pdf_table is None:
         return
@@ -369,20 +372,76 @@ def _recover_spanned_from_words(lines, line_rows, table, pdf_table, mapping, wor
             if value in (None, ""):
                 continue
             if name in _SPAN_ONCE:
-                # Одна пустая строка часто ловит чужую цифру (итог, соседний ярус). Слитый блок — от двух строк.
+                # Одна пустая строка часто ловит чужую цифру. Исключение: хвост блока на следующей
+                # странице после уже помеченного продолжения слитой клетки.
                 if len(run) < 2:
+                    _carry_span_tail(lines, run, name)
                     continue
-                if _once_value_already_on_block(run, lines, line_rows, row_objects, col, name, value):
-                    continue
-                assign_cell(lines[run[0]], name, value, header_is_package=(name == "packages"))
+                owner = _once_owner_on_block(run, lines, line_rows, row_objects, col, name, value)
+                if owner is None:
+                    owner = run[0]
+                    assign_cell(lines[owner], name, value, header_is_package=(name == "packages"))
+                for index in run:
+                    if index == owner:
+                        continue
+                    if _field_empty(lines[index], name):
+                        assign_cell(lines[index], name, value, header_is_package=(name == "packages"))
+                    lines[index].span_continued.add(name)
             else:
                 for index in run:
                     if _field_empty(lines[index], name):
                         assign_cell(lines[index], name, value)
+    _carry_open_span_tails(lines)
 
 
-def _once_value_already_on_block(run, lines, line_rows, row_objects, col, name, value):
-    """Сосед уже держит это число, а его клетка накрывает пустые строки — тот же блок, не новый."""
+def _carry_span_tail(lines, run, name):
+    """Одна пустая строка сразу под продолжением слитого блока — тот же блок, другая страница."""
+    if not run:
+        return
+    index = run[0]
+    prev = index - 1
+    if prev < 0:
+        return
+    if name not in (lines[prev].span_continued or set()):
+        return
+    if not _field_empty(lines[index], name):
+        return
+    value = getattr(lines[prev], name, None)
+    if value in (None, ""):
+        return
+    if name == "packages" and not _same_package_type(lines[prev], lines[index]):
+        return
+    assign_cell(lines[index], name, value, header_is_package=(name == "packages"))
+    lines[index].span_continued.add(name)
+
+
+def _carry_open_span_tails(lines):
+    """После восстановления блоков: добить хвост, если пустая строка всё ещё под continued."""
+    for name in _SPAN_ONCE:
+        for index in range(1, len(lines)):
+            if not _field_empty(lines[index], name):
+                continue
+            if name not in (lines[index - 1].span_continued or set()):
+                continue
+            value = getattr(lines[index - 1], name, None)
+            if value in (None, ""):
+                continue
+            if name == "packages" and not _same_package_type(lines[index - 1], lines[index]):
+                continue
+            assign_cell(lines[index], name, value, header_is_package=(name == "packages"))
+            lines[index].span_continued.add(name)
+
+
+def _same_package_type(left, right):
+    a = " ".join(str(left.package_type or "").split()).casefold()
+    b = " ".join(str(right.package_type or "").split()).casefold()
+    if not a or not b:
+        return True
+    return a == b
+
+
+def _once_owner_on_block(run, lines, line_rows, row_objects, col, name, value):
+    """Сосед уже держит это число, а его клетка накрывает пустые строки — владелец блока."""
     for neighbor_idx in (run[0] - 1, run[-1] + 1):
         if neighbor_idx < 0 or neighbor_idx >= len(lines):
             continue
@@ -401,8 +460,8 @@ def _once_value_already_on_block(run, lines, line_rows, row_objects, col, name, 
             if not box:
                 continue
             if box[1] < ny1 - 0.5 and box[3] > ny0 + 0.5:
-                return True
-    return False
+                return neighbor_idx
+    return None
 
 
 def _field_empty(line, name):

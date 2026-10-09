@@ -48,7 +48,11 @@ def read_excel(path):
         roles = _opening_roles(sheet["rows"])
         if role not in roles and role not in {"unknown", "draft", "gtd_form", "customs_appendix"}:
             roles.insert(0, role)
-        lines = [] if role in {"draft", "gtd_form", "customs_appendix"} else _lines(sheet["rows"])
+        lines = (
+            []
+            if role in {"draft", "gtd_form", "customs_appendix"}
+            else _lines(sheet["rows"], sheet.get("continued") or set())
+        )
         docs.append(
             {
                 "kind": "excel",
@@ -189,17 +193,21 @@ def _join(rows):
     return "\n".join(chunks)
 
 
-def _lines(rows):
+_SPAN_ONCE_FIELDS = {"packages", "amount", "pieces"}
+
+
+def _lines(rows, continued_cells=None):
     header_idx, mapping = _header(rows)
     if header_idx is None:
         return []
+    continued_cells = continued_cells or set()
     pair_unit = _qty_unit(rows[header_idx][mapping["qty"]]) if "qty" in mapping else ""
     header_cells = rows[header_idx]
     lines = []
     scale = _label_scale(header_cells, mapping)
     carried = ""
     body = rows[header_idx + 1 :]
-    for row in body:
+    for abs_r, row in enumerate(body, start=header_idx + 1):
         texts = [str(cell).strip() for cell in row if cell not in (None, "")]
         if not texts:
             continue
@@ -238,6 +246,8 @@ def _lines(rows):
             if apply_mfr_brand_cell(line, header_text, row[col]):
                 continue
             assign_cell(line, field, row[col], header_is_package=False)
+            if field in _SPAN_ONCE_FIELDS and (abs_r, col) in continued_cells:
+                line.span_continued.add(field)
         if _section_title(line.description):
             line.description = ""
         if scale:
@@ -565,8 +575,8 @@ def _xlsx(path):
             (item.min_row - 1, item.max_row, item.min_col - 1, item.max_col)
             for item in ws.merged_cells.ranges
         ]
-        _fill_merges(rows, merges)
-        sheets.append({"name": ws.title, "rows": rows})
+        continued = _fill_merges(rows, merges)
+        sheets.append({"name": ws.title, "rows": rows, "continued": continued})
     return sheets
 
 
@@ -584,15 +594,16 @@ def _xls(path):
         for r in range(min(sheet.nrows, 2500)):
             rows.append([sheet.cell_value(r, c) for c in range(width)])
         merges = list(getattr(sheet, "merged_cells", []) or [])
-        _fill_merges(rows, merges)
-        sheets.append({"name": sheet.name, "rows": rows})
+        continued = _fill_merges(rows, merges)
+        sheets.append({"name": sheet.name, "rows": rows, "continued": continued})
     return sheets
 
 
 def _fill_merges(rows, merges):
     """Пустая клетка под текстом в той же колонке слитого диапазона его получает.
-    Число вниз не копируется: количество и вес, закрывающие несколько строк, не становятся числом каждой из них.
-    Код ТН ВЭД в слитой клетке относится к строкам блока. Число мест, если верхняя строка блока пустая, садится на первую строку с товаром."""
+    Код ТН ВЭД в слитой клетке относится к строкам блока. Число мест, если верхняя строка
+    блока пустая, садится на первую строку с товаром. Число вниз на каждый SKU не копируется."""
+    continued = set()
     for rlo, rhi, clo, chi in merges:
         if rhi - rlo < 2:
             continue
@@ -620,6 +631,9 @@ def _fill_merges(rows, merges):
                         row[c] = source
                 continue
             if _pure_number(source):
+                # Число в Excel-merge: один раз на первую строку с товаром. На каждую артикулу
+                # блока не копируем — иначе общий вес/места семейства садятся на дочерние SKU.
+                # PDF без merge-метаданных заполняет блок отдельно (span_continued).
                 goods_at = None
                 for r in range(rlo, rhi):
                     if r >= len(rows):
@@ -649,6 +663,7 @@ def _fill_merges(rows, merges):
                     row.append(None)
                 if c < len(row) and row[c] in (None, ""):
                     row[c] = source
+    return continued
 
 
 def _pure_number(value):
