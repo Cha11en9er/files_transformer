@@ -57,7 +57,11 @@ def build_lots(base_lines, packing_lines, spec_lines=None):
 
 
 def _fill_part_measures(lots, packing_lines):
-    """Несколько пакингов одного изделия. Места складываются, уже полный итог не затирается."""
+    """Несколько пакингов одного изделия. Места складываются, уже полный итог не затирается.
+
+    Складывать только когда штуки частей сходятся со строкой. Иначе один ТН ВЭД на много
+    разных лотов собирает чужие места в одну клетку.
+    """
     for lot in lots:
         key = part_key(Line(model=lot.get("model") or "", hs=lot.get("hs") or "", vendor=lot.get("vendor") or ""))
         if not key:
@@ -66,6 +70,10 @@ def _fill_part_measures(lots, packing_lines):
             continue
         parts = [line for line in packing_lines if part_key(line) == key]
         if len(parts) < 2:
+            continue
+        lot_pieces = lot.get("pieces")
+        part_pieces = [line.pieces for line in parts if line.pieces is not None]
+        if lot_pieces is not None and part_pieces and abs(sum(part_pieces) - float(lot_pieces)) > 0.05:
             continue
         values = [line.packages for line in parts if line.packages]
         total = sum(values)
@@ -570,6 +578,8 @@ def _take_fields(lot, spec, check=True):
                 lot[name] = spec_value if len(str(spec_value)) > len(str(lot[name])) else lot[name]
             else:
                 lot[name] = _richer(lot[name], spec_value)
+        elif name == "vendor" and spec_value and _prefer_article(spec_value, lot.get("vendor") or ""):
+            lot[name] = spec_value.strip()
         elif not lot.get(name) and spec_value:
             if name == "producer" and is_factory_list(spec_value):
                 continue
@@ -586,7 +596,7 @@ def _take_fields(lot, spec, check=True):
     elif spec.hs_alt and lot.get("hs") and _hs_key(spec.hs_alt) != _hs_key(lot.get("hs")):
         lot["hs_alt"] = spec.hs_alt
         lot["hs_alt_shipper"] = bool(getattr(spec, "hs_alt_shipper", False))
-    if not lot.get("unit"):
+    if not lot.get("unit") and spec.unit and not re.fullmatch(r"\d+[.,]?\d*", str(spec.unit).strip()):
         lot["unit"] = spec.unit
     for name in ("price", "amount", "width"):
         if lot.get(name) is None and getattr(spec, name, None) is not None:
@@ -594,8 +604,33 @@ def _take_fields(lot, spec, check=True):
     for name in ("packages", "net", "net_primary", "gross", "volume", "area"):
         if lot.get(name) is None and getattr(spec, name) is not None:
             lot[name] = getattr(spec, name)
+    _replace_carton_as_row(lot, spec)
     lot["unit_net"] = _carton_weight(lot.get("unit_net"), spec.unit_net, lot.get("net"), lot.get("packages"))
     lot["description"] = _richer(lot.get("description") or "", spec.description)
+
+
+def _replace_carton_as_row(lot, spec):
+    """Вес одной коробки в net/gross, когда TOTAL есть на спецификации: net×места ≈ TOTAL.
+
+    Места лота и спецификации должны совпадать: иначе итог семейства (22 рулона)
+    случайно равен весу части × её 5 местам, и вес части затирается.
+    """
+    packages = lot.get("packages")
+    if not packages or packages <= 1:
+        return
+    if spec.packages is not None and abs(float(spec.packages) - float(packages)) > 0.05:
+        return
+    for name in ("net", "gross"):
+        current = lot.get(name)
+        better = getattr(spec, name, None)
+        if current is None or better is None:
+            continue
+        if current >= better * 0.5:
+            continue
+        if abs(current * float(packages) - float(better)) <= max(0.5, abs(better) * 0.02):
+            if lot.get("unit_net") is None and name == "net":
+                lot["unit_net"] = current
+            lot[name] = better
 
 
 def _hs_key(value):
@@ -656,12 +691,37 @@ def _richer(left, right):
         return left
     if description_holds(right, left):
         return right
-    if "/" in right:
-        head, _, tail = right.partition("/")
-        head, tail = head.strip(), tail.strip()
-        if head and tail and head.casefold() in left.casefold() and tail.casefold() not in left.casefold():
-            return left + " / " + tail
-    return left + " // " + right
+    # Дописать только те куски справа, которых ещё нет. «/ /» и повтор языка не создавать.
+    right_parts = [part.strip() for part in re.split(r"\s*/+\s*", right) if part.strip()]
+    missing = [part for part in right_parts if not description_holds(left, part)]
+    if not missing:
+        return left
+    if len(missing) == 1 and len(right_parts) > 1:
+        return left + " // " + missing[0]
+    if "/" in right and len(right_parts) == 2:
+        head, tail = right_parts[0], right_parts[1]
+        if head.casefold() in left.casefold() and tail.casefold() not in left.casefold():
+            return left + " // " + tail
+        if tail.casefold() in left.casefold() and head.casefold() not in left.casefold():
+            return left + " // " + head
+    return left + " // " + (" // ".join(missing) if missing != right_parts else right)
+
+
+def _prefer_article(candidate, current):
+    """Артикул с цифрами сильнее словесной метки вроде TABLE SLIDE из колонки ITEM."""
+    left = str(candidate or "").strip()
+    right = str(current or "").strip()
+    if not left:
+        return False
+    if not right:
+        return True
+    left_digits = sum(ch.isdigit() for ch in left)
+    right_digits = sum(ch.isdigit() for ch in right)
+    if left_digits >= 2 and right_digits == 0:
+        return True
+    if left_digits > right_digits and re.search(r"[A-Za-z]\d|\d[A-Za-z]", left):
+        return True
+    return False
 
 
 def _carton_weight(left, right, net, packages):

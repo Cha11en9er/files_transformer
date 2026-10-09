@@ -613,7 +613,7 @@ def _iter_create_events(
             if review_dict.get("status") == "ok":
                 lots = apply_verdict(goods_lots(draft), review_dict.get("payload"))
                 verdict_dropped = verdict_notes(list(draft.get("lots") or []), review_dict.get("payload"))
-        if second_model and needs_second_model(lots):
+        if second_model and needs_second_model(lots, draft.get("flags")):
             second_used = True
             yield {
                 "event": "progress",
@@ -621,7 +621,7 @@ def _iter_create_events(
                 "total": total,
                 "filename": second_model,
                 "stage": "model2",
-                "message": "Улучшенная модель: мало столбцов или много сомнений",
+                "message": "Улучшенная модель: мало столбцов, сомнения или дыра мест",
             }
             second = yield from _ask(second_model, "model2")
             if second.get("status") == "ok":
