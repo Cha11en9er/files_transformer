@@ -341,7 +341,13 @@ _UNIT_WORD = re.compile(
 def _unit_beside_divisor(line, row, mapping):
     """Число под шапкой единицы — делитель цены. Слово pcs или шт в соседней клетке — единица."""
     col = mapping.get("unit")
-    if not isinstance(col, int) or parse_number(line.unit) is None:
+    if not isinstance(col, int):
+        return
+    cell = row[col] if col < len(row) else None
+    # assign_cell мог не записать «1» в unit — смотрим сырую клетку шапки единицы.
+    if parse_number(line.unit) is None and parse_number(cell) is None:
+        return
+    if line.unit and parse_number(line.unit) is None:
         return
     for neighbor in (col + 1, col - 1):
         if neighbor < 0 or neighbor >= len(row) or neighbor in mapping.values():

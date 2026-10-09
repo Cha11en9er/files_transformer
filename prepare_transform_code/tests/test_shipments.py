@@ -599,6 +599,8 @@ class PromptTest(unittest.TestCase):
         self.assertFalse(needs_stronger_model(empty, wide))
         seen = {"lots": [{"description": "leather", "pieces": 10, "amount": 5}]}
         self.assertFalse(needs_stronger_model(seen, thin))
+        gappy = {"lots": [{"description": "leather", "pieces": 10, "amount": 5}], "flags": ["packages_gap"]}
+        self.assertTrue(needs_stronger_model(gappy, wide))
 
 
 class Shipment9Test(unittest.TestCase):
@@ -1138,7 +1140,7 @@ class ForeignSheetTest(unittest.TestCase):
         stranger = {"role": "invoice", "lines": [Line(vendor="47208", pieces=50)]}
         same = {"role": "proforma", "lines": [Line(vendor="135532", pieces=300, description="lining")]}
         spec_lines = []
-        foreign = _companions([invoice, stranger, same], invoice, None, invoice["lines"], spec_lines)
+        foreign = _companions([invoice, stranger, same], invoice, None, None, invoice["lines"], spec_lines)
         self.assertTrue(foreign)
         self.assertEqual(len(spec_lines), 1)
         self.assertEqual(spec_lines[0].description, "lining")
@@ -2130,12 +2132,55 @@ class FormRulesTest(unittest.TestCase):
 
     def test_description_fragment_is_not_glued_twice(self):
         from prepare_transform_code.join import _richer
+        from prepare_transform_code.lines import description_holds
 
         self.assertEqual(_richer("Палатка/Tent", "Палатка"), "Палатка/Tent")
+        self.assertEqual(_richer("Палатка/Tent", "Tent // Палатка"), "Палатка/Tent")
+        self.assertTrue(description_holds("Палатка/Tent / / Палатка", "Палатка"))
         self.assertEqual(
             _richer("SOFA FABRIC Velvet LUX", "Upholstery fabric, velvet"),
             "SOFA FABRIC Velvet LUX // Upholstery fabric, velvet",
         )
+
+    def test_bundle_headers_and_bad_party_names(self):
+        from prepare_transform_code.fields import column_of
+        from prepare_transform_code.shipment import _bad_party_name
+
+        self.assertEqual(column_of("Bundles"), "packages")
+        self.assertEqual(column_of("N.W. /Bundle"), "unit_net")
+        self.assertEqual(column_of("N.W. / CTN (KG)"), "unit_net")
+        self.assertEqual(column_of("TOTAL N.W. (KG)"), "net")
+        self.assertEqual(column_of("TOTAL MEAS. (M3)"), "volume")
+        self.assertIsNone(column_of("CBM /bundle"))
+        self.assertIsNone(column_of("G.W. / CTN (KG)"))
+        self.assertTrue(_bad_party_name("дальнейшем to as the Seller, on the one hand"))
+        self.assertTrue(_bad_party_name("А.А., действующего на основании Устава"))
+        self.assertTrue(_bad_party_name("А.А"))
+        self.assertFalse(_bad_party_name("HAO NAI TE TRADING CO., LIMITED"))
+
+    def test_merged_packages_across_pdf_pages(self):
+        folder = Path("documents/7_pravka/261006_8100")
+        if not (folder / "F036 PL.pdf").is_file():
+            self.skipTest("нет папки 7_pravka/261006_8100")
+        import shutil
+        import tempfile
+
+        work = Path(tempfile.mkdtemp())
+        try:
+            for name in ("F036 Invoice.pdf", "F036 PL.pdf", "F036 описание.pdf"):
+                src = folder / name
+                if src.is_file():
+                    shutil.copy2(src, work / name)
+            result = analyze(work)
+            goods = [lot for lot in result["lots"] if not lot["freight"]]
+            packages = [lot.get("packages") for lot in goods if lot.get("packages") not in (None, "")]
+            self.assertAlmostEqual(sum(packages), 684, places=2)
+            self.assertEqual(goods[7].get("packages"), 2)
+            self.assertIsNone(goods[8].get("packages"))
+            self.assertNotIn("//", goods[0].get("description") or "")
+            self.assertNotIn("/ /", goods[0].get("description") or "")
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
     def test_other_articles_and_ref_errors_stay_out(self):
         from openpyxl import Workbook

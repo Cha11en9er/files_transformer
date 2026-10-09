@@ -6,8 +6,8 @@ from prepare_transform_code.numbers import collapse_letter_spacing
 
 # Более длинные фразы проверяются раньше коротких.
 COLUMNS = (
-    ("packages", ("q-ty packages", "q/ty cases", "qty cases", "qty of packages", "number of packages", "quantity of places", "quantity of place", "количество упаковок", "box qty", "koli adedi", "кол-во упаковок", "кол-во коробок", "кол-во мест", "количество мест", "количество коробок", "quantity/package", "места", "ctns", "ctn", "коробка", "boxes", "box")),
-    ("unit_net", ("вес ед", "нетт за", "n.w./ctn", "nw/ctn", "unit n.w", "unit nw", "unit net")),
+    ("packages", ("q-ty packages", "q/ty cases", "qty cases", "qty of packages", "number of packages", "quantity of places", "quantity of place", "количество упаковок", "box qty", "koli adedi", "кол-во упаковок", "кол-во коробок", "кол-во мест", "количество мест", "количество коробок", "quantity/package", "места", "ctns", "ctn", "коробка", "boxes", "box", "bundles", "bundle", "связок", "связки")),
+    ("unit_net", ("вес ед", "нетт за", "n.w./ctn", "nw/ctn", "n.w./bundle", "nw/bundle", "unit n.w", "unit nw", "unit net")),
     ("gross_with_pallet", ("with pallet", "брутто с", "с весом паллет", "с паллет")),
     ("qty", ("q-ty items", "q/ty pairs", "quantity(mts)", "quantity (mts)", "qty(m)", "net meters", "net metres", "net meter", "net metre", "net mt", "goods pcs", "mal adedi", "кол-во пар", "кол-во штук", "кол-во шт", "количество")),
     ("price", ("unit price", "price per", "price for pair", "price for unit", "eur unit", "цена за пару", "цена за ед", "цена за шт", "unitprice")),
@@ -45,6 +45,7 @@ _ROLE_MARKS = (
     ("proforma", ("PRO FORMA", "PROFORMA")),
     ("invoice", ("COMMERCIAL INVOICE", "FAKTURA", "INVOICE", "СЧЕТ-ФАКТУРА", "СЧЁТ-ФАКТУРА", "ИНВОЙС", "RECHNUNG", "FACTURE", "FACTURA", "FATURA", "FATTURA", "发票")),
     ("specification", ("СПЕЦИФИКАЦИЯ", "СПЕЦИФИКАЦ", "SPECIFICATION", "SPEZIFIKATION", "ESPECIFICACION", "SPECYFIKACJA")),
+    ("description", ("DESCRIPTION OF THE GOODS", "DESCRIPTION OF GOODS", "GOODS DESCRIPTION", "ОПИСАНИЕ ТОВАРА", "ОПИСАНИЕ ГРУЗА")),
 )
 
 def column_of(header):
@@ -66,6 +67,8 @@ def column_of(header):
             return "qty"
     if re.search(r"\bwidth\b|\bширина\b", text) and not any(mark in text for mark in ("короб", "carton", "box", "report")):
         return "width"
+    # «N.W. / CTN» и «N.W./CTN» — одна подпись. Пробелы вокруг слэша не меняют поле.
+    compact = re.sub(r"\s*/\s*", "/", text)
     exact = {
         "net": "net",
         "n.w": "net",
@@ -78,14 +81,17 @@ def column_of(header):
         "measure": "volume",
         "measurement": "volume",
     }
-    if text in exact:
-        return exact[text]
+    if text in exact or compact in exact:
+        return exact.get(text) or exact.get(compact)
+    text = compact
     # Art No. — артикул. «part no» сюда не входит: перед art стоит буква.
     if re.search(r"(?<![a-z])art\.?\s*no\.?\b", text):
         return "vendor"
-    # CBM/CTN — объём одной коробки. Итог строки — MEASUREMENT или Volume.
-    if text.replace(" ", "") in {"measurement", "measure"} or "cbm" in text:
-        if any(mark in text for mark in ("/ctn", "per ctn", "/carton", "per carton")):
+    # CBM/CTN и CBM/bundle — объём одной упаковки. Итог строки — MEASUREMENT, TOTAL MEAS. или Volume.
+    if text.replace(" ", "") in {"measurement", "measure", "totalmeas", "totalmeasurement"} or "cbm" in text or re.search(
+        r"\btotal\s*meas", text
+    ):
+        if any(mark in text for mark in ("/ctn", "per ctn", "/carton", "per carton", "/bundle", "per bundle")):
             return None
         return "volume"
     for name, phrases in COLUMNS:
@@ -105,24 +111,43 @@ def column_of(header):
         # UNIT G.W. / UNIT N.W. и G.W./CTN — вес одной коробки, не вес строки.
         if name in {"gross", "net"} and re.search(r"(?<![a-z])unit(?![a-z])", text):
             continue
-        if name == "gross" and any(mark in text for mark in ("/ctn", "per ctn", "/carton", "per carton", "короб")):
+        if name == "gross" and any(
+            mark in text
+            for mark in ("/ctn", "per ctn", "/carton", "per carton", "/bundle", "per bundle", "короб", "связ")
+        ):
             continue
         if name == "net" and any(mark in text for mark in ("with box", "с короб")):
             continue
         if name == "net" and any(mark in text for mark in ("1 pair", "per pair", "per pc", "за шт", "за пар")):
             return "unit_net"
-        if name == "net" and any(mark in text for mark in ("/ctn", "per ctn", "/carton", "per carton", "короб", "carton", "box")):
+        if name == "net" and any(
+            mark in text
+            for mark in (
+                "/ctn",
+                "per ctn",
+                "/carton",
+                "per carton",
+                "/bundle",
+                "per bundle",
+                "короб",
+                "carton",
+                "box",
+                "связ",
+            )
+        ):
             return "unit_net"
         if name == "packages" and any(
             mark in text
-            for mark in ("/ctn", "per ctn", "per carton", "n.w", "g.w", "weight", "вес", "нетто", "брут", "размер", "size", "cbm", "объ", "kg", "kgs", "кг")
+            for mark in ("/ctn", "per ctn", "per carton", "/bundle", "n.w", "g.w", "weight", "вес", "нетто", "брут", "размер", "size", "cbm", "объ", "kg", "kgs", "кг")
         ):
             continue
         # ROLL No. — номер рулона, не количество мест.
         if name == "packages" and re.search(r"\broll\s*(?:no|nr|number|#|№)\b", text):
             continue
         # Qty/Ctn и «кол-во в коробке» — штуки в одной коробке, не количество строки.
-        if name == "qty" and any(mark in text for mark in ("/ctn", "per ctn", "/carton", "в коробке", "per carton")):
+        if name == "qty" and any(
+            mark in text for mark in ("/ctn", "per ctn", "/carton", "в коробке", "per carton", "/bundle", "per bundle")
+        ):
             continue
         # «Количество рулонов» содержит «количество», но это места. Метры остаются количеством.
         if name == "qty" and re.search(r"roll|рулон", text) and not re.search(r"meter|metre|метр|m2|кв", text):

@@ -57,7 +57,7 @@ def read_pdf(path):
                     data = table.extract() or []
                     tables.append(data)
                     page_lines, inherited, page_stated = _table_lines(
-                        data, _row_boxes(table), words, table.bbox, inherited
+                        data, table, words, table.bbox, inherited
                     )
                     page_found.extend(page_lines)
                     stated = _merge_stated(stated, page_stated)
@@ -92,6 +92,9 @@ def read_pdf(path):
     if role == "unknown" and _looks_like_packing(lines):
         role = "packing"
         roles = ["packing"]
+    if role == "unknown" and _looks_like_description(lines, text):
+        role = "description"
+        roles = ["description"]
     return {
         "kind": "pdf",
         "text": text,
@@ -123,6 +126,18 @@ def _readable(text):
 
 def _looks_like_packing(lines):
     return any(line.packages and (line.net is not None or line.gross is not None) for line in lines)
+
+
+def _looks_like_description(lines, text):
+    """Таблица с заводом и кодом по строкам без заголовка инвойса — файл описания."""
+    if not lines:
+        return False
+    producers = sum(1 for line in lines if line.producer)
+    codes = sum(1 for line in lines if line.hs)
+    if producers < 3 and codes < 3:
+        return False
+    low = (text or "").lower()
+    return "manufacturer" in low or "изготовитель" in low or "описание" in low
 
 
 def _row_boxes(table):
@@ -192,9 +207,10 @@ def _map_row(row):
     return mapped
 
 
-def _table_lines(table, boxes, words, table_box, inherited):
+def _table_lines(table, pdf_table, words, table_box, inherited):
     header_idx = None
     mapping = {}
+    boxes = _row_boxes(pdf_table) if pdf_table is not None else []
     for index, row in enumerate(table):
         mapped = _map_row(row)
         if {"description", "qty"} & set(mapped) and len(mapped) >= 2:
@@ -232,6 +248,7 @@ def _table_lines(table, boxes, words, table_box, inherited):
     if header_idx is not None:
         mapping["_header_row"] = list(table[header_idx])
     lines = []
+    line_rows = []
     stated = {}
     for offset, row in enumerate(table[cursor:]):
         row = undouble_row(row)
@@ -305,7 +322,211 @@ def _table_lines(table, boxes, words, table_box, inherited):
             continue
         if measured or named:
             lines.append(line)
+            line_rows.append(cursor + offset)
+    _recover_spanned_from_words(lines, line_rows, table, pdf_table, mapping, words)
     return lines, mapping, stated
+
+
+# Число мест и сумма — один раз на блок. Текст, цена, завод, код — на каждую пустую строку блока.
+# vendor/model сюда не входят: пустая колонка артикула на всю таблицу иначе склеивает все коды в одну строку.
+_SPAN_ONCE = {"packages", "amount", "pieces"}
+_SPAN_FILL = {
+    "producer",
+    "finish",
+    "hs",
+    "hs_alt",
+    "brand",
+    "package_type",
+    "origin",
+    "price",
+    "description",
+    "unit",
+}
+
+
+def _recover_spanned_from_words(lines, line_rows, table, pdf_table, mapping, words):
+    """Значение в середине высокой клетки или на стыке страниц: extract() его не кладёт в строку.
+
+    Число мест/суммы/штук — один раз на визуальный блок. Если соседняя строка уже держит
+    то же число и её клетка по высоте накрывает пустые строки блока, второе число не добавляем
+    (иначе 2 на 30 строк превращается в несколько двоек). Текст и код — на каждую пустую.
+    """
+    if not lines or not line_rows or not words or pdf_table is None:
+        return
+    row_objects = list(getattr(pdf_table, "rows", None) or [])
+    for name, col in list(mapping.items()):
+        if name.startswith("_") or not isinstance(col, int):
+            continue
+        if name not in _SPAN_ONCE and name not in _SPAN_FILL:
+            continue
+        empty_at = []
+        for index, line in enumerate(lines):
+            if not _field_empty(line, name):
+                continue
+            empty_at.append(index)
+        for run in _index_runs(empty_at):
+            value = _orphan_value_in_run(run, line_rows, row_objects, col, words, name)
+            if value in (None, ""):
+                continue
+            if name in _SPAN_ONCE:
+                # Одна пустая строка часто ловит чужую цифру (итог, соседний ярус). Слитый блок — от двух строк.
+                if len(run) < 2:
+                    continue
+                if _once_value_already_on_block(run, lines, line_rows, row_objects, col, name, value):
+                    continue
+                assign_cell(lines[run[0]], name, value, header_is_package=(name == "packages"))
+            else:
+                for index in run:
+                    if _field_empty(lines[index], name):
+                        assign_cell(lines[index], name, value)
+
+
+def _once_value_already_on_block(run, lines, line_rows, row_objects, col, name, value):
+    """Сосед уже держит это число, а его клетка накрывает пустые строки — тот же блок, не новый."""
+    for neighbor_idx in (run[0] - 1, run[-1] + 1):
+        if neighbor_idx < 0 or neighbor_idx >= len(lines):
+            continue
+        if getattr(lines[neighbor_idx], name, None) != value:
+            continue
+        row_idx = line_rows[neighbor_idx]
+        if row_idx >= len(row_objects):
+            continue
+        cells = getattr(row_objects[row_idx], "cells", None) or []
+        cell = cells[col] if col < len(cells) else None
+        if cell is None or len(cell) < 4:
+            continue
+        ny0, ny1 = cell[1], cell[3]
+        for index in run:
+            box = getattr(row_objects[line_rows[index]], "bbox", None)
+            if not box:
+                continue
+            if box[1] < ny1 - 0.5 and box[3] > ny0 + 0.5:
+                return True
+    return False
+
+
+def _field_empty(line, name):
+    value = getattr(line, name, None)
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return False
+
+
+def _index_runs(indexes):
+    if not indexes:
+        return []
+    runs = [[indexes[0]]]
+    for index in indexes[1:]:
+        if index == runs[-1][-1] + 1:
+            runs[-1].append(index)
+        else:
+            runs.append([index])
+    return runs
+
+
+def _orphan_value_in_run(run, line_rows, row_objects, col, words, name):
+    y0 = None
+    y1 = None
+    x0 = None
+    x1 = None
+    for index in run:
+        row_idx = line_rows[index]
+        if row_idx >= len(row_objects):
+            continue
+        row = row_objects[row_idx]
+        bbox = getattr(row, "bbox", None)
+        if bbox:
+            y0 = bbox[1] if y0 is None else min(y0, bbox[1])
+            y1 = bbox[3] if y1 is None else max(y1, bbox[3])
+        cells = getattr(row, "cells", None) or []
+        cell = cells[col] if col < len(cells) else None
+        if cell is not None and len(cell) >= 4:
+            x0 = cell[0] if x0 is None else min(x0, cell[0])
+            x1 = cell[2] if x1 is None else max(x1, cell[2])
+            continue
+        # Слитая клетка в extract как None: границы колонки из соседей.
+        left = _neighbor_cell(cells, col, -1)
+        right = _neighbor_cell(cells, col, 1)
+        if left is not None and right is not None:
+            x0 = left[2] if x0 is None else min(x0, left[2])
+            x1 = right[0] if x1 is None else max(x1, right[0])
+    if y0 is None or y1 is None:
+        return None
+    if x0 is None or x1 is None or x1 - x0 < 2:
+        x0, x1 = _column_x_from_words(words, y0, y1, col, row_objects, line_rows, run)
+    if x0 is None or x1 is None or x1 - x0 < 2:
+        return None
+    # Только слова внутри полосы строк на этой странице. Чужой хвост прошлой страницы (top < 0) не берём.
+    found = []
+    for word in words:
+        mid_x = (word["x0"] + word["x1"]) / 2
+        mid_y = (word["top"] + word["bottom"]) / 2
+        if mid_x < x0 - 1 or mid_x > x1 + 1:
+            continue
+        if mid_y < y0 - 1 or mid_y > y1 + 1:
+            continue
+        if word["top"] < y0 - 0.5 and word["bottom"] <= y0:
+            continue
+        text = " ".join(str(word.get("text") or "").split())
+        if not text:
+            continue
+        found.append((mid_y, text))
+    if not found:
+        return None
+    clusters = _y_clusters(found)
+    # Несколько значений друг под другом — разные строки, не одна слитая клетка.
+    # Once: цифра у середины блока. hs/текст — только если кластер один на весь блок.
+    if name in _SPAN_ONCE or name == "price":
+        mid = (y0 + y1) / 2
+        cluster = min(clusters, key=lambda item: abs(item[0] - mid))
+        number = parse_number(" ".join(cluster[1]))
+        return number if number is not None else None
+    if len(clusters) != 1:
+        return None
+    joined = " ".join(clusters[0][1])
+    if name in {"hs", "hs_alt"}:
+        digits = re.sub(r"\D", "", joined)
+        return digits if len(digits) >= 6 else None
+    return joined
+
+
+def _y_clusters(found, gap=6.0):
+    """Слова с близкой серединой по Y — одно значение клетки; следующий ярус — другое."""
+    ordered = sorted(found, key=lambda item: item[0])
+    clusters = []
+    for mid_y, text in ordered:
+        if not clusters or mid_y - clusters[-1][0] > gap:
+            clusters.append([mid_y, [text]])
+        else:
+            clusters[-1][1].append(text)
+            # держаться середины уже набранного яруса
+            count = len(clusters[-1][1])
+            clusters[-1][0] = (clusters[-1][0] * (count - 1) + mid_y) / count
+    return [(item[0], item[1]) for item in clusters]
+
+
+def _neighbor_cell(cells, col, step):
+    index = col + step
+    while 0 <= index < len(cells):
+        cell = cells[index]
+        if cell is not None and len(cell) >= 4:
+            return cell
+        index += step
+    return None
+
+
+def _column_x_from_words(words, y0, y1, col, row_objects, line_rows, run):
+    """Если у всех строк блока клетка None, ширину колонки берём из соседних заполненных строк страницы."""
+    for row in row_objects:
+        cells = getattr(row, "cells", None) or []
+        if col >= len(cells):
+            continue
+        cell = cells[col]
+        if cell is not None and len(cell) >= 4:
+            return cell[0], cell[2]
+    return None, None
 
 
 def _same_width(table, mapping):
@@ -499,6 +720,11 @@ def stated_from_text(text):
             out["net"] = net
         if gross is not None:
             out["gross"] = gross
+    cll = re.search(r"(?i)\b(?:cll|total\s+packages?|итого\s+мест)\s*:?\s*([\d.,]+)", text or "")
+    if cll:
+        packages = parse_number(cll.group(1))
+        if packages is not None:
+            out["packages"] = packages
     for line in (text or "").splitlines():
         match = re.fullmatch(
             r"\s*([\d][\d.,]*)\s+met(?:er|re)s?\s+rolls?\s+([\d][\d.,]*)\s+([\d][\d.,]*)\s*",

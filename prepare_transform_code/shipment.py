@@ -37,6 +37,7 @@ def analyze(folder):
         if path.is_file()
         and not path.name.startswith("~$")
         and path.suffix.lower() in {".pdf", ".xls", ".xlsx", ".xlsm", ".jpg", ".jpeg", ".png"}
+        and not _output_book_name(path.name)
     ]
     documents = []
     seen = {}
@@ -80,21 +81,23 @@ def analyze(folder):
     if invoice is None:
         invoice = _pick(documents, "proforma", prefer_pdf=True)
     specification = _pick(documents, "specification", prefer_pdf=False)
+    description = _pick(documents, "description", prefer_pdf=True)
     # Лист с #REF! и без чисел не база, если рядом есть таблица с количеством и ценой.
     if invoice is not None and not _has_measures(invoice):
         if specification is not None and _has_measures(specification):
             invoice = None
     packings = [doc for doc in documents if _is_role(doc, "packing") and doc["lines"]]
     weight_conflict = len(packings) > 1 and _weights_differ(packings)
-    packing_lines = []
-    if not weight_conflict:
-        for doc in packings:
-            packing_lines.extend(doc["lines"])
+    stated = _stated_totals(documents)
+    packing_lines = _packing_lines(packings, weight_conflict, stated)
     base = invoice["lines"] if invoice else (specification["lines"] if specification else [])
     spec_lines = []
     if invoice is not None and specification is not None and specification is not invoice:
         spec_lines = list(specification["lines"])
-    foreign = _companions(documents, invoice, specification, base, spec_lines)
+    # Файл описания с заводом и кодом по строкам — тот же набор лотов, не вторая база.
+    if description is not None and description is not specification and description.get("lines"):
+        spec_lines.extend(description["lines"])
+    foreign = _companions(documents, invoice, specification, description, base, spec_lines)
     lots, freights = build_lots(base, packing_lines, spec_lines)
     flags = []
     if weight_conflict:
@@ -146,12 +149,14 @@ def analyze(folder):
         if invoice_no and invoice_no not in invoice_nos:
             invoice_nos.insert(0, invoice_no)
     parties = party_after(plain)
+    for side in ("seller", "buyer", "consignee"):
+        parties[side] = _party_head(parties.get(side))
     if not parties.get("seller"):
-        letterhead = _letterhead_seller(plain)
+        letterhead = _party_head(_letterhead_seller(plain) or _vendor_company(plain))
         if letterhead:
             parties["seller"] = letterhead
     if not parties.get("buyer"):
-        addressed = _to_company(plain)
+        addressed = _party_head(_to_company(plain))
         if addressed:
             parties["buyer"] = addressed
     origin = _one_label(plain, r"(?:country\s+of\s+origin|origin(?:\s+of\s+goods)?)\s*:") or _of_origin(plain)
@@ -190,7 +195,8 @@ def analyze(folder):
         ):
             lot["producer"] = producer
     proforma_nos = _proforma_nos(documents)
-    stated = _stated_totals(documents)
+    if _packages_miss_stated(lots, stated):
+        flags.append("packages_gap")
     invoice_date = _labeled_date(plain) or _spaced_date(plain)
     invoice_seen = any(_is_role(doc, "invoice") and doc.get("readable", True) for doc in documents)
     if invoice_date and invoice is None and not invoice_seen:
@@ -302,14 +308,15 @@ def _is_role(doc, role):
     return role in (doc.get("roles") or [])
 
 
-def _companions(documents, invoice, specification, base, spec_lines):
+def _companions(documents, invoice, specification, description, base, spec_lines):
     """Второй документ той же поставки дописывает пустые поля. Чужие артикулы лотами не становятся."""
     base_vendors = _vendor_set(base)
-    used = {id(invoice), id(specification)}
+    used = {id(invoice), id(specification), id(description)}
     foreign = False
     for doc in documents:
         if id(doc) in used or doc.get("role") in {
             "packing", "duplicate", "draft", "gtd_form", "customs_appendix", "image", "scan",
+            "description",
         }:
             continue
         lines = [line for line in doc.get("lines") or [] if not line.freight]
@@ -371,14 +378,43 @@ def _proforma_nos(documents):
     return found
 
 
+def _packing_lines(packings, weight_conflict, stated):
+    """Без конфликта — все пакинги. При конфликте — только тот, чей итог мест совпал с CLL/TOTAL."""
+    if not packings:
+        return []
+    if not weight_conflict:
+        lines = []
+        for doc in packings:
+            lines.extend(doc["lines"])
+        return lines
+    target = (stated or {}).get("packages")
+    if target is None:
+        return []
+    matched = []
+    for doc in packings:
+        goods = [line for line in doc["lines"] if not line.freight and not line.measure_group]
+        total = sum(line.packages or 0 for line in goods)
+        if abs(total - float(target)) <= 0.05:
+            matched.append(doc)
+    if len(matched) != 1:
+        return []
+    return list(matched[0]["lines"])
+
+
 def _weights_differ(packings):
-    """Один и тот же список строк с двумя итогами — конфликт. Части по машинам — не он."""
+    """Один и тот же список строк с двумя итогами — конфликт. Части по машинам — не он.
+
+    Итог мест тоже считается: PDF после восстановления слитых клеток даёт 684, а xlsx без
+    середины клетки — 677 при тех же артикулах. Один брутто при разных местах всё равно конфликт.
+    """
     totals = []
+    package_totals = []
     piece_sets = []
     vendor_sets = []
     for doc in packings:
         goods = [line for line in doc["lines"] if not line.freight and not line.measure_group]
         totals.append(round(sum(line.gross or 0 for line in goods), 2))
+        package_totals.append(round(sum(line.packages or 0 for line in goods), 2))
         # Строка без количества не должна ломать сортировку: None и число между собой не сравниваются.
         piece_sets.append(
             tuple(
@@ -399,7 +435,9 @@ def _weights_differ(packings):
             )
         )
         vendor_sets.append(vendors)
-    if len(set(totals)) <= 1:
+    same_weight = len(set(totals)) <= 1
+    same_packages = len(set(package_totals)) <= 1
+    if same_weight and same_packages:
         return False
     same_list = len(set(piece_sets)) == 1 and all(len(item) >= 2 for item in piece_sets)
     same_articles = all(vendor_sets) and len(set(vendor_sets)) == 1
@@ -723,8 +761,24 @@ def _director(text):
     return " ".join(match.group(1).split())
 
 
+def _output_book_name(name):
+    """Книга «… для ЭД» / «ТСД …» — выход профиля, не исходник поставщика.
+
+    «Для ЭД» в начале длинного имени расчёта (спецификация Gaomi) — не выход, файл остаётся.
+    """
+    stem = Path(name).stem.strip()
+    low = stem.casefold()
+    if re.search(r"для[_\s]?эд\s*$", low):
+        return True
+    if re.match(r"(?i)^тсд\b", stem):
+        return True
+    return False
+
+
 def _address_blocks(text):
-    """Адрес после подписи своей стороны. Без подписи первая клетка Address — продавец, вторая другая — покупатель."""
+    """Адрес после подписи своей стороны. BUYER и RECIPIENT в одной строке — два адреса ниже в том же порядке.
+    Без подписи первая клетка Address — продавец, вторая — покупатель. Address в середине строки шапки тоже берётся.
+    Bank address — не почтовый адрес."""
     lines = [" ".join(line.split()) for line in str(text or "").splitlines() if line.strip()]
     pending = []
     assigned = {"seller": "", "buyer": "", "consignee": ""}
@@ -732,23 +786,53 @@ def _address_blocks(text):
     index = 0
     while index < len(lines):
         line = lines[index]
+        values = _line_addresses(line)
+        dual = _dual_party_labels(line)
         side = _party_side(line)
-        if side and _ADDRESS_VALUE.match(line) is None:
+        if dual and not values:
+            pending.extend(dual)
+            index += 1
+            continue
+        if side and not values and _BENEFICIARY_ADDRESS.match(line) is None:
             pending.append(side)
             index += 1
             continue
-        match = _ADDRESS_VALUE.match(line)
-        if match is None:
+        if not values:
+            match = _BENEFICIARY_ADDRESS.match(line)
+            if match:
+                value = _postal_address(match.group(1) or "")
+                if value:
+                    values = [value]
+                    if not pending and not assigned["seller"]:
+                        assigned["seller"] = value
+        if not values and index + 1 < len(lines):
+            nxt = lines[index + 1]
+            if (
+                nxt
+                and _party_side(nxt) is None
+                and not _line_addresses(nxt)
+                and (_ADDRESS_VALUE.match(line) or _BENEFICIARY_ADDRESS.match(line))
+            ):
+                values = [_postal_address(nxt)]
+                index += 1
+        # Подпись и Address на одной строке: значение сразу к этой стороне.
+        owners = list(dual) if dual else ([side] if side else [])
+        if owners and values and not pending:
+            for owner, value in zip(owners, values):
+                if value and owner in assigned and not assigned[owner]:
+                    assigned[owner] = value
+                if value and value not in fallback:
+                    fallback.append(value)
+            for value in values[len(owners) :]:
+                if value and value not in fallback:
+                    fallback.append(value)
             index += 1
             continue
-        value = _postal_address(match.group(1) or "")
-        if not value and index + 1 < len(lines):
-            nxt = lines[index + 1]
-            if nxt and _party_side(nxt) is None and _ADDRESS_VALUE.match(nxt) is None:
-                value = nxt
-                index += 1
-        if value and value not in fallback:
-            fallback.append(value)
+        for value in values:
+            if not value:
+                continue
+            if value not in fallback:
+                fallback.append(value)
             if pending:
                 owner = pending.pop(0)
                 if owner in assigned and not assigned[owner]:
@@ -772,11 +856,46 @@ def _address_blocks(text):
     )
 
 
+def _dual_party_labels(line):
+    """THE BUYER: RECIPIENT: — две подписи, не одно имя."""
+    text = str(line or "")
+    if not re.search(r"(?i)\bbuyer\b", text):
+        return []
+    if not re.search(r"(?i)\b(?:recipient|consignee|получатель)\b", text):
+        return []
+    if re.search(r"\b(LLC|LTD|LIMITED|ООО|GMBH)\b", text, re.I) and not re.search(
+        r"(?i)buyer\s*:?\s*recipient|покупатель\s*:?\s*получатель", text
+    ):
+        return []
+    return ["buyer", "consignee"]
+
+
+_ADDRESS_LABEL = re.compile(
+    r"(?i)(?:address|адрес|adress)\b(?:\s+of\s+location\s+and\s+post\s+address)?\s*/?\s*[^:]{0,40}:\s*"
+)
+
+
+def _line_addresses(line):
+    """Все Address: на строке, в том числе после имени фирмы и два подряд в двух колонках.
+    Bank address и адрес банка почтовым адресом не являются."""
+    text = str(line or "")
+    found = []
+    for match in _ADDRESS_LABEL.finditer(text):
+        prefix = text[max(0, match.start() - 5) : match.start()].casefold()
+        if prefix.endswith("bank ") or prefix.endswith("банк "):
+            continue
+        value = _postal_address(text[match.end() :])
+        if value and value not in found:
+            found.append(value)
+    return found
+
+
 def _postal_address(value):
     """Повтор Address и банк на той же строке в почтовый адрес не входят. Второй адрес сбоку — другая сторона."""
-    text = re.sub(r"(?i)^(?:address|адрес)\s*:\s*", "", " ".join(str(value or "").split()))
+    text = re.sub(r"(?i)^(?:address|адрес|adress)\s*:\s*", "", " ".join(str(value or "").split()))
     text = re.split(
-        r"(?i)\b(?:address|адрес|bank|банк|inn|инн|kpp|кпп|contract|контракт|invoice|swift|account)\b",
+        r"(?i)\b(?:address|адрес|adress|bank|банк|inn|инн|ogrn|огрн|kpp|кпп|contract|контракт|invoice|swift|account|tel\.?|phone|fax|e-?mail)\b"
+        r"|(?:\b(?:I\s*N\s*N|K\s*P\s*P)\s*:)",
         text,
         maxsplit=1,
     )[0]
@@ -795,7 +914,10 @@ def _longer_address(value, fallback):
 
 
 _ADDRESS_VALUE = re.compile(
-    r"(?i)^(?:address|адрес)\b(?:\s+of\s+location\s+and\s+post\s+address)?\s*/?\s*[^:]{0,40}:\s*(.*)$"
+    r"(?i)^(?:address|адрес|adress)\b(?:\s+of\s+location\s+and\s+post\s+address)?\s*/?\s*[^:]{0,40}:\s*(.*)$"
+)
+_BENEFICIARY_ADDRESS = re.compile(
+    r"(?i)^(?:beneficiary['’`]?s?\s+address|адрес\s+бенефициара)\s*:?\s*(.*)$"
 )
 
 
@@ -803,7 +925,7 @@ def _party_side(line):
     if re.match(r"(?i)^(seller|buyer)['’]s\b", line or ""):
         return None
     match = re.match(
-        r"(?i)^(buyer|покупатель|importer|seller|продавец|exporter|recipient|consignee|получатель|грузополучатель)\b",
+        r"(?i)^(?:the\s+)?(buyer|покупатель|importer|seller|продавец|exporter|recipient|consignee|получатель|грузополучатель)\b",
         line or "",
     )
     if not match:
@@ -830,6 +952,77 @@ def _to_company(text):
     if len(found) == 1:
         return found[0]
     return ""
+
+
+def _bad_party_name(value):
+    """Хвост юридического абзаца и «именуемый в дальнейшем» именем стороны не являются."""
+    text = " ".join(str(value or "").split())
+    if not text or len(text) < 3:
+        return True
+    if re.fullmatch(r"а\.?\s*а\.?", text, re.I):
+        return True
+    if re.search(r"(?i)ввезен\w*\s+на\s+территори|таможенного\s+оформления|не\s+позднее\s+\d+\s+календар", text):
+        return True
+    if re.fullmatch(r"_+", text) or set(text) <= {"_", "-", "—", "–", " "}:
+        return True
+    return bool(
+        re.search(
+            r"(?i)(?:hereinafter|именуем\w*|on the one hand|on the other hand|acting basing|"
+            r"действующего на основании|дальнейшем\s+to\s+as|to as the\s+(?:seller|buyer)|"
+            r"^а\.?\s*а\.?\s*,|articles of association|^в\s+лице\b)",
+            text,
+        )
+    )
+
+
+def _party_head(value):
+    """Имя до юридического хвоста. «HUANAN … LIMITED The company … hereinafter» → HUANAN … LIMITED."""
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    text = re.sub(r"(?i)^(?:vendor|seller|продавец)\s*:\s*", "", text).strip()
+    match = re.search(
+        r"(?i)(?:\s+The company\b|\s*,\s*именуем\w*|\s*,\s*hereinafter\b|\s*,\s*represented by\b|"
+        r"\s*,\s*в лице\b|\s*,\s*acting bas(?:ed|ing)\b|\s*,\s*действующего на основании|"
+        r"\s*,\s*on the one hand\b|\s+hereinafter\b|\s+именуем\w*|"
+        r"\s+To\s*:|\s+Destination\s*:|\s+No\.\d|\s+для\s+таможен)",
+        text,
+    )
+    if match and match.start() >= 3:
+        text = text[: match.start()].strip(" ,.;")
+    if _bad_party_name(text):
+        return ""
+    return text
+
+
+def _vendor_company(text):
+    """«Vendor: HAO NAI TE …» в шапке инвойса — продавец, если слова Seller нет."""
+    match = re.search(r"(?m)^\s*Vendor\s*:\s*(.+)$", text or "", re.I)
+    if not match:
+        return ""
+    value = " ".join(match.group(1).split()).strip(" .")
+    value = re.split(r"(?i)\s+To\s*:|\s+Destination\s*:", value, maxsplit=1)[0].strip(" .")
+    if not re.search(r"\b(LLC|LTD|LIMITED|GMBH|INC|CO\.|COMPANY|ООО)\b", value, re.I):
+        return ""
+    return value
+
+
+def _packages_miss_stated(lots, stated):
+    """Сумма мест строк не сходится с напечатанным итогом — пустые слитые клетки или пропуск.
+
+    Расхождение на 1 при пустых строках блока часто шум итога (741 в TOTAL при 740 в строках).
+    Явная дыра слитой клетки — это несколько мест, как 677 против 684.
+    """
+    target = (stated or {}).get("packages")
+    if target is None:
+        return False
+    goods = [lot for lot in lots if not lot.get("freight")]
+    if not goods:
+        return False
+    filled = [lot.get("packages") for lot in goods if lot.get("packages") not in (None, "")]
+    empty = len(goods) - len(filled)
+    total = sum(float(value) for value in filled) if filled else 0.0
+    return bool(empty) and abs(total - float(target)) > 1.01
 
 
 def _letterhead_seller(text):

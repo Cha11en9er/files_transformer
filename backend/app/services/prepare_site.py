@@ -189,11 +189,20 @@ def doubt_share(lots: list[dict[str, Any]]) -> float:
     return doubtful / len(goods)
 
 
-def needs_second_model(lots: list[dict[str, Any]]) -> bool:
-    """Вторая модель нужна, когда таблица почти пустая или заметная часть строк под сомнением."""
+def needs_second_model(lots: list[dict[str, Any]], flags: list[str] | None = None) -> bool:
+    """Вторая модель нужна, когда таблица почти пустая, много сомнений или код сам отметил дыру мест.
+
+    Пустые клетки мест у строк внутри слитого блока — норма (число один раз на блок).
+    Смотрим packages_gap / weight_conflict, а не долю пустых packages.
+    """
     if filled_base_columns(lots) <= THIN_COLUMN_LIMIT:
         return True
-    return doubt_share(lots) >= DOUBT_SHARE
+    if doubt_share(lots) >= DOUBT_SHARE:
+        return True
+    marks = set(flags or [])
+    if marks & {"packages_gap", "weight_conflict"}:
+        return True
+    return False
 
 
 def _as_number(value: Any) -> Any:

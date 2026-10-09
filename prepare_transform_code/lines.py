@@ -213,15 +213,24 @@ _EXCEL_ERROR = re.compile(r"^#(?:REF!|VALUE!|N/A|NAME\?|DIV/0!|NULL!|NUM!|GETTIN
 
 
 def description_holds(current, extra):
-    """Кусок, который уже есть по одну сторону слэша, вторым описанием не клеится."""
+    """Кусок, который уже есть по одну сторону слэша, вторым описанием не клеится.
+
+    Короткий кусок текущего («Part of…») не считается, что он «держит» длинное описание
+    с этим куском внутри («CNC Router … Part of…») — иначе спецификация затирает инвойс.
+    """
     current_n = " ".join(str(current or "").casefold().split())
     extra_n = " ".join(str(extra or "").casefold().split())
     if not current_n or not extra_n:
         return False
     if extra_n in current_n:
         return True
-    parts = [part.strip() for part in re.split(r"\s*(?://|/+)\s*", current_n) if part.strip()]
-    return extra_n in parts or any(extra_n in part for part in parts)
+    current_parts = [part.strip() for part in re.split(r"\s*/+\s*", current_n) if part.strip()]
+    extra_parts = [part.strip() for part in re.split(r"\s*/+\s*", extra_n) if part.strip()]
+    if extra_parts and all(
+        part in current_n or any(part in piece for piece in current_parts) for part in extra_parts
+    ):
+        return True
+    return extra_n in current_parts or any(extra_n in part for part in current_parts)
 
 
 def apply_mfr_brand_cell(line, header, value):
@@ -275,6 +284,11 @@ def assign_cell(line, name, value, header_is_package=False):
         if name == "unit" and text.casefold() in _PACKAGE_KIND:
             if not line.package_type:
                 line.package_type = text
+            return
+        # «1» рядом с set/pcs — делитель цены, не единица. Единица — слово в соседней клетке.
+        if name == "unit" and re.fullmatch(r"\d+[.,]?\d*", text):
+            return
+        if name == "brand" and re.fullmatch(r"\d{1,3}", text):
             return
         if text and not getattr(line, name):
             setattr(line, name, text)
