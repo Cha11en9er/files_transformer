@@ -1052,7 +1052,7 @@ function severityClass(errors) {
 }
 
 function formatNum(value, digits = 2) {
-  if (value === null || value === undefined || value === "") return "-";
+  if (value === null || value === undefined || value === "") return "";
   const n = Number(value);
   if (!Number.isFinite(n)) return escapeHtml(value);
   const whole = Number.isInteger(n) || Math.abs(n - Math.round(n)) < 1e-9;
@@ -1064,7 +1064,7 @@ function formatNum(value, digits = 2) {
 }
 
 function formatMoney(value) {
-  if (value === null || value === undefined || value === "") return "-";
+  if (value === null || value === undefined || value === "") return "";
   const n = Number(value);
   if (!Number.isFinite(n)) return escapeHtml(value);
   return n.toLocaleString("ru-RU", {
@@ -1076,7 +1076,7 @@ function formatMoney(value) {
 
 // Цена за единицу бывает 0,1030 или 0,0655: два знака её искажают. Знаки после двух показываются, пока они не нули.
 function formatPrice(value) {
-  if (value === null || value === undefined || value === "") return "-";
+  if (value === null || value === undefined || value === "") return "";
   const n = Number(value);
   if (!Number.isFinite(n)) return escapeHtml(value);
   return n.toLocaleString("ru-RU", {
@@ -1156,11 +1156,13 @@ function fieldSeverity(errors, field) {
 }
 
 function articleLabel(item) {
-  const art = item?.article || "-";
+  const raw = item?.article;
+  const art = raw == null || raw === "" || raw === "-" ? "" : String(raw);
   const color = item?.commercial_data?.color;
   if (color == null || color === "") return art;
   const c = String(color).trim();
   if (!c) return art;
+  if (!art) return c;
   if (String(art).toUpperCase().includes(c.toUpperCase())) return art;
   return `${art} ${c}`;
 }
@@ -1171,10 +1173,11 @@ function itemQty(item) {
   return item?.packing_data?.meters;
 }
 
-function sumField(items, getter) {
+function sumField(items, getter, skip) {
   let total = 0;
   let any = false;
   (items || []).forEach((item) => {
+    if (skip && skip(item)) return;
     const value = getter(item);
     const n = Number(value);
     if (value === null || value === undefined || value === "" || !Number.isFinite(n)) return;
@@ -1182,6 +1185,10 @@ function sumField(items, getter) {
     any = true;
   });
   return any ? total : null;
+}
+
+function isContinuedPackages(item) {
+  return Boolean(item?.packing_data?.rolls_continued);
 }
 
 function isFabricItems(items) {
@@ -1304,7 +1311,7 @@ function formatRoleCell(item, col) {
     if (key === "width" || key === "area" || key === "volume") return formatNum(value, 3);
     return formatNum(value);
   }
-  if (value == null || value === "") return "-";
+  if (value == null || value === "" || value === "-") return "";
   return escapeHtml(value);
 }
 
@@ -1345,23 +1352,28 @@ function fillExcelTotals(items, review) {
       cell.textContent = key === "article" ? "Итого" : "";
       return;
     }
-    const value = sumField(items, (item) => itemField(item, key));
+    // Итог — сумма клеток таблицы, не TOTAL из файла. Слитое число мест в сумму один раз.
+    const value = sumField(
+      items,
+      (item) => itemField(item, key),
+      key === "packages" ? isContinuedPackages : null
+    );
     const fmt = key === "amount" ? formatMoney : (n) => formatNum(n, key === "packages" ? 0 : 2);
-    cell.textContent = fmt(value);
+    cell.textContent = value == null ? "" : fmt(value);
     const fileKey = key === "packages" ? "rolls" : key === "qty" ? "meters" : key;
-    const fileValue = stated[fileKey];
+    const fileValue = stated[fileKey] ?? (key === "qty" ? stated.qty : null);
     const fileNum = Number(fileValue);
-    const tableNum = Number(value);
+    const tableNum = value == null ? null : Number(value);
+    const fileOk = fileValue != null && fileValue !== "" && Number.isFinite(fileNum);
+    const tableOk = tableNum != null && Number.isFinite(tableNum);
     const differs =
-      value != null &&
-      value !== "" &&
-      fileValue != null &&
-      fileValue !== "" &&
-      Number.isFinite(fileNum) &&
-      Number.isFinite(tableNum) &&
-      Math.abs(fileNum - tableNum) > 0.05;
+      fileOk && ((tableOk && Math.abs(fileNum - tableNum) > 0.05) || !tableOk);
     cell.classList.toggle("sev-RED", differs);
-    cell.title = differs ? `в файле ${fmt(fileNum)}, в таблице ${fmt(tableNum)}` : "";
+    cell.title = differs
+      ? `в файле ${fmt(fileNum)}, в таблице ${tableOk ? fmt(tableNum) : "нет"}`
+      : fileOk && tableOk
+        ? `сумма строк ${fmt(tableNum)}, в файле ${fmt(fileNum)}`
+        : "";
   });
 }
 
@@ -1376,9 +1388,15 @@ function recountWorkspaceWarnings() {
 }
 
 function contextCell(value) {
-  if (value === null || value === undefined || value === "") return "-";
+  if (value === null || value === undefined || value === "") return "";
   if (typeof value === "number") return formatNum(value);
+  const text = String(value).trim();
+  if (!text || text === "-") return "";
   return escapeHtml(value);
+}
+
+function isIndexHeader(title) {
+  return /^(№|no\.?|n[°º]|#|item|poz\.?)$/i.test(String(title || "").trim());
 }
 
 function recognizedRows(file) {
@@ -1405,7 +1423,8 @@ function renderRecognizedTable(rows, file) {
   if (!list.length) {
     return "<p class=\"hint\">В этом файле таблица товаров не собралась.</p>";
   }
-  const headers = sourceColumnHeaders(file || { table: rows });
+  // Слева уже есть порядковый № — колонку №/No из документа не дублируем.
+  const headers = sourceColumnHeaders(file || { table: rows }).filter((title) => !isIndexHeader(title));
   const plus = file
     ? (title) =>
         `<button type="button" class="col-action" data-col-add="${escapeHtml(title)}" aria-label="Добавить столбец">+</button>`
@@ -1436,6 +1455,7 @@ function renderTotalsStrip(review) {
   const scanTotals = review?.totals || {};
   const hasExcel = Boolean(review?.excel_attached || (review?.context?.excel || []).length);
   const parts = [
+    ["rolls", "Места"],
     ["qty", "Кол-во"],
     ["amount", "Сумма"],
     ["net_weight", "Нетто"],
@@ -1445,10 +1465,16 @@ function renderTotalsStrip(review) {
       const tableVal = excelTotals[key] ?? (key === "qty" ? excelTotals.meters : null);
       const pdfVal = scanTotals[key] ?? (key === "qty" ? scanTotals.meters : null);
       if (tableVal == null && pdfVal == null) return "";
-      const mismatch = tableVal != null && pdfVal != null && Math.abs(Number(tableVal) - Number(pdfVal)) > 0.5;
-      const fmt = key === "amount" ? formatMoney : formatNum;
-      const left = hasExcel ? `таблица ${fmt(tableVal)}` : `собрано ${fmt(tableVal)}`;
-      return `<div class="scan-total${mismatch ? " mismatch" : ""}"><div class="k">${escapeHtml(label)}</div><div class="v">${left} · PDF ${fmt(pdfVal)}</div></div>`;
+      const tableOk = tableVal != null && tableVal !== "" && Number.isFinite(Number(tableVal));
+      const fileOk = pdfVal != null && pdfVal !== "" && Number.isFinite(Number(pdfVal));
+      const mismatch =
+        fileOk &&
+        ((tableOk && Math.abs(Number(tableVal) - Number(pdfVal)) > (key === "rolls" ? 0.05 : 0.5)) ||
+          !tableOk);
+      const fmt = key === "amount" ? formatMoney : (n) => formatNum(n, key === "rolls" ? 0 : 2);
+      const shown = (n) => (n == null || n === "" ? "нет" : fmt(n));
+      const left = hasExcel ? `таблица ${shown(tableVal)}` : `собрано ${shown(tableVal)}`;
+      return `<div class="scan-total${mismatch ? " mismatch" : ""}"><div class="k">${escapeHtml(label)}</div><div class="v">${left} · в файле ${shown(pdfVal)}</div></div>`;
     })
     .filter(Boolean)
     .join("");
@@ -1946,7 +1972,7 @@ function paintItemsTable() {
     const body = cols
       .map((col) => {
         if (col.key === "article" || col.key === "description") {
-          const raw = itemField(item, col.key) || "-";
+          const raw = itemField(item, col.key) || "";
           return longCell(raw, col.key === "article" ? "article" : "desc");
         }
         const edit = EDIT_FOR[col.key] ? ` data-edit="${EDIT_FOR[col.key]}"` : "";

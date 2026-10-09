@@ -1032,7 +1032,10 @@ class Shipment18Test(unittest.TestCase):
         self.assertAlmostEqual(sum(lot["amount"] for lot in goods), 33364.31, places=2)
         self.assertAlmostEqual(sum(lot["net"] for lot in goods), 9669.64, places=2)
         self.assertAlmostEqual(sum(lot["gross"] for lot in goods), 11376.05, places=2)
-        self.assertEqual(sum(lot["packages"] or 0 for lot in goods), 740)
+        self.assertEqual(
+            sum(lot["packages"] or 0 for lot in goods if not lot.get("packages_continued")),
+            740,
+        )
         self.assertEqual(result["currency"], "USD")
         self.assertEqual(result["invoice_no"], "YT-20251024")
         self.assertEqual(result["contract"], "YT-02/04/2025")
@@ -2173,10 +2176,20 @@ class FormRulesTest(unittest.TestCase):
                     shutil.copy2(src, work / name)
             result = analyze(work)
             goods = [lot for lot in result["lots"] if not lot["freight"]]
-            packages = [lot.get("packages") for lot in goods if lot.get("packages") not in (None, "")]
-            self.assertAlmostEqual(sum(packages), 684, places=2)
+            owned = [
+                lot.get("packages")
+                for lot in goods
+                if lot.get("packages") not in (None, "") and not lot.get("packages_continued")
+            ]
+            self.assertAlmostEqual(sum(owned), 684, places=2)
             self.assertEqual(goods[7].get("packages"), 2)
-            self.assertIsNone(goods[8].get("packages"))
+            self.assertFalse(goods[7].get("packages_continued"))
+            self.assertEqual(goods[8].get("packages"), 2)
+            self.assertTrue(goods[8].get("packages_continued"))
+            self.assertEqual(goods[23].get("packages"), 2)
+            self.assertTrue(goods[23].get("packages_continued"))
+            self.assertEqual(goods[39].get("packages"), 2)
+            self.assertTrue(goods[39].get("packages_continued"))
             self.assertNotIn("//", goods[0].get("description") or "")
             self.assertNotIn("/ /", goods[0].get("description") or "")
         finally:

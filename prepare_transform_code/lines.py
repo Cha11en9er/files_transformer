@@ -62,6 +62,8 @@ class Line:
     pallet_weight: float | None = None
     measure_group: dict | None = None
     freight: bool = False
+    # Поля из слитой клетки PDF/Excel: значение видно на каждой строке блока, в сумму входит один раз.
+    span_continued: set = field(default_factory=set)
     extra: dict = field(default_factory=dict)
 
     def anchors(self):
@@ -100,10 +102,35 @@ def is_bare_total(line, previous):
         value = getattr(line, name)
         if value is None:
             continue
-        total = sum(getattr(item, name) or 0 for item in previous if not item.freight)
+        total = sum(
+            getattr(item, name) or 0
+            for item in previous
+            if not item.freight and name not in (getattr(item, "span_continued", None) or set())
+        )
         if total > 0 and abs(total - value) <= max(0.02, abs(total) * 0.002):
             return True
     return False
+
+
+def owned_number(line, name):
+    """Число строки, если оно не продолжение слитой клетки."""
+    if name in (getattr(line, "span_continued", None) or set()):
+        return None
+    return getattr(line, name, None)
+
+
+def owned_sum(lines, name):
+    total = 0.0
+    any_value = False
+    for line in lines or []:
+        if getattr(line, "freight", False):
+            continue
+        value = owned_number(line, name)
+        if value is None:
+            continue
+        total += float(value)
+        any_value = True
+    return total if any_value else 0.0
 
 
 def is_pallet_only(line):
@@ -435,9 +462,10 @@ def _attach_echo(head, echo):
 def _can_fold(group):
     if any(line.freight for line in group):
         return False
-    if sum(line.pieces is not None for line in group) > 1:
+    # Продолжение слитой суммы/штук не второе значение — блок можно схлопнуть.
+    if sum(1 for line in group if owned_number(line, "pieces") is not None) > 1:
         return False
-    if sum(line.amount is not None for line in group) > 1:
+    if sum(1 for line in group if owned_number(line, "amount") is not None) > 1:
         return False
     if sum(line.price is not None for line in group) > 1:
         return False
@@ -518,7 +546,21 @@ def _collapse_group(group):
             if getattr(head, name) in (None, "") and getattr(line, name) not in (None, ""):
                 setattr(head, name, getattr(line, name))
     for name in ("packages", "gross", "net", "volume"):
-        values = [getattr(line, name) for line in group if getattr(line, name) is not None]
+        values = [
+            getattr(line, name)
+            for line in group
+            if getattr(line, name) is not None and name not in (getattr(line, "span_continued", None) or set())
+        ]
         if values:
             setattr(head, name, sum(values))
+    # Слитые amount/pieces: на продолжениях то же число, в голову берём один раз.
+    for name in ("amount", "pieces"):
+        if getattr(head, name, None) is not None:
+            continue
+        for line in group:
+            value = owned_number(line, name)
+            if value is not None:
+                setattr(head, name, value)
+                break
+    head.span_continued -= {"amount", "pieces", "packages"} & head.span_continued
     return head

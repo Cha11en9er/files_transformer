@@ -391,15 +391,22 @@ def _merge(base, packing):
         lot["packages"] = lot["gross"] = lot["net"] = lot["net_primary"] = lot["gross_with_pallet"] = None
         _apply_unit(lot, base.unit, packing.unit)
         return lot
+    packing_continued = getattr(packing, "span_continued", None) or set()
     if (
         lot.get("packages") is not None
         and packing.packages is not None
         and abs(lot["packages"] - packing.packages) > 0.05
+        and "packages" not in packing_continued
     ):
         lot["packages_conflict"] = True
     for name in ("packages", "gross", "net", "net_primary", "volume", "gross_with_pallet", "pallet_count", "pallet_weight"):
         if lot.get(name) is None and getattr(packing, name, None) is not None:
             lot[name] = getattr(packing, name)
+            if name == "packages" and "packages" in packing_continued:
+                lot["packages_continued"] = True
+    for name in ("amount", "pieces"):
+        if name in packing_continued:
+            lot[f"{name}_continued"] = True
     if lot.get("pieces") is None and packing.pieces is not None:
         lot["pieces"] = packing.pieces
     _apply_unit(lot, base.unit, packing.unit)
@@ -652,6 +659,10 @@ def _public(line: Line):
     lot["unit_conflict"] = False
     lot["packages_conflict"] = False
     lot["split_of"] = None
+    continued = getattr(line, "span_continued", None) or set()
+    for name in ("packages", "amount", "pieces"):
+        if name in continued:
+            lot[f"{name}_continued"] = True
     if line.measure_group:
         lot["packages"] = lot["gross"] = lot["net"] = lot["net_primary"] = lot["gross_with_pallet"] = None
     return lot

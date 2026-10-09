@@ -58,11 +58,23 @@ def excel_field(item: ItemOut, field: str) -> Any:
 
 def compute_excel_totals(items: list[ItemOut]) -> ScanTotalsOut:
     def _sum(field: str) -> float | None:
-        values = [_num(excel_field(item, field)) for item in items]
-        present = [value for value in values if value is not None]
-        if not present:
+        values = []
+        for item in items:
+            packing = getattr(item, "packing_data", None) or {}
+            if isinstance(packing, dict):
+                continued = packing.get("rolls_continued")
+            else:
+                continued = getattr(packing, "rolls_continued", None)
+            if field in {"rolls", "boxes"} and continued:
+                continue
+            if field == "amount" and getattr(item, "amount_continued", None):
+                continue
+            value = _num(excel_field(item, field))
+            if value is not None:
+                values.append(value)
+        if not values:
             return None
-        return round(sum(present), 4)
+        return round(sum(values), 4)
 
     return ScanTotalsOut(
         qty=_sum("qty"),

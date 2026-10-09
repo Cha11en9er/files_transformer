@@ -781,6 +781,18 @@ button.badge {
 #items-table td.sev-ORANGE { box-shadow: inset 0 0 0 1px #e0b48a; }
 #items-table td.sev-BLUE { box-shadow: inset 0 0 0 1px #9dbbe8; }
 
+/* Пустая клетка мест: не прочерк, а лёгкая подсветка «здесь пусто» */
+.context-mini td.empty-gap,
+#items-table td.empty-gap {
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 4px,
+    rgba(230, 209, 138, 0.35) 4px,
+    rgba(230, 209, 138, 0.35) 8px
+  );
+}
+
 .table-legend {
   display: flex;
   flex-wrap: wrap;
