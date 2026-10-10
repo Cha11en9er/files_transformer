@@ -634,11 +634,18 @@ def _iter_create_events(
         review_dict: dict[str, Any] = {"status": "skipped", "model": first_model, "error": None}
         verdict_dropped: list[str] = []
         second_used = False
+        def _apply_model(target_lots: list[dict[str, Any]], payload: Any) -> tuple[list[dict[str, Any]], list[str]]:
+            try:
+                applied = apply_verdict(target_lots, payload)
+                notes = verdict_notes(list(draft.get("lots") or []), payload)
+                return applied, notes
+            except Exception as exc:  # noqa: BLE001 — кривой вердикт не должен ронять поставку
+                return target_lots, [f"Вердикт модели не применился ({humanize_exception(exc)}). Оставлен черновик кода."]
+
         if first_model:
             review_dict = yield from _ask(first_model, "model")
             if review_dict.get("status") == "ok":
-                lots = apply_verdict(goods_lots(draft), review_dict.get("payload"))
-                verdict_dropped = verdict_notes(list(draft.get("lots") or []), review_dict.get("payload"))
+                lots, verdict_dropped = _apply_model(goods_lots(draft), review_dict.get("payload"))
             elif review_dict.get("error"):
                 verdict_dropped.append(f"Модель: {review_dict.get('error')}. Показан черновик кода.")
         if second_model and needs_second_model(lots, draft.get("flags")):
@@ -653,8 +660,7 @@ def _iter_create_events(
             }
             second = yield from _ask(second_model, "model2")
             if second.get("status") == "ok":
-                lots = apply_verdict(goods_lots(draft), second.get("payload"))
-                verdict_dropped = verdict_notes(list(draft.get("lots") or []), second.get("payload"))
+                lots, verdict_dropped = _apply_model(goods_lots(draft), second.get("payload"))
                 review_dict = second
             elif second.get("error"):
                 # Первая модель (или код) уже в lots — вторую ошибку только помечаем.
@@ -804,10 +810,11 @@ def _iter_create_events(
         items = _items_from_rows(reconciled)
         excel_totals = compute_excel_totals(items)
         header_fields = enrich_header_from_goods(header_fields, items)
-        # Сырой ответ модели в UI не нужен целиком — обрезаем, чтобы поток не рвался на большом JSON.
-        raw = str(review_dict.get("raw_text") or "")
-        if len(raw) > 8000:
-            review_dict["raw_text"] = raw[:8000] + "\n…"
+        # В UI сырой текст и полный payload модели не используются — выкидываем, иначе done-JSON
+        # раздувается и прокси рвёт поток («network error»), хотя сборка уже прошла.
+        review_dict["raw_text"] = ""
+        review_dict["payload"] = None
+        review_dict["tables"] = []
         review_dict["excel_totals"] = excel_totals.model_dump()
         stated_totals = _stated_for_review(draft.get("stated") or {})
         review_dict["totals"] = stated_totals
@@ -921,23 +928,53 @@ async def create_shipment(
         return ShipmentCreateResponse.model_validate(body)
 
     def event_stream() -> Iterator[bytes]:
+        def _safe_line(event: dict[str, Any]) -> bytes:
+            # NaN/Inf из модели дают невалидный JSON → JSON.parse в браузере падает.
+            text = json.dumps(event, ensure_ascii=False, default=str)
+            text = (
+                text.replace(": NaN", ": null")
+                .replace(": -Infinity", ": null")
+                .replace(": Infinity", ": null")
+            )
+            return (text + "\n").encode("utf-8")
+
         try:
             for event in _iter_create_events(
                 title=title, profile_type=profile_type, incoming=incoming, catalog_names=catalog_names
             ):
-                yield (json.dumps(event, ensure_ascii=False, default=str) + "\n").encode("utf-8")
+                try:
+                    yield _safe_line(event)
+                except Exception as exc:  # noqa: BLE001 — битый done не должен оставлять клиента без ответа
+                    if event.get("event") == "done":
+                        slim = {
+                            "event": "done",
+                            "id": event.get("id"),
+                            "title": event.get("title") or title or "shipment",
+                            "profile_type": event.get("profile_type") or profile_type,
+                            "status": event.get("status") or "needs_review",
+                            "header_fields": event.get("header_fields") or {},
+                            "header_changes": event.get("header_changes") or [],
+                            "header_notes": list(event.get("header_notes") or [])
+                            + [f"Ответ обрезан при передаче: {humanize_exception(exc)}"],
+                            "files": event.get("files") or [],
+                            "items": event.get("items") or [],
+                            "item_count": event.get("item_count") or len(event.get("items") or []),
+                            "warning_count": (event.get("warning_count") or 0) + 1,
+                            "skipped_count": event.get("skipped_count") or 0,
+                            "model_review": {
+                                "status": "error",
+                                "error": humanize_exception(exc),
+                                "meaning": "Передача результата сбойнула. Таблица кода ниже.",
+                            },
+                            "verdict_run": event.get("verdict_run") or {},
+                        }
+                        yield _safe_line(slim)
+                    else:
+                        yield _safe_line({"event": "error", "detail": humanize_exception(exc)})
         except HTTPException as exc:
-            yield (
-                json.dumps({"event": "error", "detail": exc.detail}, ensure_ascii=False) + "\n"
-            ).encode("utf-8")
+            yield _safe_line({"event": "error", "detail": exc.detail})
         except Exception as exc:
-            yield (
-                json.dumps(
-                    {"event": "error", "detail": humanize_exception(exc)},
-                    ensure_ascii=False,
-                )
-                + "\n"
-            ).encode("utf-8")
+            yield _safe_line({"event": "error", "detail": humanize_exception(exc)})
 
     return StreamingResponse(
         event_stream(),
