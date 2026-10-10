@@ -224,6 +224,17 @@ function humanizeClientError(text) {
   ) {
     return "Модель недоступна: OpenCode не отвечает на 127.0.0.1:4096.";
   }
+  if (
+    low.includes("failed to fetch") ||
+    low.includes("networkerror") ||
+    low === "network error" ||
+    low.includes("network error") ||
+    low.includes("load failed") ||
+    low.includes("the network connection was lost") ||
+    low.includes("ns_error_net")
+  ) {
+    return "Связь с сервером оборвалась во время обработки. Повтори загрузку — если код уже прочитал файлы, таблица должна прийти даже без ответа модели.";
+  }
   if (low.includes("creditserror") || low.includes("insufficient balance") || low.includes("no payment method")) {
     return "На OpenCode Zen нет оплаты или закончился баланс.";
   }
@@ -235,6 +246,9 @@ function humanizeClientError(text) {
   }
   if (low.includes("unauthorized") || low.includes("password is not set")) {
     return "OpenCode отклонил пароль. Пароль в backend/.env должен совпадать с паролем сервиса.";
+  }
+  if (low.includes("не удалось получить результат")) {
+    return "Сервер не вернул результат обработки. Повтори загрузку.";
   }
   return blob;
 }
@@ -910,7 +924,12 @@ async function processShipment() {
 }
 
 async function parseUploadStream(fd, hooks) {
-  const res = await fetch("/api/v1/shipments/", { method: "POST", body: fd });
+  let res;
+  try {
+    res = await fetch("/api/v1/shipments/", { method: "POST", body: fd });
+  } catch (err) {
+    throw new Error(humanizeClientError(err && err.message ? err.message : err));
+  }
   const ct = res.headers.get("content-type") || "";
   if (!ct.includes("ndjson")) {
     if (!res.ok) {
@@ -922,7 +941,7 @@ async function parseUploadStream(fd, hooks) {
       } catch {
         /* keep */
       }
-      throw new Error(detail);
+      throw new Error(humanizeClientError(detail));
     }
     return res.json();
   }
@@ -931,35 +950,58 @@ async function parseUploadStream(fd, hooks) {
   const decoder = new TextDecoder();
   let buf = "";
   let donePayload = null;
-  while (true) {
-    const { done, value } = await reader.read();
-    buf += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const lines = buf.split("\n");
-    buf = lines.pop() || "";
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      const event = JSON.parse(line);
-      if (event.event === "progress") {
-        hooks.onProgress(event.current, event.total, event.filename, {
-          stage: event.stage,
-          message: event.message,
-        });
-      } else if (event.event === "file") {
-        hooks.onFile(event.filename, event.status, event.message);
-      } else if (event.event === "error") {
-        throw new Error(event.detail || "Ошибка обработки");
-      } else if (event.event === "done") {
-        donePayload = event;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buf += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = buf.split("\n");
+      buf = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let event;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          throw new Error("Ответ сервера повреждён. Повтори загрузку.");
+        }
+        if (event.event === "progress") {
+          hooks.onProgress(event.current, event.total, event.filename, {
+            stage: event.stage,
+            message: event.message,
+          });
+        } else if (event.event === "file") {
+          hooks.onFile(event.filename, event.status, event.message);
+        } else if (event.event === "error") {
+          throw new Error(humanizeClientError(event.detail || "Ошибка обработки"));
+        } else if (event.event === "done") {
+          donePayload = event;
+        }
       }
+      if (done) break;
     }
-    if (done) break;
+  } catch (err) {
+    if (donePayload) {
+      const { event: _partial, ...created } = donePayload;
+      return created;
+    }
+    const msg = err && err.message ? err.message : String(err);
+    throw new Error(humanizeClientError(msg));
   }
   if (buf.trim()) {
-    const event = JSON.parse(buf);
-    if (event.event === "error") throw new Error(event.detail || "Ошибка обработки");
-    if (event.event === "done") donePayload = event;
+    try {
+      const event = JSON.parse(buf);
+      if (event.event === "error") throw new Error(humanizeClientError(event.detail || "Ошибка обработки"));
+      if (event.event === "done") donePayload = event;
+    } catch (err) {
+      if (donePayload) {
+        const { event: _event, ...created } = donePayload;
+        return created;
+      }
+      if (err && err.message && !String(err.message).includes("JSON")) throw err;
+      throw new Error("Ответ сервера обрезан. Повтори загрузку.");
+    }
   }
-  if (!res.ok && !donePayload) throw new Error(res.statusText);
+  if (!res.ok && !donePayload) throw new Error(humanizeClientError(res.statusText || "Ошибка сервера"));
   if (!donePayload) throw new Error("Не удалось получить результат обработки");
   const { event: _event, ...created } = donePayload;
   return created;
