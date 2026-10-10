@@ -910,14 +910,32 @@ async function processShipment() {
     applyShipmentTitle(created.title, { force: true });
     refreshOpenCodeStatus();
     const skipped = created.skipped_count || 0;
+    const modelErr = created.model_review && created.model_review.status === "error"
+      ? humanizeClientError(created.model_review.error || created.model_review.meaning || "")
+      : "";
     $("#upload-status").textContent =
       `Готово: ${created.item_count} позиций из ${created.files?.length || state.pendingFiles.length} файлов` +
       (skipped ? `, пропущено: ${skipped}` : "") +
-      `, замечаний: ${created.warning_count}. Чтобы обработать другой комплект, обновите страницу.`;
+      `, замечаний: ${created.warning_count}.` +
+      (modelErr ? ` Модель: ${modelErr}` : "") +
+      ` Чтобы обработать другой комплект, обновите страницу.`;
     setSessionLocked(true, { busy: false, buttonLabel: "Обработано" });
-    renderWorkspace();
-    showToast("Обработка прошла успешно", { kind: "ok", ms: 4000 });
+    try {
+      renderWorkspace();
+    } catch (renderErr) {
+      console.error("renderWorkspace", renderErr);
+      showToast(
+        `Таблица получена, но экран не отрисовался: ${humanizeClientError(renderErr && renderErr.message)}`,
+        { kind: "error", ms: 7000 }
+      );
+    }
+    if (modelErr) {
+      showToast(`Черновик кода на экране. ${modelErr}`, { kind: "info", ms: 6000 });
+    } else {
+      showToast("Обработка прошла успешно", { kind: "ok", ms: 4000 });
+    }
   } catch (err) {
+    console.error("processShipment", err);
     pipeline.fail(`Ошибка: ${humanizeClientError(err.message)}`);
     setSessionLocked(false, { busy: false, buttonLabel: "Обработать" });
   }
