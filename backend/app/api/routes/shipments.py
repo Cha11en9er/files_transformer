@@ -566,6 +566,7 @@ def _iter_create_events(
         }
 
         def _ask(spec: str, stage: str = "model") -> dict[str, Any]:
+            """Спросить модель. Ошибка модели не рвёт поток: отдаём status=error и оставляем черновик кода."""
             box: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
             label = "Улучшенная модель" if stage == "model2" else "Обычная модель"
 
@@ -582,7 +583,7 @@ def _iter_create_events(
                             ),
                         )
                     )
-                except Exception as exc:  # noqa: BLE001 — surface to stream consumer
+                except Exception as exc:  # noqa: BLE001 — вернём в поток как status=error, без raise
                     box.put(("err", exc))
 
             worker = threading.Thread(target=_call, name="opencode-verdict", daemon=True)
@@ -602,7 +603,32 @@ def _iter_create_events(
                     }
             status, payload = box.get()
             if status == "err":
-                raise payload
+                err_text = humanize_exception(payload)
+                yield {
+                    "event": "progress",
+                    "current": total,
+                    "total": total,
+                    "filename": spec or "модель",
+                    "stage": stage,
+                    "message": f"{label}: не ответила, оставляем черновик кода",
+                }
+                return {
+                    "status": "error",
+                    "model": spec or "",
+                    "model_label": _model_chip(spec),
+                    "raw_text": "",
+                    "payload": None,
+                    "error": err_text,
+                    "image_count": len(vision_pages),
+                    "excel_attached": False,
+                    "excel_files": [],
+                    "meaning": f"{label} не ответила. В таблице черновик кода.",
+                    "header": {},
+                    "tables": [],
+                    "totals": None,
+                    "items": [],
+                    "context": {"excel": [], "pdfs": []},
+                }
             return payload
 
         review_dict: dict[str, Any] = {"status": "skipped", "model": first_model, "error": None}
@@ -613,6 +639,8 @@ def _iter_create_events(
             if review_dict.get("status") == "ok":
                 lots = apply_verdict(goods_lots(draft), review_dict.get("payload"))
                 verdict_dropped = verdict_notes(list(draft.get("lots") or []), review_dict.get("payload"))
+            elif review_dict.get("error"):
+                verdict_dropped.append(f"Модель: {review_dict.get('error')}. Показан черновик кода.")
         if second_model and needs_second_model(lots, draft.get("flags")):
             second_used = True
             yield {
@@ -628,6 +656,17 @@ def _iter_create_events(
                 lots = apply_verdict(goods_lots(draft), second.get("payload"))
                 verdict_dropped = verdict_notes(list(draft.get("lots") or []), second.get("payload"))
                 review_dict = second
+            elif second.get("error"):
+                # Первая модель (или код) уже в lots — вторую ошибку только помечаем.
+                if review_dict.get("status") == "ok":
+                    verdict_dropped.append(
+                        f"Улучшенная модель: {second.get('error')}. Оставляем вердикт обычной."
+                    )
+                else:
+                    review_dict = second
+                    verdict_dropped.append(
+                        f"Улучшенная модель: {second.get('error')}. Показан черновик кода."
+                    )
         shutil.rmtree(vision_dir, ignore_errors=True)
 
         def _assemble() -> tuple[list[dict[str, Any]], list[str], dict[str, Any], list[dict[str, str]], list[str], list[dict[str, Any]]]:
@@ -652,9 +691,45 @@ def _iter_create_events(
             reconciled = reconciled + fee_rows(draft.get("freights"))
             return filled, flags_now, header_fields, header_changed, header_notes, reconciled
 
-        lots, flags_now, header_fields, header_changed, header_notes, reconciled = yield from _while_busy(
-            "Сборка таблицы", _assemble
-        )
+        def _assemble_code_only(note: str) -> tuple[list[dict[str, Any]], list[str], dict[str, Any], list[dict[str, str]], list[str], list[dict[str, Any]]]:
+            """Запасной выход: только то, что собрал код, без вердикта модели."""
+            filled = goods_lots(draft)
+            fill_from_catalog(filled, catalog)
+            filled, fold_notes = fold_rolls(filled, draft.get("spec_rows"))
+            flags_now = list(draft.get("flags") or [])
+            header_fields = header_from_draft(draft, filled)
+            header_notes = list(draft.get("notes") or []) + [note] + fold_notes
+            reconciled = lots_to_rows(filled, flags_now) + fee_rows(draft.get("freights"))
+            return filled, flags_now, header_fields, [], header_notes, reconciled
+
+        try:
+            lots, flags_now, header_fields, header_changed, header_notes, reconciled = yield from _while_busy(
+                "Сборка таблицы", _assemble
+            )
+        except Exception as exc:  # noqa: BLE001 — всё равно отдаём черновик кода
+            note = f"Сборка после модели не вышла ({humanize_exception(exc)}). Показан черновик кода."
+            lots, flags_now, header_fields, header_changed, header_notes, reconciled = yield from _while_busy(
+                "Сборка таблицы", lambda: _assemble_code_only(note)
+            )
+            review_dict = {
+                "status": "error",
+                "model": str(review_dict.get("model") or first_model or ""),
+                "model_label": first_chip,
+                "raw_text": "",
+                "payload": None,
+                "error": humanize_exception(exc),
+                "image_count": int(review_dict.get("image_count") or 0),
+                "excel_attached": False,
+                "excel_files": [],
+                "meaning": note,
+                "header": {},
+                "tables": [],
+                "totals": None,
+                "items": [],
+                "context": {"excel": [], "pdfs": []},
+            }
+            second_used = False
+
         found = len(reconciled)
         role_type = {
             "invoice": DocType.INVOICE,
@@ -704,19 +779,35 @@ def _iter_create_events(
             )
             yield {"event": "file", "filename": "сверка", "status": "review", "message": message}
         if review_dict.get("error"):
+            model_msg = humanize_message(str(review_dict.get("error")))
+            review_dict["error"] = model_msg
             file_outs.append(
                 _make_file_out(
                     filename="модель",
                     doc_type=None,
                     ocr_confidence=None,
                     parse_status="review",
-                    parse_message=str(review_dict.get("error")),
+                    parse_message=model_msg,
                 )
             )
+            yield {"event": "file", "filename": "модель", "status": "review", "message": model_msg}
+
+        yield {
+            "event": "progress",
+            "current": total,
+            "total": total,
+            "filename": "Сборка таблицы",
+            "stage": "reconcile",
+            "message": "Сборка таблицы: отдаём результат",
+        }
 
         items = _items_from_rows(reconciled)
         excel_totals = compute_excel_totals(items)
         header_fields = enrich_header_from_goods(header_fields, items)
+        # Сырой ответ модели в UI не нужен целиком — обрезаем, чтобы поток не рвался на большом JSON.
+        raw = str(review_dict.get("raw_text") or "")
+        if len(raw) > 8000:
+            review_dict["raw_text"] = raw[:8000] + "\n…"
         review_dict["excel_totals"] = excel_totals.model_dump()
         stated_totals = _stated_for_review(draft.get("stated") or {})
         review_dict["totals"] = stated_totals
@@ -725,14 +816,34 @@ def _iter_create_events(
             list(draft.get("documents") or []), reconciled, draft.get("document_tables")
         )
         review_dict["items"] = []
-        if second_used:
+        if review_dict.get("status") == "error":
+            review_dict["meaning"] = (
+                str(review_dict.get("meaning") or "")
+                or "Модель не ответила. В таблице черновик кода."
+            )
+        elif second_used:
             review_dict["meaning"] = (
                 "Обычная модель не собрала таблицу уверенно, смотрела улучшенная."
             )
         elif first_model:
             review_dict["meaning"] = "Вердикт обычной модели."
         review_dict["model_label"] = second_chip if second_used else first_chip
-        model_review = ModelReviewOut.model_validate(review_dict)
+        try:
+            model_review = ModelReviewOut.model_validate(review_dict)
+        except Exception as exc:  # noqa: BLE001 — ответ модели кривой, таблицу кода всё равно отдаём
+            model_review = ModelReviewOut(
+                status="error",
+                model=str(review_dict.get("model") or ""),
+                model_label=str(review_dict.get("model_label") or first_chip or ""),
+                error=humanize_exception(exc),
+                meaning="Ответ модели не разобран. В таблице черновик кода.",
+                image_count=int(review_dict.get("image_count") or 0),
+                excel_totals=excel_totals,
+                totals_mismatch=_totals_differ(excel_totals, stated_totals),
+                context=review_dict.get("context") or {},
+            )
+            if not any(note for note in header_notes if "не разобран" in note):
+                header_notes = list(header_notes) + ["Ответ модели не разобран. Показан черновик кода."]
 
         warning_count = sum(
             len([err for err in item.validation_errors if not err.resolved]) for item in items
@@ -741,9 +852,11 @@ def _iter_create_events(
             warning_count += skipped_count
         if model_review.totals_mismatch:
             warning_count += 1
+        if review_dict.get("status") == "error" or model_review.status == "error":
+            warning_count += 1
         status = (
             ShipmentStatus.NEEDS_REVIEW
-            if warning_count or skipped_count or not items
+            if warning_count or skipped_count or not items or model_review.status == "error"
             else ShipmentStatus.READY_TO_EXPORT
         )
 
