@@ -2676,50 +2676,95 @@ function onTitleEdited(event) {
 currentTitleInput()?.addEventListener("input", onTitleEdited);
 $("#ws-title")?.addEventListener("input", onTitleEdited);
 
-function paintOpenCodeStatus(data) {
+function paintServiceStatus({ siteOk, model }) {
   const el = $("#opencode-status");
   const label = $("#opencode-status-label");
   const money = $("#opencode-status-money");
   if (!el || !label) return;
-  const status = data && data.status ? data.status : "down";
-  el.className = `model-status ${status}`;
-  const labels = {
-    ok: "Система активна",
-    off: "Система выключена",
-    auth: "Система недоступна",
-    credits: "Система недоступна",
-    error: "Система недоступна",
-    down: "Система недоступна",
-    unknown: "Система…",
-  };
-  label.textContent = labels[status] || "Система недоступна";
+  const modelStatus = model && model.status ? model.status : "down";
+  let tone = "ok";
+  let text = "Сайт активен";
+  let title = "Сайт отвечает";
+  if (!siteOk) {
+    tone = "down";
+    text = "Сайт недоступен";
+    title = "Нет ответа от http://…:8200. Обнови страницу или подожди пару секунд.";
+  } else if (modelStatus === "ok") {
+    tone = "ok";
+    text = "Сайт активен";
+    title = model.detail || model.title || "Сайт и модель отвечают";
+  } else if (modelStatus === "off") {
+    tone = "off";
+    text = "Сайт активен · модель выкл.";
+    title = model.detail || "Модель выключена в .env";
+  } else if (modelStatus === "auth") {
+    tone = "auth";
+    text = "Сайт активен · пароль модели";
+    title = model.detail || model.title || "OpenCode отклонил пароль";
+  } else if (modelStatus === "credits") {
+    tone = "credits";
+    text = "Сайт активен · нет оплаты модели";
+    title = model.detail || model.title || "Нужна оплата Zen";
+  } else {
+    tone = "auth";
+    text = "Сайт активен · модель молчит";
+    title = model.detail || model.title || "Модель на :4096 не отвечает. Обработку можно повторить.";
+  }
+  el.className = `model-status ${tone}`;
+  label.textContent = text;
   if (money) {
     money.textContent = "";
     money.hidden = true;
   }
-  el.title = "Проверить состояние сервиса";
+  el.title = title;
+}
+
+async function fetchJsonWithTimeout(url, ms) {
+  const ctrl = new AbortController();
+  const timer = window.setTimeout(() => ctrl.abort(), ms);
+  try {
+    const res = await fetch(url, { cache: "no-store", signal: ctrl.signal });
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    return { ok: res.ok, status: res.status, data };
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 async function refreshOpenCodeStatus() {
+  let siteOk = false;
   try {
-    const res = await fetch("/api/health/opencode", { cache: "no-store" });
-    const data = await res.json();
-    if (!res.ok) {
-      paintOpenCodeStatus({
-        status: "down",
-        title: res.status === 404 ? "Сайт ещё без проверки модели" : (data.title || "Модель не отвечает"),
-        detail: humanizeClientError(data.detail || data.title || `HTTP ${res.status}`),
-      });
-      return;
-    }
-    paintOpenCodeStatus(data);
-  } catch (err) {
-    paintOpenCodeStatus({
-      status: "down",
-      title: "Модель не отвечает",
-      detail: humanizeClientError(err && err.message),
-    });
+    const site = await fetchJsonWithTimeout("/api/health", 4000);
+    siteOk = Boolean(site.ok && site.data && site.data.status === "ok");
+  } catch {
+    siteOk = false;
   }
+  let model = { status: "down", title: "Модель не проверена" };
+  if (siteOk) {
+    try {
+      const probe = await fetchJsonWithTimeout("/api/health/opencode", 5000);
+      if (probe.ok && probe.data) model = probe.data;
+      else {
+        model = {
+          status: "down",
+          title: probe.status === 404 ? "Сайт ещё без проверки модели" : "Модель не отвечает",
+          detail: humanizeClientError((probe.data && (probe.data.detail || probe.data.title)) || `HTTP ${probe.status}`),
+        };
+      }
+    } catch (err) {
+      model = {
+        status: "down",
+        title: "Модель не отвечает",
+        detail: humanizeClientError(err && err.message),
+      };
+    }
+  }
+  paintServiceStatus({ siteOk, model });
 }
 
 async function pingOpenCode() {
