@@ -1039,10 +1039,11 @@ def _packages_miss_stated(lots, stated):
     Продолжения слитой клетки в сумму не входят: 2 на 30 строк блока считается один раз.
     Расхождение на 1 при пустых строках блока часто шум итога (741 в TOTAL при 740 в строках).
     Явная дыра слитой клетки — это несколько мест, как 677 против 684.
-    Пустые места при живом итоге файла — тоже дыра: сайт подсветит итог, даже если сумма
-    заполненных случайно совпала с TOTAL.
+    Пустые места при сумме, которая уже сошлась с TOTAL, дырой не считаем.
     """
     target = (stated or {}).get("packages")
+    if target is None:
+        return False
     goods = [lot for lot in lots if not lot.get("freight")]
     if not goods:
         return False
@@ -1051,17 +1052,9 @@ def _packages_miss_stated(lots, stated):
         for lot in goods
         if lot.get("packages") not in (None, "") and not lot.get("packages_continued")
     ]
-    empty = sum(
-        1
-        for lot in goods
-        if lot.get("packages") in (None, "") and not lot.get("packages_continued")
-    )
+    empty = sum(1 for lot in goods if lot.get("packages") in (None, ""))
     total = sum(float(value) for value in owned) if owned else 0.0
-    if target is None:
-        return bool(empty) and bool(owned)
-    if abs(total - float(target)) > 1.01:
-        return True
-    return bool(empty) and abs(total - float(target)) <= 1.01 and empty >= 2
+    return bool(empty) and abs(total - float(target)) > 1.01
 
 
 def _letterhead_seller(text):
