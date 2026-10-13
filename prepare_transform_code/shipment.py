@@ -250,18 +250,43 @@ def analyze(folder):
 
 
 def _stated_totals(documents):
-    """Итог берётся, только если документы называют одно число. Два разных итога не выбираются."""
+    """Итог из TOTAL документов. Одинаковые числа склеиваются. Разные — оба живут в stated_alt,
+    в stated одно не выбирается молча: сайт подсветит расхождение суммы строк с любым из них."""
     merged = {}
+    alts = {}
     for doc in documents:
         for key, value in (doc.get("stated") or {}).items():
             if value is None:
                 continue
             current = merged.get(key)
-            if current is None and key not in merged:
+            if key not in merged:
                 merged[key] = value
-            elif current is None or abs(current - value) > 0.05:
+                continue
+            if current is None:
+                continue
+            if abs(current - value) > 0.05:
+                bucket = alts.setdefault(key, [])
+                if all(abs(value - other) > 0.05 for other in bucket):
+                    bucket.append(value)
                 merged[key] = None
-    return {key: value for key, value in merged.items() if value is not None}
+    stated = {key: value for key, value in merged.items() if value is not None}
+    # Если все документы разошлись, для сверки на сайте всё равно отдаём кандидат с пометкой.
+    for key, values in alts.items():
+        if key in stated or not values:
+            continue
+        # Берём первое названное — не «выбор истины», а якорь для подсветки; остальные в alt.
+        first = None
+        for doc in documents:
+            candidate = (doc.get("stated") or {}).get(key)
+            if candidate is not None:
+                first = candidate
+                break
+        if first is not None:
+            stated[key] = first
+            rest = [value for value in values if abs(value - first) > 0.05]
+            if rest:
+                stated[f"{key}_alt"] = rest[0] if len(rest) == 1 else rest
+    return stated
 
 
 def _has_measures(doc):
@@ -1014,10 +1039,10 @@ def _packages_miss_stated(lots, stated):
     Продолжения слитой клетки в сумму не входят: 2 на 30 строк блока считается один раз.
     Расхождение на 1 при пустых строках блока часто шум итога (741 в TOTAL при 740 в строках).
     Явная дыра слитой клетки — это несколько мест, как 677 против 684.
+    Пустые места при живом итоге файла — тоже дыра: сайт подсветит итог, даже если сумма
+    заполненных случайно совпала с TOTAL.
     """
     target = (stated or {}).get("packages")
-    if target is None:
-        return False
     goods = [lot for lot in lots if not lot.get("freight")]
     if not goods:
         return False
@@ -1026,9 +1051,17 @@ def _packages_miss_stated(lots, stated):
         for lot in goods
         if lot.get("packages") not in (None, "") and not lot.get("packages_continued")
     ]
-    empty = sum(1 for lot in goods if lot.get("packages") in (None, ""))
+    empty = sum(
+        1
+        for lot in goods
+        if lot.get("packages") in (None, "") and not lot.get("packages_continued")
+    )
     total = sum(float(value) for value in owned) if owned else 0.0
-    return bool(empty) and abs(total - float(target)) > 1.01
+    if target is None:
+        return bool(empty) and bool(owned)
+    if abs(total - float(target)) > 1.01:
+        return True
+    return bool(empty) and abs(total - float(target)) <= 1.01 and empty >= 2
 
 
 def _letterhead_seller(text):

@@ -1406,6 +1406,10 @@ function fillExcelTotals(items, review) {
   if (!row) return;
   const stated = review?.totals || {};
   const sumKeys = new Set(["packages", "qty", "area", "net_weight", "gross_weight", "amount", "volume"]);
+  const emptyPackages = (items || []).filter((item) => {
+    const packs = itemField(item, "packages");
+    return (packs == null || packs === "") && !isContinuedPackages(item);
+  }).length;
   row.querySelectorAll("[data-total]").forEach((cell) => {
     const key = cell.getAttribute("data-total");
     if (!sumKeys.has(key)) {
@@ -1422,18 +1426,28 @@ function fillExcelTotals(items, review) {
     cell.textContent = value == null ? "" : fmt(value);
     const fileKey = key === "packages" ? "rolls" : key === "qty" ? "meters" : key;
     const fileValue = stated[fileKey] ?? (key === "qty" ? stated.qty : null);
+    const altRaw = stated[`${fileKey}_alt`] ?? (key === "qty" ? stated.qty_alt : null);
+    const altValues = []
+      .concat(altRaw == null ? [] : Array.isArray(altRaw) ? altRaw : [altRaw])
+      .map(Number)
+      .filter((n) => Number.isFinite(n));
     const fileNum = Number(fileValue);
     const tableNum = value == null ? null : Number(value);
     const fileOk = fileValue != null && fileValue !== "" && Number.isFinite(fileNum);
     const tableOk = tableNum != null && Number.isFinite(tableNum);
+    const matchesFile = fileOk && tableOk && Math.abs(fileNum - tableNum) <= 0.05;
+    const matchesAlt = tableOk && altValues.some((n) => Math.abs(n - tableNum) <= 0.05);
     const differs =
-      fileOk && ((tableOk && Math.abs(fileNum - tableNum) > 0.05) || !tableOk);
+      (fileOk && ((tableOk && !matchesFile) || !tableOk))
+      || (altValues.length > 0 && tableOk && !matchesFile && !matchesAlt)
+      || (key === "packages" && emptyPackages >= 2 && tableOk);
     cell.classList.toggle("sev-RED", differs);
-    cell.title = differs
-      ? `в файле ${fmt(fileNum)}, в таблице ${tableOk ? fmt(tableNum) : "нет"}`
-      : fileOk && tableOk
-        ? `сумма строк ${fmt(tableNum)}, в файле ${fmt(fileNum)}`
-        : "";
+    const bits = [];
+    if (tableOk) bits.push(`сумма строк ${fmt(tableNum)}`);
+    if (fileOk) bits.push(`в файле ${fmt(fileNum)}`);
+    if (altValues.length) bits.push(`в другом файле ${altValues.map((n) => fmt(n)).join(" / ")}`);
+    if (key === "packages" && emptyPackages) bits.push(`пустых мест в строках: ${emptyPackages}`);
+    cell.title = bits.join(", ");
   });
 }
 
@@ -2337,6 +2351,7 @@ function openEdit(itemId, focusId) {
   const lotsEl = $("#edit-lots");
   if (lotsEl) lotsEl.innerHTML = editLotsHtml(item);
   openDialog($("#edit-dialog"));
+  autosizeEditAreas();
   const focusEl = focusId ? editField(focusId) : editField("edit-article");
   if (focusEl && typeof focusEl.focus === "function") {
     requestAnimationFrame(() => {
@@ -2344,6 +2359,17 @@ function openEdit(itemId, focusId) {
       if (typeof focusEl.select === "function") focusEl.select();
     });
   }
+}
+
+function autosizeEditAreas() {
+  $("#edit-dialog")?.querySelectorAll("textarea").forEach((area) => {
+    const fit = () => {
+      area.style.height = "auto";
+      area.style.height = `${Math.max(area.scrollHeight, 40)}px`;
+    };
+    fit();
+    area.oninput = fit;
+  });
 }
 
 async function saveEditedItem() {

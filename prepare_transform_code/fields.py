@@ -291,7 +291,7 @@ def is_size_label(text):
         return False
     return bool(
         re.search(
-            r"(?i)(?:\b\d{0,2}xs\b|\bs\b|\bm\b|\bl\b|\bxl\b|\bxxl\b|\bxxxl\b|см|cm|обхват|размер)|[A-Za-z]\s+[A-Za-z]",
+            r"(?i)(?:\b\d{0,2}x{0,3}s\b|\b\d{0,2}x{1,3}l\b|\bs\b|\bm\b|\bl\b|\bxl\b|\bxxl\b|\bxxxl\b|см|cm|обхват|размер)|[A-Za-z]\s+[A-Za-z]",
             raw,
         )
     )
@@ -305,6 +305,8 @@ def is_header_row(cells):
     for cell in cells:
         text = " ".join(str(cell or "").replace("\n", " ").split())
         if not text:
+            continue
+        if text in {"#VALUE!", "#REF!", "#N/A", "#DIV/0!"}:
             continue
         if is_size_label(text):
             labels += 1

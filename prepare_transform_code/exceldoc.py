@@ -48,11 +48,10 @@ def read_excel(path):
         roles = _opening_roles(sheet["rows"])
         if role not in roles and role not in {"unknown", "draft", "gtd_form", "customs_appendix"}:
             roles.insert(0, role)
-        lines = (
-            []
-            if role in {"draft", "gtd_form", "customs_appendix"}
-            else _lines(sheet["rows"], sheet.get("continued") or set())
-        )
+        if role in {"draft", "gtd_form", "customs_appendix"}:
+            lines, stated = [], {}
+        else:
+            lines, stated = _lines(sheet["rows"], sheet.get("continued") or set())
         docs.append(
             {
                 "kind": "excel",
@@ -63,6 +62,7 @@ def read_excel(path):
                 "currency": currency_of(preview),
                 "readable": True,
                 "lines": lines,
+                "stated": stated,
             }
         )
     return docs
@@ -199,11 +199,12 @@ _SPAN_ONCE_FIELDS = {"packages", "amount", "pieces"}
 def _lines(rows, continued_cells=None):
     header_idx, mapping = _header(rows)
     if header_idx is None:
-        return []
+        return [], {}
     continued_cells = continued_cells or set()
     pair_unit = _qty_unit(rows[header_idx][mapping["qty"]]) if "qty" in mapping else ""
     header_cells = rows[header_idx]
     lines = []
+    stated = {}
     scale = _label_scale(header_cells, mapping)
     carried = ""
     body = rows[header_idx + 1 :]
@@ -223,6 +224,7 @@ def _lines(rows, continued_cells=None):
                     scale = _label_scale(row, mapping)
             continue
         if any(is_stop_label(cell) for cell in texts):
+            stated = _stated_from_row(row, mapping) or stated
             rolls = _roll_total(texts)
             if rolls and len(lines) == 1 and lines[0].packages is None:
                 lines[0].packages = rolls
@@ -285,6 +287,12 @@ def _lines(rows, continued_cells=None):
             for name in ("pieces", "packages", "price", "amount", "gross", "net", "gross_with_pallet")
         )
         if is_bare_total(line, lines):
+            # Голые числа под таблицей без слова TOTAL — тоже итог файла для сверки на сайте.
+            stated = {
+                key: getattr(line, key)
+                for key in ("pieces", "packages", "amount", "net", "gross", "area")
+                if getattr(line, key) is not None
+            } or stated
             break
         if is_pallet_only(line):
             attach_pallet(lines, line)
@@ -298,7 +306,22 @@ def _lines(rows, continued_cells=None):
             lines.append(line)
     folded = fold_parts(lines)
     settle_pallets(folded)
-    return folded
+    return folded, stated
+
+
+def _stated_from_row(row, mapping):
+    """Итог TOTAL/Итого по тем же колонкам, что и тело."""
+    line = Line(source="excel")
+    for name, col in mapping.items():
+        if name.startswith("_") or not isinstance(col, int) or col >= len(row):
+            continue
+        field = "description" if name == "description_2" else name
+        assign_cell(line, field, row[col], header_is_package=False)
+    return {
+        key: getattr(line, key)
+        for key in ("pieces", "packages", "amount", "net", "gross", "area")
+        if getattr(line, key) is not None
+    }
 
 
 def _places_became_code(row, mapping):
