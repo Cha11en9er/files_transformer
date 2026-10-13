@@ -1406,10 +1406,6 @@ function fillExcelTotals(items, review) {
   if (!row) return;
   const stated = review?.totals || {};
   const sumKeys = new Set(["packages", "qty", "area", "net_weight", "gross_weight", "amount", "volume"]);
-  const emptyPackages = (items || []).filter((item) => {
-    const packs = itemField(item, "packages");
-    return (packs == null || packs === "") && !isContinuedPackages(item);
-  }).length;
   row.querySelectorAll("[data-total]").forEach((cell) => {
     const key = cell.getAttribute("data-total");
     if (!sumKeys.has(key)) {
@@ -1427,26 +1423,22 @@ function fillExcelTotals(items, review) {
     const fileKey = key === "packages" ? "rolls" : key === "qty" ? "meters" : key;
     const fileValue = stated[fileKey] ?? (key === "qty" ? stated.qty : null);
     const altRaw = stated[`${fileKey}_alt`] ?? (key === "qty" ? stated.qty_alt : null);
-    const altValues = []
+    const fileNums = []
+      .concat(fileValue == null || fileValue === "" ? [] : [fileValue])
       .concat(altRaw == null ? [] : Array.isArray(altRaw) ? altRaw : [altRaw])
       .map(Number)
       .filter((n) => Number.isFinite(n));
-    const fileNum = Number(fileValue);
     const tableNum = value == null ? null : Number(value);
-    const fileOk = fileValue != null && fileValue !== "" && Number.isFinite(fileNum);
     const tableOk = tableNum != null && Number.isFinite(tableNum);
-    const matchesFile = fileOk && tableOk && Math.abs(fileNum - tableNum) <= 0.05;
-    const matchesAlt = tableOk && altValues.some((n) => Math.abs(n - tableNum) <= 0.05);
-    const differs =
-      (fileOk && ((tableOk && !matchesFile) || !tableOk))
-      || (altValues.length > 0 && tableOk && !matchesFile && !matchesAlt)
-      || (key === "packages" && emptyPackages >= 2 && tableOk);
+    // Красный только если сумма строк не совпала ни с одним итогом из файлов.
+    // Пустые места в строках сами по себе цвет не ставят — иначе ложное красное на нормальных поставках.
+    const matchesAny =
+      tableOk && fileNums.some((n) => Math.abs(n - tableNum) <= 0.05);
+    const differs = fileNums.length > 0 && ((tableOk && !matchesAny) || !tableOk);
     cell.classList.toggle("sev-RED", differs);
     const bits = [];
     if (tableOk) bits.push(`сумма строк ${fmt(tableNum)}`);
-    if (fileOk) bits.push(`в файле ${fmt(fileNum)}`);
-    if (altValues.length) bits.push(`в другом файле ${altValues.map((n) => fmt(n)).join(" / ")}`);
-    if (key === "packages" && emptyPackages) bits.push(`пустых мест в строках: ${emptyPackages}`);
+    if (fileNums.length) bits.push(`в файле ${fileNums.map((n) => fmt(n)).join(" / ")}`);
     cell.title = bits.join(", ");
   });
 }
