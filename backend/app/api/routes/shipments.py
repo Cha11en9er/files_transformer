@@ -361,7 +361,7 @@ _FLAG_RU = {
 
 def _stated_for_review(stated: dict[str, Any]) -> dict[str, Any]:
     pieces = stated.get("pieces")
-    return {
+    out = {
         "qty": pieces,
         "meters": pieces,
         "rolls": stated.get("packages"),
@@ -370,6 +370,18 @@ def _stated_for_review(stated: dict[str, Any]) -> dict[str, Any]:
         "gross_weight": stated.get("gross"),
         "area": stated.get("area"),
     }
+    # Альтернативный итог из другого файла той же поставки — для красной подсветки на сайте.
+    for src, dst in (
+        ("packages_alt", "rolls_alt"),
+        ("pieces_alt", "qty_alt"),
+        ("amount_alt", "amount_alt"),
+        ("net_alt", "net_weight_alt"),
+        ("gross_alt", "gross_weight_alt"),
+        ("area_alt", "area_alt"),
+    ):
+        if stated.get(src) is not None:
+            out[dst] = stated.get(src)
+    return out
 
 
 def _totals_differ(excel, stated: dict[str, Any]) -> bool:
