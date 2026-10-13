@@ -27,13 +27,16 @@ fi
 cat > "/etc/systemd/system/${UNIT}.service" <<EOF
 [Unit]
 Description=files_transformer ${BRANCH} :${PORT}
-After=network.target
+After=network.target opencode.service
+Wants=opencode.service
 
 [Service]
 WorkingDirectory=${DIR}/backend
 Environment=PYTHONPATH=${DIR}
 EnvironmentFile=-${DIR}/backend/.env
-ExecStart=${DIR}/backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT}
+Environment=PYTHONUNBUFFERED=1
+# keep-alive и запас по заголовкам: длинный NDJSON-поток иначе рвётся посередине у клиента.
+ExecStart=${DIR}/backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --timeout-keep-alive 75 --h11-max-incomplete-event-size 1048576
 Restart=always
 RestartSec=3
 
