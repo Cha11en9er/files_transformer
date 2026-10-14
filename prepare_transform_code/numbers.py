@@ -164,7 +164,7 @@ def goods_currency(text):
     """Валюта у колонки цены или суммы. Валюта счёта в подвале — не она."""
     found = []
     for match in re.finditer(
-        r"(?:amount|price|сумма|цена)\s*[,:(/]?\s*(?:in\s+)?(RUB|USD|EUR|CNY|GBP|TRY|PLN|CHF|JPY|руб)",
+        r"(?:amount|price|сумма|цена)(?:\s+[a-zа-яё]{2,12}){0,2}\s*[,:(/]?\s*(?:in\s+)?(RUB|USD|EUR|CNY|GBP|TRY|PLN|CHF|JPY|руб)",
         str(text or ""),
         re.I,
     ):

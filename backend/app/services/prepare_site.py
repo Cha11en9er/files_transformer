@@ -644,6 +644,7 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
             ("width", "width"),
             ("area", "area"),
             ("net", "net_weight"),
+            ("net_primary", "net_primary"),
             ("gross", "gross_weight"),
             ("volume", "volume"),
         ):

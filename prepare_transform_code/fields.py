@@ -1,20 +1,21 @@
 """Синонимы шапок. Новая поставка добавляет фразу сюда, не условие по имени файла."""
 
 import re
+import unicodedata
 
 from prepare_transform_code.numbers import collapse_letter_spacing
 
 # Более длинные фразы проверяются раньше коротких.
 COLUMNS = (
-    ("packages", ("q-ty packages", "q/ty cases", "qty cases", "qty of packages", "number of packages", "quantity of places", "quantity of place", "количество упаковок", "box qty", "koli adedi", "кол-во упаковок", "кол-во коробок", "кол-во мест", "количество мест", "количество коробок", "quantity/package", "места", "ctns", "ctn", "коробка", "boxes", "box", "bundles", "bundle", "связок", "связки")),
+    ("packages", ("q-ty packages", "q/ty cases", "qty cases", "qty of packages", "number of packages", "quantity of places", "quantity of place", "количество упаковок", "box qty", "koli adedi", "кол-во упаковок", "кол-во коробок", "кол-во мест", "количество мест", "количество коробок", "quantity/package", "места", "ctns", "ctn", "коробка", "boxes", "box", "bundles", "bundle", "связок", "связки", "件数")),
     ("unit_net", ("вес ед", "нетт за", "n.w./ctn", "nw/ctn", "n.w./bundle", "nw/bundle", "unit n.w", "unit nw", "unit net")),
     ("gross_with_pallet", ("with pallet", "брутто с", "с весом паллет", "с паллет")),
-    ("qty", ("q-ty items", "q/ty pairs", "quantity(mts)", "quantity (mts)", "qty(m)", "net meters", "net metres", "net meter", "net metre", "net mt", "goods pcs", "mal adedi", "кол-во пар", "кол-во штук", "кол-во шт", "количество")),
+    ("qty", ("q-ty items", "q/ty pairs", "quantity(mts)", "quantity (mts)", "qty(m)", "net meters", "net metres", "net meter", "net metre", "net mt", "goods pcs", "mal adedi", "кол-во пар", "кол-во штук", "кол-во шт", "количество", "装箱数")),
     ("price", ("unit price", "price per", "price for pair", "price for unit", "eur unit", "цена за пару", "цена за ед", "цена за шт", "unitprice")),
     ("amount", ("gesamtpreis", "total price", "total amount", "total value", "eur item", "amount", "стоимость", "общая стоимость")),
-    ("gross", ("w/o pallet", "without pallet", "без паллет", "gross weight", "gross wt", "gesamtgewicht", "total g. weight", "total kg", "gross kg", "итого вес брутто", "g.w", "gw", "брутто", "brutto", "brut")),
+    ("gross", ("w/o pallet", "without pallet", "без паллет", "gross weight", "gross wt", "gesamtgewicht", "total g. weight", "total kg", "gross kg", "итого вес брутто", "g.w", "gw", "брутто", "brutto", "brut", "毛重")),
     ("net", ("net weight", "net wt", "total n. weight", "total nett", "итого вес нетто", "net kg", "n.w", "nw", "нетто", "netto", "nett")),
-    ("volume", ("measurement", "volume", "cbm", "м куб", "m3")),
+    ("volume", ("measurement", "volume", "cbm", "м куб", "m3", "体积")),
     ("area", ("q-ty m2", "qty m2", "sqm", "sq.m", "mt2", "м2", "кв.м", "кв м", "кв. м", "m2")),
     ("vendor", ("item number", "item code", "item no", "quality code", "vendor code", "код изделия", "cat,#", "cat.#", "article", "artikel", "articulo", "articolo", "artigo", "артикул", "маркировка", "货号", "art nr", "art.")),
     ("finish", ("тип покрытия", "finish", "colour", "color", "farbe", "couleur", "colore", "renk", "kolor", "цвет")),
@@ -48,9 +49,22 @@ _ROLE_MARKS = (
     ("description", ("DESCRIPTION OF THE GOODS", "DESCRIPTION OF GOODS", "GOODS DESCRIPTION", "ОПИСАНИЕ ТОВАРА", "ОПИСАНИЕ ГРУЗА")),
 )
 
+def _plain_header(text):
+    """Латинское ударение (descripción) не делает колонку другой. Й и ё не трогаем."""
+    chars = []
+    for ch in str(text or ""):
+        if "LATIN" in unicodedata.name(ch, ""):
+            chars.append(unicodedata.normalize("NFD", ch))
+        else:
+            chars.append(ch)
+    folded = "".join(chars)
+    return "".join(ch for ch in folded if unicodedata.category(ch) != "Mn")
+
+
 def column_of(header):
     raw = " ".join(str(header or "").lower().replace("\n", " ").split())
     text = collapse_letter_spacing(raw)
+    text = _plain_header(text)
     text = " ".join(re.sub(r"\([^)]*\)", " ", text).split())
     text = _glue_broken_label(text)
     text = text.replace("weigth", "weight").replace("widht", "width")
@@ -80,6 +94,10 @@ def column_of(header):
         "брутто": "gross",
         "measure": "volume",
         "measurement": "volume",
+        "место": "packages",
+        "个": "unit",
+        "серия": "model",
+        "series": "model",
     }
     if text in exact or compact in exact:
         return exact.get(text) or exact.get(compact)
@@ -116,6 +134,14 @@ def column_of(header):
             continue
         if name == "finish" and any(word in text for word in ("наименование", "описание", "description", "goods")):
             continue
+        # «Разница нетто / брутто» — отношение, не вес строки.
+        if name in {"net", "gross"} and "разниц" in text:
+            continue
+        # «Торговая марка / маркировка»: слово маркировка само по себе артикул, вместе с маркой — марка.
+        if name == "vendor" and any(
+            mark in text for mark in ("торговая марка", "товарный знак", "trade mark", "trademark")
+        ):
+            return "brand"
         # «Finishing batch» — номер партии, не покрытие. «finish» внутри «finishing» не берём.
         if name == "finish" and re.search(r"finish\w", text):
             continue
@@ -465,7 +491,33 @@ def _prose_role(line, match):
     tail = line[match.end() :]
     if re.match(r"^[\s:./]*for\s+the\s+goods\b", tail, re.I):
         return True
+    # Длинное предложение, где оба слова стороны без двоеточия, — текст условий, не шапка.
+    # «именуемая в дальнейшем Продавец» — формула договора, её это не трогает.
+    low_line = line.lower()
+    if (
+        len(line.split()) > 14
+        and not re.match(r"^\s*:", tail)
+        and "именуем" not in low_line
+        and "hereinafter" not in low_line
+        and "одной стороны" not in low_line
+        and "другой стороны" not in low_line
+    ):
+        hits = 0
+        for _role, words in _PARTY:
+            if any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", low_line) for word in words):
+                hits += 1
+        if hits >= 2:
+            return True
     prefix = re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", line[: match.start()])
+    # «du vendeur. Toute réclamation» — слово стороны в конце предложения, не подпись.
+    # «именуемая в дальнейшем Продавец» — формула, имя стоит до слова.
+    if (
+        len(prefix) >= 4
+        and re.match(r"^\s*[.,;]", tail)
+        and "именуем" not in low_line
+        and "hereinafter" not in low_line
+    ):
+        return True
     if len(prefix) < 4:
         return False
     first = re.match(r"^[\s:./]*([A-Za-zА-Яа-яЁё]+)", line[match.end() :])
@@ -533,7 +585,7 @@ def _split_companies(line):
     """Несколько фирм в одной строке: каждая кончается на LLC, LTD, LIMITED ŞIRKETI."""
     marks = list(
         re.finditer(
-            r"(?i)\b(?:llc|ltd|limited|inc|gmbh|ооо|ао|зао|co\.,?\s*ltd)\b\.?",
+            r"(?i)\b(?:llc|ltd|limited|inc|gmbh|ооо|ао|зао|co\.,?\s*ltd|s\.?\s*p\.?\s*a\.?|s\.?\s*r\.?\s*l\.?|s\.?\s*l\.?)\b",
             line,
         )
     )

@@ -543,6 +543,7 @@ button.badge {
 
 .table-wrap {
   overflow: auto;
+  max-height: calc(100vh - 220px);
   border: 1px solid #b8c7d4;
   border-radius: 12px;
   background: #fff;
@@ -561,7 +562,7 @@ button.badge {
 #items-table thead th {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 3;
   background: #123447;
   color: #f5fafc;
   font-size: 10px;
@@ -687,11 +688,37 @@ button.badge {
 #items-table tbody td.money:hover {
   background: #ffe08a !important;
 }
+#items-table th.row-no,
+#items-table td.row-no,
+#items-table tfoot th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  width: 44px;
+  min-width: 44px;
+  max-width: 56px;
+  text-align: center;
+  box-shadow: 1px 0 0 #c5d3de;
+}
+#items-table thead th.row-no {
+  z-index: 5;
+  top: 0;
+  left: 0;
+  background: #123447;
+  color: #f5fafc;
+  box-shadow: 1px 0 0 #0c2430;
+}
 #items-table td.row-no {
   color: #64748b;
   font-size: 12px;
-  text-align: center;
-  width: 36px;
+  background: #fff;
+}
+#items-table tbody tr:nth-child(even) td.row-no {
+  background: #f5f8fb;
+}
+#items-table tfoot th:first-child {
+  z-index: 2;
+  background: #fff;
 }
 #items-table tbody tr.item-row {
   cursor: pointer;

@@ -103,9 +103,24 @@ def _article_token(text):
     return token
 
 
+def _total_words_only(text):
+    """«Total/Итого:» — подпись итога. Название товара, в котором есть это слово, сюда не входит."""
+    core = re.sub(r"(?i)\b(?:total|итого|всего|sum|сумма)\b", " ", str(text or ""))
+    return re.sub(r"[\s:./\\]+", "", core) == ""
+
+
+def _leaked_total(line):
+    """В описание итога протекла фраза состава, а строка кончается на Total/Итого."""
+    if line.vendor or line.model:
+        return False
+    return bool(re.search(r"(?i)(?:\btotal\b|итого)\s*:?\s*$", line.description or ""))
+
+
 def is_bare_total(line, previous):
     """Строка без названия, чьё число равно сумме строк выше. Это итог, даже без слова TOTAL."""
-    if line.description or line.vendor or line.model:
+    if (line.vendor and not _total_words_only(line.vendor)) or (line.model and not _total_words_only(line.model)):
+        return False
+    if line.description and not _total_words_only(line.description) and not _leaked_total(line):
         return False
     if not previous:
         return False
@@ -115,7 +130,7 @@ def is_bare_total(line, previous):
             return True
     if line.price is not None:
         return False
-    for name in ("pieces", "packages"):
+    for name in ("pieces", "packages", "gross", "net", "volume", "area"):
         value = getattr(line, name)
         if value is None:
             continue
@@ -277,6 +292,26 @@ def description_holds(current, extra):
     return extra_n in current_parts or any(extra_n in part for part in current_parts)
 
 
+def is_roll_serial(header, value):
+    """Голое ROLL с длинным номером — номер рулона, не количество мест."""
+    token = " ".join(str(header or "").lower().replace("\n", " ").split())
+    if token != "roll":
+        return False
+    number = parse_number(value)
+    return number is not None and number >= 100000
+
+
+def _absent_token(text):
+    token = " ".join(str(text or "").casefold().split()).strip(" .")
+    return token in {"отсутствует", "отсутств", "absent", "n/a", "n/m", "нет", "no", "none"}
+
+
+def is_registry_line(line):
+    """Подвал реестра фирмы. Это не строка товара, даже если рядом номер страницы."""
+    blob = f"{line.vendor} {line.model} {line.description}".casefold()
+    return "inscrita" in blob or "registro mercantil" in blob or "commercial register" in blob
+
+
 def apply_mfr_brand_cell(line, header, value):
     """MANUFACTURER / BRAND: до слэша завод строки, после слэша знак. Список заводов не класть."""
     if not is_mfr_brand_header(header):
@@ -289,7 +324,7 @@ def apply_mfr_brand_cell(line, header, value):
         if not line.producer:
             line.producer = parts[0]
         mark = " / ".join(parts[1:])
-        if mark and mark not in {"-", "—", "–", "/"} and not line.brand:
+        if mark and mark not in {"-", "—", "–", "/"} and not _absent_token(mark) and not line.brand:
             line.brand = mark
     elif not line.producer:
         line.producer = raw
@@ -319,6 +354,10 @@ def assign_cell(line, name, value, header_is_package=False):
             line.hs = text
             return
         if name == "producer" and is_factory_list(text):
+            return
+        if name == "producer":
+            text = re.sub(r"(?i)\s*/\s*(?:отсутствует|отсутств\.?|absent|n/?a)\s*$", "", text).strip(" /")
+        if name in {"model", "vendor", "brand", "producer"} and _absent_token(text):
             return
         if name == "brand" and text in {"-", "—", "–", "/"}:
             return
@@ -385,6 +424,9 @@ def fill_qty(line, text, header_is_package=False):
         return
     number = parse_number(text)
     if number is None:
+        return
+    # Голое число из 6 и более цифр в колонке мест — номер рулона, не количество мест.
+    if header_is_package and number >= 100000 and not re.search(r"[A-Za-zА-Яа-яЁё]", text):
         return
     if header_is_package or is_package_text(text):
         line.packages = number

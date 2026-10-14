@@ -63,6 +63,13 @@ def is_tsd_layout(items: list[dict[str, Any]]) -> bool:
     return hs >= n * 0.6 and mfr >= n * 0.4 and color <= n * 0.25 and volume <= n * 0.25
 
 
+def _sum_present(body: list[list[Any]], index: int) -> float | None:
+    nums = [float(row[index]) for row in body if isinstance(row[index], (int, float))]
+    if not nums:
+        return None
+    return _fnum(sum(nums))
+
+
 def _fnum(value: Any, digits: int = 2) -> float | None:
     if value in (None, ""):
         return None
@@ -160,6 +167,10 @@ def _country(item: dict[str, Any], header: dict[str, Any] | None = None) -> str:
 
 def _net(item: dict[str, Any]) -> Any:
     return (item.get("packing_data") or {}).get("net_weight")
+
+
+def _net_primary(item: dict[str, Any]) -> Any:
+    return (item.get("packing_data") or {}).get("net_primary")
 
 
 def _gross(item: dict[str, Any]) -> Any:
@@ -413,6 +424,7 @@ def invoice_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
     rows: list[list[Any]] = []
     for idx, item in enumerate(items, start=1):
         net = _fnum(_net(item))
+        primary = _fnum(_net_primary(item))
         rows.append(
             [
                 idx,
@@ -422,7 +434,7 @@ def invoice_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
                 item.get("article") or "",
                 _mfr(item, header),
                 net,
-                net,
+                primary,
                 _count(_qty(item)),
                 _fnum(_price(item), 4),
                 _unit(item),
@@ -440,7 +452,7 @@ def invoice_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
                 None,
                 None,
                 _fnum(sum(float(r[6] or 0) for r in body)),
-                _fnum(sum(float(r[7] or 0) for r in body)),
+                _sum_present(body, 7),
                 _count(sum(float(r[8] or 0) for r in body)),
                 None,
                 None,
@@ -454,6 +466,7 @@ def packing_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
     rows: list[list[Any]] = []
     for idx, item in enumerate(items, start=1):
         net = _fnum(_net(item))
+        primary = _fnum(_net_primary(item))
         rows.append(
             [
                 idx,
@@ -464,7 +477,7 @@ def packing_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
                 _count(_packages(item)),
                 _count(_qty(item)),
                 net,
-                net,
+                primary,
                 _fnum(_gross(item)),
                 _country(item, header),
             ]
@@ -481,7 +494,7 @@ def packing_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
                 _count(sum(float(r[5] or 0) for r in body)),
                 _count(sum(float(r[6] or 0) for r in body)),
                 _fnum(sum(float(r[7] or 0) for r in body)),
-                _fnum(sum(float(r[8] or 0) for r in body)),
+                _sum_present(body, 8),
                 _fnum(sum(float(r[9] or 0) for r in body)),
                 None,
             ]
@@ -493,6 +506,7 @@ def spec_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> lis
     rows: list[list[Any]] = []
     for item in items:
         net = _fnum(_net(item))
+        primary = _fnum(_net_primary(item))
         rows.append(
             [
                 _desc(item),
@@ -503,10 +517,10 @@ def spec_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> lis
                 _unit(item),
                 _fnum(_gross(item)),
                 net,
-                net,
-                _fnum(_price(item), 4),
-                _unit(item),
+                primary,
                 _fnum(_amount(item)),
+                _unit(item),
+                _fnum(_price(item), 4),
                 (item.get("commercial_data") or {}).get("size") or None,
             ]
         )
@@ -522,10 +536,10 @@ def spec_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> lis
                 None,
                 _fnum(sum(float(r[6] or 0) for r in body)),
                 _fnum(sum(float(r[7] or 0) for r in body)),
-                _fnum(sum(float(r[8] or 0) for r in body)),
+                _sum_present(body, 8),
+                _fnum(sum(float(r[9] or 0) for r in body)),
                 None,
                 None,
-                _fnum(sum(float(r[11] or 0) for r in body)),
                 None,
             ]
         )

@@ -24,10 +24,12 @@ from prepare_transform_code.lines import (
     hs_text,
     is_bare_total,
     is_pallet_only,
+    is_registry_line,
+    is_roll_serial,
     pull_article,
     settle_pallets,
 )
-from prepare_transform_code.numbers import currency_of, parse_number
+from prepare_transform_code.numbers import currency_of, goods_currency, parse_number
 
 try:
     import xlrd
@@ -59,6 +61,7 @@ def read_excel(path):
                     role = "description"
                     if "description" not in roles:
                         roles.insert(0, "description")
+        price_currency = _price_header_currency(sheet["rows"])
         docs.append(
             {
                 "kind": "excel",
@@ -66,7 +69,8 @@ def read_excel(path):
                 "role": role,
                 "roles": roles,
                 "text": preview,
-                "currency": currency_of(preview),
+                "price_currency": price_currency,
+                "currency": price_currency or currency_of(preview),
                 "readable": True,
                 "lines": lines,
                 "stated": stated,
@@ -213,6 +217,7 @@ def _lines(rows, continued_cells=None):
     lines = []
     stated = {}
     scale = _label_scale(header_cells, mapping)
+    kg_cols = _bare_kg_columns(header_cells, mapping)
     carried = ""
     body = rows[header_idx + 1 :]
     for abs_r, row in enumerate(body, start=header_idx + 1):
@@ -229,6 +234,7 @@ def _lines(rows, continued_cells=None):
                     header_cells = row
                     pair_unit = _qty_unit(row[mapping["qty"]]) if "qty" in mapping else ""
                     scale = _label_scale(row, mapping)
+                    kg_cols = _bare_kg_columns(row, mapping)
             continue
         if any(is_stop_label(cell) for cell in texts):
             stated = _stated_from_row(row, mapping) or stated
@@ -253,6 +259,8 @@ def _lines(rows, continued_cells=None):
                 continue
             header_text = header_cells[col] if col < len(header_cells) else ""
             if apply_mfr_brand_cell(line, header_text, row[col]):
+                continue
+            if field == "packages" and is_roll_serial(header_text, row[col]):
                 continue
             assign_cell(line, field, row[col], header_is_package=False)
             if field in _SPAN_ONCE_FIELDS and (abs_r, col) in continued_cells:
@@ -308,6 +316,9 @@ def _lines(rows, continued_cells=None):
         if is_pallet_only(line):
             attach_pallet(lines, line)
             continue
+        if is_registry_line(line):
+            continue
+        _bare_kg_weights(line, row, kg_cols)
         if _blank_charge(line):
             continue
         if lines and _package_part(line, lines[-1]):
@@ -576,6 +587,24 @@ def _header_ready(mapped):
     return bool(identity and measures)
 
 
+def _price_header_currency(rows):
+    """Код валюты в клетке под PRICE PER или AMOUNT. Не код из условия оплаты."""
+    header_idx, _mapping = _header(rows)
+    if header_idx is None:
+        return None
+    row = rows[header_idx]
+    nxt = rows[header_idx + 1] if header_idx + 1 < len(rows) else []
+    for col, cell in enumerate(row):
+        label = " ".join(str(cell or "").lower().split())
+        if not re.search(r"price|amount|цена|сумма", label):
+            continue
+        below = nxt[col] if col < len(nxt) else ""
+        found = goods_currency(f"{cell} {below}")
+        if found:
+            return found
+    return None
+
+
 def _header(rows):
     best = None
     best_score = 0
@@ -586,7 +615,66 @@ def _header(rows):
             best = mapped
             best_score = score
             best_idx = index
+    if best is not None and best_idx + 1 < len(rows) and _labelish(rows[best_idx + 1]):
+        extra, _score = _map_row(rows[best_idx + 1])
+        for name, col in extra.items():
+            if name.startswith("_") or not isinstance(col, int):
+                continue
+            if name == "description" and "description" in best and best["description"] != col and "description_2" not in best:
+                best["description_2"] = col
+                continue
+            if name not in best:
+                best[name] = col
     return best_idx, best or {}
+
+
+def _labelish(row):
+    """Вторая строка шапки — подписи, не первая строка товара."""
+    cells = [cell for cell in row if cell not in (None, "")]
+    if len(cells) < 2:
+        return False
+    labels = 0
+    numbers = 0
+    for cell in cells:
+        if column_of(cell):
+            labels += 1
+        elif parse_number(cell) is not None:
+            numbers += 1
+    return labels >= 2 and labels >= numbers and labels * 2 >= len(cells)
+
+
+def _bare_kg_columns(header, mapping):
+    """Несколько колонок с одной подписью KG. Подписанные нетто и брутто сюда не входят."""
+    used = {col for col in mapping.values() if isinstance(col, int)}
+    found = []
+    for col, cell in enumerate(header):
+        if col in used or cell in (None, ""):
+            continue
+        token = " ".join(str(cell).lower().replace("\n", " ").split()).strip(".")
+        if token in {"kg", "kgs", "кг"}:
+            found.append(col)
+    return found
+
+
+def _bare_kg_weights(line, row, cols):
+    """Четыре одинаковых KG: первые две на места дают вес строки. Вес коробки в строку не пишется."""
+    if len(cols) < 4 or line.packages in (None, 0) or line.net is not None or line.gross is not None:
+        return
+    nums = []
+    for col in cols[:4]:
+        nums.append(parse_number(row[col]) if col < len(row) else None)
+    left_a, left_b, right_a, right_b = nums
+    if None in nums or not left_a or not left_b:
+        return
+    places = line.packages
+    if abs(left_a * places - right_a) > max(0.5, abs(right_a) * 0.02):
+        return
+    if abs(left_b * places - right_b) > max(0.5, abs(right_b) * 0.02):
+        return
+    if left_a <= left_b:
+        line.net, line.gross = right_a, right_b
+    else:
+        line.net, line.gross = right_b, right_a
 
 
 def _meter_qty(header):

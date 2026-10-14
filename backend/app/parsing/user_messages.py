@@ -22,6 +22,10 @@ WARNING_RU: dict[str, str] = {
 
 _SNIPPETS: tuple[tuple[str, str], ...] = (
     (
+        "list index out of range",
+        "Таблица пустая, файл выгрузки не собрался. Проверьте, что в поставке есть строки товара.",
+    ),
+    (
         "excel file format cannot be determined",
         "Не удалось прочитать Excel: формат файла не распознан. "
         "PDF и остальные файлы всё равно обработаем, модель сверит скан.",
