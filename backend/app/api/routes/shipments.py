@@ -543,7 +543,9 @@ def _iter_create_events(
             return payload
 
         goods, references = split_uploads(saved, catalog_names)
-        draft = yield from _while_busy("Чтение файлов кодом", lambda: read_goods(goods))
+        # Справочник и описание читаются тем же кодом, что инвойс. Куда файл положили, роли не задаёт.
+        reading = [*goods, *references]
+        draft = yield from _while_busy("Чтение файлов кодом", lambda: read_goods(reading))
         catalog = load_catalogs(references)
         prompt = verdict_prompt(draft)
         lots = goods_lots(draft)
@@ -551,7 +553,7 @@ def _iter_create_events(
 
         def _photos() -> list:
             try:
-                return collect_vision_images([path for path, _name in goods], vision_dir)
+                return collect_vision_images([path for path, _name in reading], vision_dir)
             except Exception:
                 return []
 

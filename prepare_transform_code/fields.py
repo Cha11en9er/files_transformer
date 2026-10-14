@@ -83,6 +83,17 @@ def column_of(header):
     }
     if text in exact or compact in exact:
         return exact.get(text) or exact.get(compact)
+    # «арт.» — артикул. «код» рядом с артикулом — таможенный код. «состав» — текст карточки.
+    if re.fullmatch(r"арт\.?", text):
+        return "vendor"
+    if text in {"код", "код тнвэд"}:
+        return "hs"
+    if text in {"состав", "composition"}:
+        return "description"
+    if text in {"пр-ль", "пр-тель"}:
+        return "producer"
+    if text == "страна":
+        return "origin"
     text = compact
     # Art No. — артикул. «part no» сюда не входит: перед art стоит буква.
     if re.search(r"(?<![a-z])art\.?\s*no\.?\b", text):
