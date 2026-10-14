@@ -98,7 +98,9 @@ def analyze(folder):
     # Файл описания с заводом и кодом по строкам — тот же набор лотов, не вторая база.
     if description is not None and description is not specification and description.get("lines"):
         spec_lines.extend(description["lines"])
-    foreign = _companions(documents, invoice, specification, description, base, spec_lines)
+    extra_base = []
+    foreign = _companions(documents, invoice, specification, description, base, spec_lines, extra_base)
+    base = list(base) + extra_base
     lots, freights = build_lots(base, packing_lines, spec_lines)
     flags = []
     if weight_conflict:
@@ -334,31 +336,86 @@ def _is_role(doc, role):
     return role in (doc.get("roles") or [])
 
 
-def _companions(documents, invoice, specification, description, base, spec_lines):
-    """Второй документ той же поставки дописывает пустые поля. Чужие артикулы лотами не становятся."""
+def _companions(documents, invoice, specification, description, base, spec_lines, extra_base=None):
+    """Второй документ той же поставки дописывает пустые поля или свои строки.
+
+    Тот же контракт и другие артикулы — ещё лоты, не чужой файл. Лист без количества
+    и цены — карточка: завод, страна и текст дописываются, остальные строки не лоты.
+    """
     base_vendors = _vendor_set(base)
     used = {id(invoice), id(specification), id(description)}
     foreign = False
+    if extra_base is None:
+        extra_base = []
     for doc in documents:
         if id(doc) in used or doc.get("role") in {
             "packing", "duplicate", "draft", "gtd_form", "customs_appendix", "image", "scan",
-            "description",
         }:
             continue
         lines = [line for line in doc.get("lines") or [] if not line.freight]
-        theirs = _vendor_set(lines)
+        cards = [line for line in lines if _is_card_line(line)]
+        goods = [line for line in lines if not _is_card_line(line)]
+        if cards:
+            spec_lines.extend(cards)
+        if not goods:
+            continue
+        theirs = _vendor_set(goods)
+        if _shares_contract(doc, invoice) or _shares_contract(doc, specification):
+            known = [line for line in goods if _article_key(line) in base_vendors]
+            fresh = [line for line in goods if _article_key(line) not in base_vendors]
+            if known:
+                spec_lines.extend(known)
+            if fresh:
+                extra_base.extend(fresh)
+                base_vendors |= _vendor_set(fresh)
+            continue
         if not theirs or not base_vendors:
             continue
         if theirs <= base_vendors:
-            spec_lines.extend(lines)
+            spec_lines.extend(goods)
             continue
         if not (theirs & base_vendors):
             foreign = True
     return foreign
 
 
+def _is_card_line(line):
+    return (
+        line.pieces is None
+        and line.price is None
+        and line.amount is None
+        and bool((line.vendor or line.model or "").strip())
+    )
+
+
+def _article_key(line):
+    return (line.vendor or line.model or "").strip().casefold()
+
+
+def _contract_token(text):
+    found = _first(_CONTRACT, text or "")
+    token = (found or "").casefold().replace(" ", "")
+    if not token or token in _CONTRACT_SKIP:
+        return ""
+    return token
+
+
+def _shares_contract(doc, anchor):
+    if anchor is None or doc is anchor:
+        return False
+    left = _contract_token(doc.get("text") or "")
+    right = _contract_token(anchor.get("text") or "")
+    return bool(left) and left == right
+
+
 def _vendor_set(lines):
-    return {(line.vendor or "").strip().casefold() for line in lines or [] if (line.vendor or "").strip()}
+    found = set()
+    for line in lines or []:
+        for value in (getattr(line, "vendor", None), getattr(line, "model", None)):
+            key = (value or "").strip().casefold()
+            if key:
+                found.add(key)
+    return found
 
 
 def _header_anchors(documents):

@@ -52,6 +52,13 @@ def read_excel(path):
             lines, stated = [], {}
         else:
             lines, stated = _lines(sheet["rows"], sheet.get("continued") or set())
+            # Лист артикул + состав/завод/код без количества — карточка, не вторая поставка.
+            if not lines:
+                lines = _lookup_lines(sheet["rows"])
+                if lines and role == "unknown":
+                    role = "description"
+                    if "description" not in roles:
+                        roles.insert(0, "description")
         docs.append(
             {
                 "kind": "excel",
@@ -250,6 +257,10 @@ def _lines(rows, continued_cells=None):
             assign_cell(line, field, row[col], header_is_package=False)
             if field in _SPAN_ONCE_FIELDS and (abs_r, col) in continued_cells:
                 line.span_continued.add(field)
+        if line.pieces is None and isinstance(mapping.get("qty_alt"), int):
+            alt = mapping["qty_alt"]
+            if alt < len(row):
+                assign_cell(line, "qty", row[alt])
         if _section_title(line.description):
             line.description = ""
         if scale:
@@ -547,6 +558,9 @@ def _map_row(row):
         if name in mapped:
             if name == "volume" and _bare_measurement(row[mapped["volume"]]) and not _bare_measurement(cell):
                 mapped["volume"] = col
+            # Вторая колонка количества (метры рядом с пустыми штуками) не выбрасывается.
+            elif name == "qty" and "qty_alt" not in mapped and _meter_qty(cell):
+                mapped["qty_alt"] = col
             continue
         mapped[name] = col
         score += 2 if name in {"description", "qty", "vendor", "price"} else 1
@@ -573,6 +587,78 @@ def _header(rows):
             best_score = score
             best_idx = index
     return best_idx, best or {}
+
+
+def _meter_qty(header):
+    """Вторая колонка метров. Обычное второе «количество» сюда не берём."""
+    text = " ".join(str(header or "").lower().replace("\n", " ").split())
+    if re.search(r"кв|m2|mt2|sqm", text):
+        return False
+    return bool(re.search(r"пог|meter|metre|метр", text))
+
+
+def _lookup_header(rows):
+    """Карточка артикула: имя и состав, завод, страна или код. Количества и цены нет."""
+    best = None
+    best_rank = 0
+    best_idx = None
+    for index, row in enumerate(rows[:25]):
+        mapped, _score = _map_row(row)
+        if "qty" in mapped or "price" in mapped or "packages" in mapped:
+            continue
+        if "vendor" not in mapped and "model" not in mapped:
+            continue
+        extras = {"hs", "origin", "producer", "description", "brand"} & set(mapped)
+        if not extras:
+            continue
+        rank = 2 + len(extras)
+        if rank > best_rank:
+            best = mapped
+            best_rank = rank
+            best_idx = index
+    return best_idx, best or {}
+
+
+def _lookup_lines(rows):
+    """Строки справочника. Без своей цены и количества они не становятся лотами сами."""
+    header_idx, mapping = _lookup_header(rows)
+    if header_idx is None:
+        return []
+    taken = {col for col in mapping.values() if isinstance(col, int)}
+    lines = []
+    blank = 0
+    for row in rows[header_idx + 1 :]:
+        if not any(cell not in (None, "") for cell in row):
+            blank += 1
+            if lines and blank >= 2:
+                break
+            continue
+        blank = 0
+        texts = [str(cell).strip() for cell in row if cell not in (None, "")]
+        if texts and any(is_stop_label(cell) for cell in texts):
+            break
+        line = Line(source="excel")
+        for name, col in mapping.items():
+            if name.startswith("_") or name == "qty_alt" or not isinstance(col, int) or col >= len(row):
+                continue
+            field = "description" if name == "description_2" else name
+            assign_cell(line, field, row[col])
+        if not line.description:
+            for col, cell in enumerate(row):
+                if col in taken or cell in (None, ""):
+                    continue
+                text = " ".join(str(cell).replace("\n", " ").split())
+                if len(text) >= 40:
+                    line.description = text
+                    break
+        if not (line.vendor or line.model):
+            continue
+        if line.pieces is not None or line.price is not None or line.amount is not None:
+            continue
+        lines.append(line)
+        if len(lines) >= 5000:
+            break
+    return lines if len(lines) >= 2 else []
 
 
 def _xlsx(path):

@@ -1462,7 +1462,7 @@ class FabricFamilyTest(unittest.TestCase):
         self.assertEqual(sum(lot["packages"] for lot in goods), 263)
         self.assertAlmostEqual(sum(lot["net"] for lot in goods), 6026.26, places=2)
         self.assertAlmostEqual(sum(lot["amount"] for lot in goods), 188362.5, places=2)
-        self.assertAlmostEqual(sum(lot["gross"] for lot in goods), 6299.99, places=2)
+        self.assertAlmostEqual(sum(lot["gross"] for lot in goods), 6300.00, places=2)
 
 
 class FamilyPriceBandTest(unittest.TestCase):
@@ -2218,6 +2218,168 @@ class FormRulesTest(unittest.TestCase):
         self.assertEqual([lot["vendor"] for lot in goods], ["A-1"])
         self.assertEqual(result["currency"], "CNY")
         self.assertNotIn("USD", result["currencies"])
+
+    def _dir(self):
+        import tempfile
+
+        if not hasattr(self, "_folder"):
+            self._folder = tempfile.mkdtemp()
+        return self._folder
+
+
+class AssemblyPatternTest(unittest.TestCase):
+    def test_card_headers(self):
+        self.assertEqual(column_of("арт."), "vendor")
+        self.assertEqual(column_of("код"), "hs")
+        self.assertEqual(column_of("состав"), "description")
+        self.assertEqual(column_of("пр-ль"), "producer")
+        self.assertEqual(column_of("страна"), "origin")
+        self.assertEqual(column_of("кол-во пог. м."), "qty")
+
+    def test_word_article_is_not_the_customs_code(self):
+        from prepare_transform_code.join import build_lots
+        from prepare_transform_code.lines import Line
+
+        invoice = [
+            Line(vendor="Neroli", pieces=2, price=5, amount=10, net=0.5, gross=0.65, hs="6001920000"),
+            Line(vendor="Strata", pieces=2, price=6, amount=12, net=0.4, gross=0.55, hs="6001920000"),
+        ]
+        spec = [
+            Line(vendor="Neroli", pieces=2, net=0.5, gross=0.65, hs="6001920000"),
+            Line(vendor="Strata", pieces=2, net=0.95, gross=1.25, hs="6001920000"),
+        ]
+        lots, _freights = build_lots(invoice, [], spec)
+        self.assertEqual([lot["vendor"] for lot in lots], ["Neroli", "Strata"])
+        neroli = lots[0]
+        self.assertAlmostEqual(neroli["net"], 0.5)
+        self.assertAlmostEqual(neroli["gross"], 0.65)
+        self.assertFalse(neroli.get("conflicts"))
+
+    def test_second_quantity_keeps_two_rows(self):
+        from openpyxl import Workbook
+
+        book = Workbook()
+        invoice = book.active
+        invoice.title = "Invoice"
+        invoice.append(["COMMERCIAL INVOICE"])
+        invoice.append(["Contract No AB-100"])
+        invoice.append(["Артикул", "Количество", "Цена", "Сумма", "Нетто", "Брутто"])
+        invoice.append(["Fortis 770", 47, 2.29, 107.63, 20.92, 21.73])
+        invoice.append(["Fortis 770", 92.2, 2.29, 211.14, 36.92, 41.98])
+        filler = book.create_sheet("fill")
+        filler.append(["Артикул", "кол-во рулонов", "кол-во, шт", "кол-во пог. м.", "Сумма", "Нетто", "Брутто"])
+        filler.append(["Fortis 770", 1, None, 47, 107.63, 20.92, 21.73])
+        filler.append(["Fortis 770", 2, None, 92.2, 211.14, 36.92, 41.98])
+        folder = self._dir()
+        book.save(Path(folder) / "kit.xlsx")
+        result = analyze(folder)
+        goods = [lot for lot in result["lots"] if not lot["freight"]]
+        self.assertEqual(len(goods), 2)
+        self.assertEqual(sorted(lot["pieces"] for lot in goods), [47, 92.2])
+        self.assertEqual(sorted(lot["packages"] for lot in goods), [1, 2])
+        self.assertFalse(any(lot.get("conflicts") for lot in goods))
+        self.assertNotIn("packages_conflict", result["flags"])
+
+    def test_same_contract_keeps_other_articles(self):
+        from openpyxl import Workbook
+
+        folder = Path(self._dir())
+        first = Workbook()
+        sheet = first.active
+        sheet.title = "Invoice"
+        sheet.append(["COMMERCIAL INVOICE"])
+        sheet.append(["Contract No AB-100"])
+        sheet.append(["Артикул", "Количество", "Цена", "Сумма"])
+        sheet.append(["Design A", 10, 1, 10])
+        sheet.append(["Design C", 4, 1, 4])
+        first.save(folder / "a_invoice.xlsx")
+        second = Workbook()
+        sheet = second.active
+        sheet.title = "Invoice"
+        sheet.append(["COMMERCIAL INVOICE"])
+        sheet.append(["Contract No AB-100"])
+        sheet.append(["Артикул", "Количество", "Цена", "Сумма"])
+        sheet.append(["Design B", 5, 2, 10])
+        second.save(folder / "b_part.xlsx")
+        stranger = Workbook()
+        sheet = stranger.active
+        sheet.title = "Invoice"
+        sheet.append(["COMMERCIAL INVOICE"])
+        sheet.append(["Артикул", "Количество", "Цена", "Сумма"])
+        sheet.append(["Stranger", 1, 9, 9])
+        stranger.save(folder / "c_stranger.xlsx")
+        result = analyze(folder)
+        goods = [lot for lot in result["lots"] if not lot["freight"]]
+        self.assertEqual(sorted(lot["vendor"] for lot in goods), ["Design A", "Design B", "Design C"])
+        self.assertIn("foreign_document", result["flags"])
+
+    def test_card_fills_family_and_does_not_replace_code(self):
+        from openpyxl import Workbook
+
+        book = Workbook()
+        invoice = book.active
+        invoice.title = "Invoice"
+        invoice.append(["COMMERCIAL INVOICE"])
+        invoice.append(["Contract No AB-100"])
+        invoice.append(["Артикул", "Количество", "Цена", "Сумма", "Код ТН ВЭД"])
+        invoice.append(["Alliance 696", 10, 1, 10, "5407520000"])
+        cards = book.create_sheet("cards")
+        cards.append(["арт.", "состав", "код", "страна", "пр-ль"])
+        cards.append(["Alliance", "100% полиэстер", "5407615000", "Китай", "Hangzhou Mill"])
+        cards.append(["Zodiak", "wool", "6001920000", "Турция", "Other Mill"])
+        book.save(Path(self._dir()) / "book.xlsx")
+        result = analyze(self._dir())
+        goods = [lot for lot in result["lots"] if not lot["freight"]]
+        self.assertEqual(len(goods), 1)
+        lot = goods[0]
+        self.assertEqual(lot["hs"], "5407520000")
+        self.assertEqual(lot["producer"], "Hangzhou Mill")
+        self.assertEqual(lot["origin"], "Китай")
+        self.assertIn("полиэстер", lot["description"])
+        self.assertNotIn("Zodiak", lot["description"])
+
+    def test_roll_kopecks_follow_the_packing_total(self):
+        from prepare_transform_code.join import build_lots
+        from prepare_transform_code.lines import Line
+
+        invoice = [
+            Line(model="Foo 1", pieces=10, packages=1, price=1, amount=10, unit="meters"),
+            Line(model="Foo 2", pieces=10, packages=1, price=1, amount=10, unit="meters"),
+        ]
+        packing = [Line(model="SOFA FABRIC Foo", pieces=20, packages=2, net=2.00, gross=3.00)]
+        spec = [
+            Line(model="Foo 1", pieces=10, net=1.006, gross=1.50),
+            Line(model="Foo 2", pieces=10, net=1.006, gross=1.50),
+        ]
+        lots, _freights = build_lots(invoice, packing, spec)
+        self.assertEqual([lot["model"] for lot in lots], ["Foo 1", "Foo 2"])
+        self.assertAlmostEqual(sum(lot["net"] for lot in lots), 2.00, places=2)
+        self.assertAlmostEqual(lots[1]["net"], 0.99, places=2)
+        self.assertAlmostEqual(sum(lot["gross"] for lot in lots), 3.00, places=2)
+
+    def test_description_sheet_overlays_without_a_second_lot(self):
+        from openpyxl import Workbook
+
+        book = Workbook()
+        invoice = book.active
+        invoice.title = "Invoice"
+        invoice.append(["COMMERCIAL INVOICE"])
+        invoice.append(["Артикул", "Количество", "Цена", "Сумма"])
+        invoice.append(["A-1", 10, 2, 20])
+        packing = book.create_sheet("Packing list")
+        packing.append(["PACKING LIST"])
+        packing.append(["Артикул", "Количество", "Кол-во мест", "Нетто", "Брутто"])
+        packing.append(["A-1", 10, 2, 8, 9])
+        note = book.create_sheet("about")
+        note.append(["Артикул", "Количество", "Производитель", "Описание"])
+        note.append(["A-1", 10, "Mill North", "long customs name of the goods"])
+        book.save(Path(self._dir()) / "one.xlsx")
+        result = analyze(self._dir())
+        goods = [lot for lot in result["lots"] if not lot["freight"]]
+        self.assertEqual(len(goods), 1)
+        self.assertEqual(goods[0]["packages"], 2)
+        self.assertEqual(goods[0]["producer"], "Mill North")
+        self.assertIn("customs", goods[0]["description"])
 
     def _dir(self):
         import tempfile

@@ -10,6 +10,7 @@ from prepare_transform_code.lines import (
     _product_title,
     description_holds,
     part_key,
+    _norm,
 )
 
 
@@ -50,7 +51,10 @@ def build_lots(base_lines, packing_lines, spec_lines=None):
         else:
             lots.append(_merge(line, None))
     if spec_lines:
-        _overlay(lots, [line for line in spec_lines if not line.freight])
+        measured = [line for line in spec_lines if not line.freight and not _card_line(line)]
+        cards = [line for line in spec_lines if not line.freight and _card_line(line)]
+        _overlay(lots, measured)
+        _overlay_cards(lots, cards)
     _fill_part_measures(lots, packing_goods)
     _apply_roll_weights(lots, [line for line in (spec_lines or []) if not line.freight], packing_goods)
     return lots, freights
@@ -550,10 +554,12 @@ def _hs_only(line, others, used):
 
 
 def _same_goods(probe, line):
-    """Та же строка в другом документе. Другое количество — другой лот."""
+    """Та же строка в другом документе. Другое количество или другая сумма — другой лот."""
     if not _vendors(probe) or not _vendors(line) or not _vendor_hit(list(_vendors(probe)), list(_vendors(line))):
         return False
     if probe.pieces is not None and line.pieces is not None and abs(probe.pieces - line.pieces) > 0.05:
+        return False
+    if probe.amount is not None and line.amount is not None and abs(probe.amount - line.amount) > max(0.05, abs(probe.amount) * 0.002):
         return False
     return True
 
@@ -977,14 +983,103 @@ def _apply_roll_weights(lots, spec_lines, packing_lines):
             continue
         if packing is not None and packing.gross is not None and abs(sum(grosses) - packing.gross) > 0.02:
             continue
+        if packing is not None:
+            nets = _snap_last(nets, packing.net)
+            grosses = _snap_last(grosses, packing.gross)
         for (lot, rows), net, gross in zip(group, nets, grosses):
-            if lot.get("net") is None and any(row.net is not None for row in rows):
+            if any(row.net is not None for row in rows) and (lot.get("net") is None or abs(lot["net"] - net) <= 0.05):
                 lot["net"] = net
-            if lot.get("gross") is None and any(row.gross is not None for row in rows):
+            if any(row.gross is not None for row in rows) and (lot.get("gross") is None or abs(lot["gross"] - gross) <= 0.05):
                 lot["gross"] = gross
             widths = {row.width for row in rows if row.width is not None}
             if lot.get("width") is None and len(widths) == 1:
                 lot["width"] = widths.pop()
+
+
+def _snap_last(values, target):
+    """Копейка округления рулонов добирается до итога пакинга. Большое расхождение не трогаем."""
+    if target is None or not values:
+        return values
+    drift = _money(target - sum(values))
+    if not drift or abs(drift) > 0.05:
+        return values
+    adjusted = list(values)
+    adjusted[-1] = _money(adjusted[-1] + drift)
+    return adjusted
+
+
+_CARD_GENERIC = {
+    "fabric", "sofa", "textile", "sample", "samples", "ткань", "мебельная", "upholstery",
+}
+
+
+def _card_line(line):
+    return (
+        line.pieces is None
+        and line.price is None
+        and line.amount is None
+        and bool((line.vendor or line.model or "").strip())
+    )
+
+
+def _card_label(line):
+    return " ".join(str(line.vendor or line.model or "").split())
+
+
+def _card_hit(lot_name, card_name):
+    """Имя семейства совпадает с артикулом, который с него начинается. «Max» не равен «Maxx»."""
+    lot = " ".join(str(lot_name or "").casefold().split())
+    card = " ".join(str(card_name or "").casefold().split())
+    if not lot or not card or card in _CARD_GENERIC or len(card) < 3:
+        return False
+    if _norm(lot) and _norm(lot) == _norm(card):
+        return True
+    if lot == card:
+        return True
+    if lot.startswith(card + " ") or lot.startswith(card + "-"):
+        return True
+    return False
+
+
+def _overlay_cards(lots, spec_lines):
+    """Карточка без цены дописывает завод, страну и текст. Чужие артикулы лотами не становятся.
+
+    Уже стоящий код не заменяется кодом семейства: у цвета он может быть другим.
+    """
+    cards = [line for line in spec_lines if _card_line(line)]
+    if not cards:
+        return
+    for lot in lots:
+        name = lot.get("vendor") or lot.get("model") or ""
+        hits = [card for card in cards if _card_hit(name, _card_label(card))]
+        if not hits:
+            continue
+        hits.sort(key=lambda card: len(_card_label(card)), reverse=True)
+        card = hits[0]
+        if not lot.get("producer") and card.producer:
+            lot["producer"] = card.producer
+        if not lot.get("origin") and card.origin:
+            lot["origin"] = card.origin
+        if not lot.get("brand") and card.brand:
+            lot["brand"] = card.brand
+        exact = bool(_norm(name)) and _norm(name) == _norm(_card_label(card))
+        if not lot.get("hs") and card.hs:
+            lot["hs"] = card.hs
+        alt = ""
+        if exact and card.hs and lot.get("hs") and _hs_key(card.hs) != _hs_key(lot.get("hs")):
+            alt = card.hs
+        if card.hs_alt and lot.get("hs") and _hs_key(card.hs_alt) != _hs_key(lot.get("hs")):
+            alt = card.hs_alt
+        if alt and not lot.get("hs_alt"):
+            lot["hs_alt"] = alt
+        incoming = card.description or ""
+        for value in (getattr(card, "extra", None) or {}).values():
+            text = " ".join(str(value or "").split())
+            if len(text) >= 40:
+                incoming = _richer(incoming, text)
+                break
+        if incoming:
+            lot["description"] = _richer(lot.get("description") or "", incoming)
 
 
 def _one_family_packing(token, packing_lines):

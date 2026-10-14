@@ -68,12 +68,15 @@ class Line:
 
     def anchors(self):
         codes = []
-        vendor = _norm(self.vendor)
-        if vendor and any(ch.isdigit() for ch in vendor) and vendor not in {"--", "na"}:
+        # Артикул без цифры тоже ключ. Иначе две разные ткани с одним ТН ВЭД склеиваются.
+        vendor = _article_token(self.vendor)
+        model = _article_token(self.model)
+        if vendor:
             codes.append(vendor)
+        elif model:
+            codes.append(model)
         for code in re.findall(r"\d(?:[a-z0-9]*-\d[a-z0-9]*)+", str(self.vendor or "").lower()):
             codes.append("sku:" + code)
-        model = _norm(self.model)
         if model and model not in {"--", "na", "отсутствует"}:
             codes.append("model:" + model)
         desc = _norm(self.description)
@@ -82,8 +85,22 @@ class Line:
         return codes
 
 
+_NOT_ARTICLE = {
+    "total", "итого", "invoice", "packing", "sample", "samples", "ткань", "fabric",
+    "sofa", "pcs", "set", "meters", "метр", "шт", "кг", "kg", "roll", "rolls",
+    "china", "китай", "na", "отсутствует",
+}
+
+
 def _norm(text):
     return "".join(ch for ch in str(text).lower() if ch.isalnum())
+
+
+def _article_token(text):
+    token = _norm(text)
+    if len(token) < 2 or token in _NOT_ARTICLE:
+        return ""
+    return token
 
 
 def is_bare_total(line, previous):
