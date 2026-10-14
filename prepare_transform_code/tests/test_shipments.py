@@ -2389,6 +2389,280 @@ class AssemblyPatternTest(unittest.TestCase):
         return self._folder
 
 
+class ReaderLayoutTest(unittest.TestCase):
+    def test_shared_article_keeps_the_slash(self):
+        from prepare_transform_code.lines import Line
+        from prepare_transform_code.pdfdoc import _assign_shared
+
+        line = Line(source="pdf")
+        _assign_shared(line, ["model", "vendor"], "AB-4/золотой/Series A")
+        self.assertEqual(line.vendor, "AB-4/золотой/Series A")
+        self.assertEqual(line.model, line.vendor)
+
+    def test_absent_token_is_empty(self):
+        from prepare_transform_code.lines import Line, assign_cell
+
+        line = Line(source="excel")
+        assign_cell(line, "vendor", "ABC-1")
+        assign_cell(line, "model", "ОТСУТСТВУЕТ")
+        assign_cell(line, "brand", "отсутствует")
+        assign_cell(line, "producer", "Mill North / отсутствует")
+        self.assertEqual(line.vendor, "ABC-1")
+        self.assertEqual(line.model, "")
+        self.assertEqual(line.brand, "")
+        self.assertEqual(line.producer, "Mill North")
+
+    def test_total_words_in_description_are_not_a_lot(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.exceldoc import read_excel
+
+        book = Workbook()
+        sheet = book.active
+        sheet.append(["Description", "Qty", "Price", "Amount"])
+        sheet.append(["cloth", 10, 2, 20])
+        sheet.append(["cloth", 5, 2, 10])
+        sheet.append(["cotton Total/Итого:", 15, None, 30])
+        path = Path(self._dir()) / "total-tail.xlsx"
+        book.save(path)
+        lines = read_excel(path)[0]["lines"]
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(sum(line.pieces for line in lines), 15)
+
+    def test_ratio_column_is_not_net(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.exceldoc import read_excel
+
+        book = Workbook()
+        sheet = book.active
+        sheet.append(["Description", "Qty", "Price", "Amount", "разница нетто / брутто", "Вес брутто"])
+        sheet.append(["pipe", 10, 2, 20, 0.9, 6])
+        path = Path(self._dir()) / "ratio.xlsx"
+        book.save(path)
+        lines = read_excel(path)[0]["lines"]
+        self.assertEqual(len(lines), 1)
+        self.assertIsNone(lines[0].net)
+        self.assertEqual(lines[0].gross, 6)
+
+    def test_shifted_second_header_keeps_both_names(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.exceldoc import read_excel
+
+        book = Workbook()
+        sheet = book.active
+        sheet.append([None, "品名", None, "件数", "装箱数", "个", "毛重", "体积"])
+        sheet.append([None, None, "наименование", "место", "общее количество", None, None, None])
+        sheet.append([None, "灯", "светильник", 10, 100, "个", 50, 1.2])
+        path = Path(self._dir()) / "cn.xlsx"
+        book.save(path)
+        lines = read_excel(path)[0]["lines"]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("светильник", lines[0].description)
+        self.assertEqual(lines[0].packages, 10)
+        self.assertEqual(lines[0].pieces, 100)
+        self.assertEqual(lines[0].gross, 50)
+        self.assertEqual(lines[0].volume, 1.2)
+
+    def test_four_kg_columns_use_the_row_weight(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.exceldoc import read_excel
+
+        book = Workbook()
+        sheet = book.active
+        sheet.append(["Description", "Qty", "CTNS", "KG", "KG", "KG", "KG"])
+        sheet.append(["lamp", 39, 3, 13, 15, 39, 45])
+        path = Path(self._dir()) / "kg.xlsx"
+        book.save(path)
+        lines = read_excel(path)[0]["lines"]
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0].packages, 3)
+        self.assertEqual(lines[0].net, 39)
+        self.assertEqual(lines[0].gross, 45)
+
+    def test_sheet_without_invoice_word_still_yields_lots(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.shipment import analyze
+
+        book = Workbook()
+        sheet = book.active
+        sheet.title = "ДЛЯ ДТ"
+        sheet.append(["Артикул", "Наименование", "Кол-во", "Вес нетто", "Вес брутто", "Стоимость"])
+        sheet.append(["AX-1", "лампа", 4, 2, 3, 40])
+        folder = Path(self._dir()) / "plain"
+        folder.mkdir()
+        book.save(folder / "goods.xlsx")
+        result = analyze(folder)
+        goods = [lot for lot in result["lots"] if not lot["freight"]]
+        self.assertEqual(len(goods), 1)
+        self.assertEqual(goods[0]["vendor"], "AX-1")
+        self.assertEqual(goods[0]["pieces"], 4)
+        self.assertEqual(goods[0]["net"], 2)
+        self.assertEqual(goods[0]["gross"], 3)
+
+    def test_price_per_names_the_currency(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.exceldoc import read_excel
+        from prepare_transform_code.numbers import goods_currency
+
+        self.assertEqual(goods_currency("PRICE PER USD\nAMOUNT 10"), "USD")
+        book = Workbook()
+        sheet = book.active
+        sheet.append(["Description", "Qty", "Price per", "Amount,"])
+        sheet.append([None, None, "USD", "USD"])
+        sheet.append(["pump", 2, 5, 10])
+        path = Path(self._dir()) / "ccy.xlsx"
+        book.save(path)
+        self.assertEqual(read_excel(path)[0]["price_currency"], "USD")
+
+    def test_total_weight_is_not_added_to_the_last_lot(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.exceldoc import read_excel
+
+        book = Workbook()
+        sheet = book.active
+        sheet.append(["Description", "Qty", "Gross"])
+        sheet.append(["engine", 6, 752])
+        sheet.append(["tyre", 4, 714.5])
+        sheet.append([None, None, 1466.5])
+        path = Path(self._dir()) / "gross-total.xlsx"
+        book.save(path)
+        lines = read_excel(path)[0]["lines"]
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[-1].gross, 714.5)
+
+    def test_accented_description_and_roll_id(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.exceldoc import read_excel
+        from prepare_transform_code.fields import column_of
+        from prepare_transform_code.lines import is_roll_serial
+
+        self.assertEqual(column_of("ROLL"), "packages")
+        self.assertTrue(is_roll_serial("ROLL", 2332103))
+        self.assertFalse(is_roll_serial("ROLL", 12))
+        self.assertEqual(column_of("Number of rolls"), "packages")
+        self.assertEqual(column_of("торговая марка/маркировка"), "brand")
+        book = Workbook()
+        sheet = book.active
+        sheet.append(["Descripción", "QUANTITY", "ROLL", "NET WEIGHT", "GROSS WEIGHT"])
+        sheet.append(["HABANA 02", 10, 2332103, 1.2, 1.4])
+        path = Path(self._dir()) / "rolls.xlsx"
+        book.save(path)
+        lines = read_excel(path)[0]["lines"]
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0].pieces, 10)
+        self.assertIsNone(lines[0].packages)
+        self.assertEqual(lines[0].net, 1.2)
+
+    def test_same_qty_and_amount_fills_the_empty_article(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.shipment import analyze
+
+        book = Workbook()
+        inv = book.active
+        inv.title = "INV"
+        inv["A1"] = "COMMERCIAL INVOICE"
+        inv.append(["Description", "Qty", "Price", "Amount"])
+        inv.append(["converter", 20, 1.385, 27.7])
+        order = book.create_sheet("order")
+        order["A1"] = "Contract No HU-1"
+        order.append(["Article", "Description", "Qty", "Amount"])
+        order.append(["700-01-008", "converter", 20, 27.7])
+        inv["A8"] = "Contract No HU-1"
+        folder = Path(self._dir()) / "same-row"
+        folder.mkdir()
+        book.save(folder / "book.xlsx")
+        result = analyze(folder)
+        goods = [lot for lot in result["lots"] if not lot["freight"]]
+        self.assertEqual(len(goods), 1)
+        self.assertEqual(goods[0]["vendor"], "700-01-008")
+        self.assertEqual(goods[0]["pieces"], 20)
+
+    def test_party_word_at_the_end_of_a_sentence_is_not_a_name(self):
+        found = party_after(
+            "si le port est a la charge du vendeur. Toute reclamation devra concerner le tissu\n"
+            "Seller:\n"
+            "FROCA, S.L."
+        )
+        self.assertIn("FROCA", found.get("seller", ""))
+        self.assertNotIn("Toute", found.get("seller", ""))
+
+    def test_doc_num_on_the_invoice_is_the_invoice_number(self):
+        from openpyxl import Workbook
+
+        book = Workbook()
+        sheet = book.active
+        sheet["A1"] = "COMMERCIAL INVOICE"
+        sheet["A2"] = "Doc.Num. 445566"
+        sheet["A3"] = "Doc.Date 20/05/2026"
+        sheet.append(["Description", "Qty", "Price", "Amount"])
+        sheet.append(["cloth", 4, 2, 8])
+        folder = Path(self._dir()) / "docnum"
+        folder.mkdir()
+        book.save(folder / "invoice.xlsx")
+        result = analyze(folder)
+        self.assertEqual(result["invoice_no"], "445566")
+
+    def test_long_bare_number_is_not_packages(self):
+        from prepare_transform_code.lines import Line, assign_cell
+
+        line = Line(source="pdf")
+        assign_cell(line, "packages", "3041481")
+        self.assertIsNone(line.packages)
+        assign_cell(line, "packages", "18")
+        self.assertEqual(line.packages, 18)
+
+    def test_second_company_may_end_with_spa(self):
+        from prepare_transform_code.fields import _split_companies
+
+        parts = _split_companies("EXTERIO-TT LLC / MARIO SIRTORI SPA")
+        self.assertIsNotNone(parts)
+        self.assertEqual(parts[0], "EXTERIO-TT LLC")
+        self.assertIn("SPA", parts[-1])
+
+    def test_primary_weight_is_not_a_copy_of_net(self):
+        import sys
+
+        backend = Path(__file__).resolve().parents[2] / "backend"
+        if str(backend) not in sys.path:
+            sys.path.insert(0, str(backend))
+        from app.services.export_tsd import invoice_rows, spec_rows
+
+        filled = {
+            "article": "A",
+            "packing_data": {"net_weight": 10, "net_primary": 12, "gross_weight": 14},
+            "commercial_data": {"price": 2, "amount": 20, "qty": 10},
+            "customs_data": {},
+        }
+        empty = {
+            "article": "B",
+            "packing_data": {"net_weight": 10},
+            "commercial_data": {"price": 2, "amount": 20},
+            "customs_data": {},
+        }
+        self.assertEqual(invoice_rows([filled], {})[0][6], 10)
+        self.assertEqual(invoice_rows([filled], {})[0][7], 12)
+        self.assertIsNone(invoice_rows([empty], {})[0][7])
+        spec = spec_rows([filled], {})[0]
+        self.assertEqual(spec[8], 12)
+        self.assertEqual(spec[9], 20)
+        self.assertEqual(spec[11], 2)
+
+    def _dir(self):
+        import tempfile
+
+        if not hasattr(self, "_folder"):
+            self._folder = tempfile.mkdtemp()
+        return Path(self._folder)
+
+
 def _only(folder, names):
     import shutil
     import tempfile

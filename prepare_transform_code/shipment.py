@@ -23,6 +23,7 @@ _NO_BEFORE_TITLE = re.compile(
     r"No\s*:\s*([A-Z]{2,}(?:\s*[-/]\s*[A-Z0-9]+)+(?:\s+REG)?).{0,160}INVOICE",
     re.I | re.S,
 )
+_DOC_NUM = re.compile(r"\bDoc\.?\s*Num\.?\s*:?\s*([0-9A-Z][0-9A-Z./\-]{2,})", re.I)
 _ORDER_LABEL = re.compile(r"order[\s\-]*number", re.I)
 _ORDER = re.compile(
     r"\bORDERS?\s*:?\s*([A-Z0-9][A-Z0-9_./\-]{4,})",
@@ -92,6 +93,13 @@ def analyze(folder):
     stated = _stated_totals(documents)
     packing_lines = _packing_lines(packings, weight_conflict, stated)
     base = invoice["lines"] if invoice else (specification["lines"] if specification else [])
+    if not base:
+        for doc in documents:
+            if doc.get("role") in {"duplicate", "image", "draft", "gtd_form", "customs_appendix", "scan"}:
+                continue
+            if doc.get("lines") and _has_measures(doc):
+                base = list(doc["lines"])
+                break
     spec_lines = []
     if invoice is not None and specification is not None and specification is not invoice:
         spec_lines = list(specification["lines"])
@@ -139,7 +147,16 @@ def analyze(folder):
         if code not in all_currencies:
             all_currencies.append(code)
     notes = []
-    if len(all_currencies) > 1 and not goods_currency(text):
+    pinned_currency = goods_currency(text)
+    if not pinned_currency:
+        from_column = []
+        for doc in header_docs:
+            code = doc.get("price_currency")
+            if code and code not in from_column:
+                from_column.append(code)
+        if len(from_column) == 1:
+            pinned_currency = from_column[0]
+    if len(all_currencies) > 1 and not pinned_currency:
         notes.append("Валюта не привязана к колонке цены, в документах несколько кодов: " + ", ".join(all_currencies))
     invoice_nos = _labeled_numbers(plain, _INVOICE_LABEL)
     invoice_no = _first(_INVOICE_NO, text)
@@ -151,6 +168,18 @@ def analyze(folder):
         invoice_no = _first(_NO_BEFORE_TITLE, text)
         if invoice_no and invoice_no not in invoice_nos:
             invoice_nos.insert(0, invoice_no)
+    if invoice_no is None:
+        # Doc.Num на инвойсе — номер этого документа. Лист без строк товара номер не отменяет.
+        # Тот же ярлык на пакинге номером инвойса не берём.
+        for doc in documents:
+            if not _is_role(doc, "invoice"):
+                continue
+            found = _first(_DOC_NUM, doc.get("raw_text") or doc.get("text") or "")
+            if found:
+                invoice_no = found
+                if invoice_no not in invoice_nos:
+                    invoice_nos.insert(0, invoice_no)
+                break
     parties = party_after(plain)
     for side in ("seller", "buyer", "consignee"):
         parties[side] = _party_head(parties.get(side))
@@ -223,8 +252,8 @@ def analyze(folder):
         "document_tables": {doc["name"]: _document_table(doc) for doc in documents},
         "freights": [_plain(line) for line in freights],
         "flags": flags,
-        "currency": goods_currency(text) or (currencies[0] if currencies else currency_of(text)),
-        "currency_printed": _printed_currency(goods_currency(text) or (currencies[0] if currencies else currency_of(text)), text),
+        "currency": pinned_currency or (currencies[0] if currencies else currency_of(text)),
+        "currency_printed": _printed_currency(pinned_currency or (currencies[0] if currencies else currency_of(text)), text),
         "currencies": all_currencies,
         "invoice_no": invoice_no,
         "invoice_nos": invoice_nos,
@@ -361,13 +390,29 @@ def _companions(documents, invoice, specification, description, base, spec_lines
             continue
         theirs = _vendor_set(goods)
         if _shares_contract(doc, invoice) or _shares_contract(doc, specification):
-            known = [line for line in goods if _article_key(line) in base_vendors]
-            fresh = [line for line in goods if _article_key(line) not in base_vendors]
+            known = [line for line in goods if _article_key(line) and _article_key(line) in base_vendors]
+            fresh = [line for line in goods if _article_key(line) and _article_key(line) not in base_vendors]
             if known:
                 spec_lines.extend(known)
-            if fresh:
-                extra_base.extend(fresh)
-                base_vendors |= _vendor_set(fresh)
+            still_fresh = []
+            for line in fresh:
+                hits = [
+                    item
+                    for item in base
+                    if not (item.vendor or "").strip() and _same_qty_amount(item, line)
+                ]
+                if len(hits) == 1:
+                    if line.vendor and not hits[0].vendor:
+                        hits[0].vendor = line.vendor
+                    if line.model and not hits[0].model:
+                        hits[0].model = line.model
+                    spec_lines.append(line)
+                    base_vendors.add(_article_key(line))
+                    continue
+                still_fresh.append(line)
+            if still_fresh:
+                extra_base.extend(still_fresh)
+                base_vendors |= _vendor_set(still_fresh)
             continue
         if not theirs or not base_vendors:
             continue
@@ -388,8 +433,22 @@ def _is_card_line(line):
     )
 
 
+def _same_qty_amount(left, right):
+    """Те же штуки и та же сумма при пустом артикуле инвойса — та же строка, не второй лот."""
+    if left.pieces is None or right.pieces is None:
+        return False
+    if abs(float(left.pieces) - float(right.pieces)) > 0.01:
+        return False
+    if left.amount is None or right.amount is None:
+        return False
+    return abs(float(left.amount) - float(right.amount)) <= 0.05
+
+
 def _article_key(line):
-    return (line.vendor or line.model or "").strip().casefold()
+    key = (line.vendor or line.model or "").strip().casefold()
+    if key in {"", "-", "—", "–", "отсутствует", "absent", "n/a", "нет"}:
+        return ""
+    return key
 
 
 def _contract_token(text):

@@ -22,6 +22,8 @@ from prepare_transform_code.lines import (
     fold_parts,
     is_bare_total,
     is_pallet_only,
+    is_registry_line,
+    is_roll_serial,
     pull_article,
     settle_pallets,
 )
@@ -87,6 +89,8 @@ def read_pdf(path):
     if readable:
         _carry_open_span_tails(found_lines)
     lines = fold_parts(_share_measures(found_lines)) if readable else []
+    while lines and is_bare_total(lines[-1], lines[:-1]):
+        lines.pop()
     settle_pallets(lines)
     role = role_of(text) if readable else "scan"
     roles = roles_of(text) if readable else []
@@ -273,6 +277,8 @@ def _table_lines(table, pdf_table, words, table_box, inherited):
                 continue
             if apply_mfr_brand_cell(line, header_cell, row[col]):
                 continue
+            if name == "packages" and is_roll_serial(header_cell, row[col]):
+                continue
             assign_cell(line, name, row[col], header_is_package=(mapping.get("packages") == col))
         unit_col = mapping.get("unit")
         mapped_cols = {col for key, col in mapping.items() if isinstance(col, int)}
@@ -320,6 +326,8 @@ def _table_lines(table, pdf_table, words, table_box, inherited):
         )
         if is_bare_total(line, lines):
             break
+        if is_registry_line(line):
+            continue
         if is_pallet_only(line):
             attach_pallet(lines, line)
             continue
@@ -327,6 +335,8 @@ def _table_lines(table, pdf_table, words, table_box, inherited):
             lines.append(line)
             line_rows.append(cursor + offset)
     _recover_spanned_from_words(lines, line_rows, table, pdf_table, mapping, words)
+    while lines and is_bare_total(lines[-1], lines[:-1]):
+        lines.pop()
     return lines, mapping, stated
 
 
@@ -699,6 +709,11 @@ def _assign_shared(line, names, value):
         return
     if "producer" in names and is_factory_list(text):
         return
+    # MODEL / SERIES / ART. — одна колонка. Слэш внутри клетки часть артикула, не вторая подпись.
+    if set(names) <= {"model", "vendor"}:
+        for name in names:
+            assign_cell(line, name, text)
+        return
     parts = [part.strip() for part in re.split(r"\s*/\s*", text) if part.strip()]
     if len(parts) >= 2:
         paired = list(zip(names, parts))
@@ -853,8 +868,12 @@ def _borderless(words, inherited_columns=None):
             getattr(line, name) is not None
             for name in ("pieces", "packages", "price", "amount", "gross", "net")
         )
+        if is_bare_total(line, lines):
+            break
         if measured:
             lines.append(line)
+    while lines and is_bare_total(lines[-1], lines[:-1]):
+        lines.pop()
     if not _amounts_match(lines) or not _named_goods(lines):
         return [], inherited_columns
     return lines, columns
