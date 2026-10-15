@@ -520,6 +520,7 @@ function processButton() {
 function setSessionLocked(locked, { busy = false, buttonLabel = null } = {}) {
   state.sessionLocked = Boolean(locked);
   processing = Boolean(busy);
+  if (processing) paintBusyModelStatus();
   const freeze = state.sessionLocked || processing;
   $("#upload-panel")?.classList.toggle("session-locked", freeze);
   ["#files", "#folder", "#extra-files"].forEach((sel) => {
@@ -2685,6 +2686,10 @@ function paintServiceStatus({ siteOk, model }) {
     tone = "ok";
     text = "Сайт активен";
     title = model.detail || model.title || "Сайт и модель отвечают";
+  } else if (modelStatus === "busy") {
+    tone = "ok";
+    text = "Сайт активен · модель занята";
+    title = model.detail || model.title || "Модель разбирает поставку. Это не падение сайта.";
   } else if (modelStatus === "off") {
     tone = "off";
     text = "Сайт активен · модель выкл.";
@@ -2728,43 +2733,92 @@ async function fetchJsonWithTimeout(url, ms) {
   }
 }
 
-async function refreshOpenCodeStatus() {
-  let siteOk = false;
-  try {
-    const site = await fetchJsonWithTimeout("/api/health", 4000);
-    siteOk = Boolean(site.ok && site.data && site.data.status === "ok");
-  } catch {
-    siteOk = false;
-  }
-  let model = { status: "down", title: "Модель не проверена" };
-  if (siteOk) {
-    try {
-      const probe = await fetchJsonWithTimeout("/api/health/opencode", 5000);
-      if (probe.ok && probe.data) model = probe.data;
-      else {
-        model = {
-          status: "down",
-          title: probe.status === 404 ? "Сайт ещё без проверки модели" : "Модель не отвечает",
-          detail: humanizeClientError((probe.data && (probe.data.detail || probe.data.title)) || `HTTP ${probe.status}`),
-        };
-      }
-    } catch (err) {
-      model = {
-        status: "down",
-        title: "Модель не отвечает",
-        detail: humanizeClientError(err && err.message),
-      };
+const serviceStatus = {
+  siteOk: true,
+  siteFails: 0,
+  model: { status: "unknown", title: "Модель не проверена" },
+  inFlight: null,
+};
+
+function paintBusyModelStatus() {
+  paintServiceStatus({
+    siteOk: true,
+    model: {
+      status: "busy",
+      title: "Модель занята обработкой",
+      detail: "Идёт разбор поставки. Пока модель считает, индикатор не дёргаем проверкой :4096.",
+    },
+  });
+}
+
+async function refreshOpenCodeStatus({ force = false } = {}) {
+  if (serviceStatus.inFlight) return serviceStatus.inFlight;
+  serviceStatus.inFlight = (async () => {
+    // Во время разбора OpenCode занят запросом с фото и не отвечает на probe —
+    // не красим индикатор в «модель молчит» / «сайт недоступен» из-за этого.
+    if (processing && !force) {
+      paintBusyModelStatus();
+      return;
     }
-  }
-  paintServiceStatus({ siteOk, model });
+    let siteOk = false;
+    try {
+      const site = await fetchJsonWithTimeout("/api/health", 4000);
+      siteOk = Boolean(site.ok && site.data && site.data.status === "ok");
+    } catch {
+      siteOk = false;
+    }
+    if (siteOk) {
+      serviceStatus.siteFails = 0;
+      serviceStatus.siteOk = true;
+    } else {
+      serviceStatus.siteFails += 1;
+      // Один сорванный опрос при живом сайте не считаем падением.
+      if (serviceStatus.siteFails < 2) siteOk = serviceStatus.siteOk;
+      else serviceStatus.siteOk = false;
+    }
+    let model = { status: "down", title: "Модель не проверена" };
+    if (siteOk) {
+      try {
+        const probe = await fetchJsonWithTimeout("/api/health/opencode", 8000);
+        if (probe.ok && probe.data) model = probe.data;
+        else {
+          model = {
+            status: "down",
+            title: probe.status === 404 ? "Сайт ещё без проверки модели" : "Модель не отвечает",
+            detail: humanizeClientError((probe.data && (probe.data.detail || probe.data.title)) || `HTTP ${probe.status}`),
+          };
+        }
+      } catch (err) {
+        // Краткий обрыв связи с :4096 не затирает последний хороший статус.
+        if (serviceStatus.model && serviceStatus.model.status === "ok") {
+          model = {
+            ...serviceStatus.model,
+            title: serviceStatus.model.title || "Модель",
+            detail: "Краткий обрыв проверки. Модель могла быть занята.",
+          };
+        } else {
+          model = {
+            status: "down",
+            title: "Модель не отвечает",
+            detail: humanizeClientError(err && err.message),
+          };
+        }
+      }
+    }
+    serviceStatus.model = model;
+    paintServiceStatus({ siteOk, model });
+  })().finally(() => {
+    serviceStatus.inFlight = null;
+  });
+  return serviceStatus.inFlight;
 }
 
 async function pingOpenCode() {
   const label = $("#opencode-status-label");
   if (label) label.textContent = "Проверяю…";
-  await refreshOpenCodeStatus();
+  await refreshOpenCodeStatus({ force: true });
 }
 
 $("#opencode-status")?.addEventListener("click", pingOpenCode);
 refreshOpenCodeStatus();
-setInterval(refreshOpenCodeStatus, 15000);
+setInterval(() => refreshOpenCodeStatus(), 15000);
