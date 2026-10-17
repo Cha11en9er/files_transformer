@@ -1167,11 +1167,37 @@ function edgeDialogHtml(edgeId) {
       ${review.error ? `<p class="parse-error">${escapeHtml(humanizeClientError(review.error))}</p>` : ""}
       <p class="hint">${escapeHtml(review.model_label || review.model || "")}</p></div>`;
   }
-  if (edgeId === "assemble-done") {
-    if (!ws) return `<div class="check-card"><h4>Итог</h4><p class="check-why">Таблица ещё собирается.</p></div>`;
-    return `${renderSheetChecks(rec)}<div class="check-card"><h4>Итоговая таблица</h4><p class="check-why">То же, что раньше было в «Что распозналось».</p></div>${renderRecognizedTable(finalReviewRows(ws))}`;
-  }
+  if (edgeId === "assemble-done") return recognizedAllFilesHtml();
   return `<div class="check-card"><p class="check-why">Нет данных по этому ребру.</p></div>`;
+}
+
+function recognizedAllFilesHtml() {
+  const ws = state.workspace;
+  if (!ws) {
+    return `<div class="check-card"><h4>Итог</h4><p class="check-why">Файлы ещё собираются.</p></div>`;
+  }
+  const title = ws.title || "Поставка";
+  const sources = reviewSources(ws).files;
+  const fileIndex = (ws.files || [])
+    .filter((f) => f.filename && f.filename !== "сверка" && f.filename !== "модель")
+    .map((f) => {
+      const typeRu = DOC_TYPE_RU[f.doc_type] || "";
+      const msg = f.parse_message ? ` - ${f.parse_message}` : "";
+      return `<li><strong>${escapeHtml(f.filename || "")}</strong>${typeRu ? ` · ${escapeHtml(typeRu)}` : ""}${escapeHtml(msg)}</li>`;
+    })
+    .join("");
+  const panes = sources.map((file) => `<div class="check-card">${renderFilePane(file)}</div>`).join("");
+  const empty =
+    !sources.length && !fileIndex
+      ? `<p class="hint">По файлам пока нет распознанных таблиц.</p>`
+      : !sources.length
+        ? `<p class="hint">Таблицы по листам не собрались - список файлов выше.</p>`
+        : "";
+  return `<div class="check-card">
+      <h4>${escapeHtml(title)}</h4>
+      <p class="check-why">Что распозналось из каждого файла и листа. Сводная таблица поставки - внизу страницы, здесь её нет.</p>
+      ${fileIndex ? `<ul>${fileIndex}</ul>` : ""}
+    </div>${panes}${empty}`;
 }
 
 function nodeDialogHtml(nodeId) {
@@ -1188,6 +1214,7 @@ function nodeDialogHtml(nodeId) {
   };
   if (nodeId === "read") return draftReadHtml();
   if (nodeId === "photos") return renderVisionGallery();
+  if (nodeId === "assemble" || nodeId === "done") return recognizedAllFilesHtml();
   if (nodeId === "check") {
     const tr = pipeline.trace || {};
     const rec = recognitionOf(state.workspace);

@@ -606,6 +606,10 @@ button.badge {
   background: #fff;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
 }
+.table-wrap.items-main-wrap {
+  max-height: calc(2 * (100vh - 220px));
+  min-height: min(70vh, 720px);
+}
 #items-table {
   width: 100%;
   border-collapse: separate;
