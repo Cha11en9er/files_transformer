@@ -321,6 +321,17 @@ input, select, button, textarea {
   color: white;
   border-color: transparent;
 }
+.form-actions .btn.primary:disabled,
+.btn.primary:disabled,
+#btn-process:disabled {
+  background: #9bb4bc;
+  color: #eef4f5;
+  border-color: transparent;
+  cursor: not-allowed;
+  opacity: 0.85;
+  filter: none;
+  pointer-events: none;
+}
 .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .workspace-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: 12px; flex-wrap: wrap; }
 .ws-title-wrap {
@@ -395,10 +406,23 @@ button.badge {
 .flow-svg {
   display: block;
   width: 100%;
-  height: 150px;
-  max-height: 150px;
+  height: 220px;
+  max-height: 220px;
 }
-.flow-hint { margin: 6px 0 0; font-size: 12px; }
+.flow-edge-label {
+  fill: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  text-anchor: middle;
+  pointer-events: none;
+}
+.flow-edge-label.is-hot {
+  fill: var(--accent);
+  font-weight: 600;
+}
+.flow-edge-label.is-skip {
+  opacity: 0.35;
+}
 .flow-node {
   cursor: default;
 }
@@ -497,10 +521,9 @@ button.badge {
   font-size: 13px;
 }
 .check-miss td { background: var(--yellow); }
-@media (max-width: 720px) {
-  .flow-svg { height: 200px; max-height: 200px; }
+@media (max-width: 1100px) {
   .flow-graph { overflow-x: auto; }
-  .flow-svg { min-width: 720px; }
+  .flow-svg { min-width: 1100px; height: 220px; max-height: 220px; }
 }
 .parse-error {
   margin: 8px 0 0;
@@ -1024,7 +1047,7 @@ button.badge {
 }
 .btn:disabled {
   opacity: 0.65;
-  cursor: wait;
+  cursor: not-allowed;
 }
 .hidden { display: none; }
 
