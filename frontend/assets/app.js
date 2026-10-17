@@ -726,7 +726,7 @@ const pipeline = {
     this.failed = false;
     this.current = "receive";
     this.route = "";
-    this.hasCatalog = [...extraFiles].length > 0;
+    this.hasCatalog = state.pendingFiles.some((f) => extraFiles.has(f));
     this.usedSecond = false;
     this.edgeHot = new Set(["receive-read"]);
     if (this.hasCatalog) {
