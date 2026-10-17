@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -222,6 +223,220 @@ def needs_second_model(lots: list[dict[str, Any]], flags: list[str] | None = Non
     if marks & {"packages_gap", "weight_conflict"}:
         return True
     return False
+
+
+_HARD_FLAGS = {
+    "weight_conflict",
+    "packages_gap",
+    "values_conflict",
+    "unit_conflict",
+    "delivery_conflict",
+    "packages_conflict",
+    "hs_conflict",
+    "weight_suspect",
+    "manufacturer_conflict",
+}
+_MEASURE_FIELDS = (
+    ("pieces", "qty"),
+    ("packages", "rolls"),
+    ("amount", "amount"),
+    ("net", "net_weight"),
+    ("gross", "gross_weight"),
+    ("volume", "volume"),
+    ("area", "area"),
+)
+_QUIET_ROLES = {"draft", "gtd_form", "customs_appendix", "duplicate"}
+_SHORT_RULES = """\
+Черновик кода уже прочитан. Фото нет: текстовый слой сходится, сканов без слоя нет.
+Число, которого нет в черновике, не выдумывай. Два разных числа одного поля не выбирай: оставь черновик и напиши reason.
+Лист из leftovers в лоты не добавляй. Если строка верна, action keep.
+Ответ — один JSON без пояснения вокруг: {"header": {}, "lots": [{"index": 0, "action": "keep", "fields": {}, "reason": ""}]}
+"""
+
+
+def _plain_number(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _numbers_close(left: float | None, right: float | None) -> bool:
+    if left is None or right is None:
+        return False
+    return abs(left - right) <= 0.05
+
+
+def assess_draft(draft: dict[str, Any]) -> dict[str, Any]:
+    """Три дороги. known — суммы сходятся, модель не зовём. similar — модель без фото. unknown — фото и полный промпт.
+
+    Лист со строками, которые не вошли в лоты, не пропадает: он остаётся в leftovers.
+    Два разных итога одного поля маршрут в known не пускают.
+    """
+    documents = list(draft.get("documents") or [])
+    tables = draft.get("document_tables") or {}
+    lots = [lot for lot in (draft.get("lots") or []) if not lot.get("freight")]
+    lot_keys: set[str] = set()
+    for lot in lots:
+        for key in ("vendor", "model"):
+            token = normalize_article(lot.get(key))
+            if token:
+                lot_keys.add(token)
+    checks: list[dict[str, Any]] = []
+    leftovers: list[dict[str, Any]] = []
+    unreadable: list[dict[str, Any]] = []
+    for doc in documents:
+        name = str(doc.get("name") or "")
+        role = str(doc.get("role") or "")
+        if role == "duplicate":
+            continue
+        table = tables.get(name) or {}
+        rows = [row for row in (table.get("rows") or []) if not row.get("freight")]
+        stated = doc.get("stated") or {}
+        readable = bool(doc.get("readable", True))
+        if (not readable or role in {"image", "scan"}) and not rows:
+            unreadable.append({"name": name, "role": role or "scan", "why": "нет текстового слоя"})
+            continue
+        sums: dict[str, float] = {}
+        printed: dict[str, float] = {}
+        gaps: list[dict[str, Any]] = []
+        for stated_key, row_key in _MEASURE_FIELDS:
+            values = [number for number in (_plain_number(row.get(row_key)) for row in rows) if number is not None]
+            total = round(sum(values), 4) if values else None
+            if total is not None:
+                sums[stated_key] = total
+            shown = _plain_number(stated.get(stated_key))
+            if shown is None:
+                continue
+            printed[stated_key] = shown
+            if total is not None and not _numbers_close(total, shown):
+                gaps.append({"field": stated_key, "rows": total, "printed": shown})
+        sheet_keys = {normalize_article(row.get("article")) for row in rows}
+        sheet_keys.discard("")
+        measured = 0
+        orphan_rows = 0
+        for row in rows:
+            has_measure = any(_plain_number(row.get(row_key)) is not None for _key, row_key in _MEASURE_FIELDS)
+            if not has_measure:
+                continue
+            measured += 1
+            token = normalize_article(row.get("article"))
+            if token and lot_keys and token not in lot_keys:
+                orphan_rows += 1
+        missed = bool(sheet_keys and lot_keys and measured and not (sheet_keys & lot_keys))
+        quiet = role in _QUIET_ROLES or (role == "description" and not measured)
+        if missed or (orphan_rows and measured and orphan_rows == measured):
+            leftovers.append(
+                {
+                    "name": name,
+                    "role": role,
+                    "rows": measured or len(rows),
+                    "why": "строки с количеством не вошли в лоты",
+                    "blocking": not quiet,
+                }
+            )
+        elif orphan_rows:
+            leftovers.append(
+                {
+                    "name": name,
+                    "role": role,
+                    "rows": orphan_rows,
+                    "why": "часть строк с количеством не вошла в лоты",
+                    "blocking": not quiet,
+                }
+            )
+        checks.append(
+            {
+                "name": name,
+                "role": role,
+                "rows": len(rows),
+                "measured": measured,
+                "sums": sums,
+                "printed": printed,
+                "gaps": gaps,
+            }
+        )
+    hard = sorted(set(draft.get("flags") or []) & _HARD_FLAGS)
+    alts = [key for key in (draft.get("stated") or {}) if str(key).endswith("_alt")]
+    blocking = [item for item in leftovers if item.get("blocking")]
+    gaps = [item for item in checks if item["gaps"]]
+    thin = not lots or filled_base_columns(lots) <= THIN_COLUMN_LIMIT
+    unverified = [
+        item
+        for item in checks
+        if item["measured"] and not item["printed"] and item["role"] not in _QUIET_ROLES | {"description"}
+    ]
+    if thin or unreadable or hard or blocking or gaps or alts:
+        path = "unknown"
+    elif unverified:
+        path = "similar"
+    else:
+        path = "known"
+    reasons: list[str] = []
+    if not lots:
+        reasons.append("код не собрал строки")
+    elif thin:
+        reasons.append("в таблице мало заполненных столбцов")
+    if unreadable:
+        reasons.append("есть скан или картинка без текстового слоя")
+    if hard or alts:
+        reasons.append("документы называют разные числа одного поля")
+    if blocking:
+        reasons.append("лист со строками не вошёл в лоты")
+    if gaps:
+        reasons.append("сумма строк не сходится с итогом листа")
+    if path == "known":
+        reasons.append("суммы сходятся с итогом листов, модель не нужна")
+    elif path == "similar":
+        reasons.append("форма похожа на уже разобранную, модель без фото")
+    else:
+        reasons.append("незнакомая или спорная форма, смотрит модель")
+    return {
+        "path": path,
+        "reasons": reasons,
+        "checks": checks,
+        "leftovers": leftovers,
+        "unreadable": unreadable,
+        "hard_flags": hard,
+    }
+
+
+def vision_paths(reading: list[tuple[Path, str]], assessment: dict[str, Any]) -> list[Path]:
+    """Фото только тех файлов, где слой пустой, итог не сошёлся или строки не вошли в лоты."""
+    wanted: list[str] = []
+    for item in list(assessment.get("unreadable") or []) + list(assessment.get("leftovers") or []):
+        if item.get("blocking") is False:
+            continue
+        wanted.append(str(item.get("name") or "").split(" / ")[0].lower())
+    for check in assessment.get("checks") or []:
+        if check.get("gaps"):
+            wanted.append(str(check.get("name") or "").split(" / ")[0].lower())
+    names = [name for name in wanted if name]
+    if not names:
+        return [path for path, _display in reading]
+    picked = [path for path, display in reading if Path(display).name.lower() in names or path.name.lower() in names]
+    return picked or [path for path, _display in reading]
+
+
+def short_prompt(draft: dict[str, Any]) -> str:
+    """Короткий запрос без фото. Те же поля, что у полного вердикта, без длинных правил."""
+    payload = {
+        "header": {
+            "seller": draft.get("seller") or "",
+            "buyer": draft.get("buyer") or "",
+            "contract": draft.get("contract") or "",
+            "invoice_no": draft.get("invoice_no") or "",
+            "currency": draft.get("currency_printed") or draft.get("currency") or "",
+            "invoice_date": draft.get("invoice_date") or "",
+            "delivery": draft.get("delivery") or "",
+        },
+        "flags": list(draft.get("flags") or []),
+        "lots": draft.get("lots") or [],
+        "sheet_checks": draft.get("sheet_checks") or [],
+        "leftovers": draft.get("leftovers") or [],
+    }
+    return _SHORT_RULES + "\nДАННЫЕ КОДА:\n" + json.dumps(payload, ensure_ascii=False) + "\n"
 
 
 def _as_number(value: Any) -> Any:

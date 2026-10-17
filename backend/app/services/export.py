@@ -452,3 +452,76 @@ def export_18233(
             )
         )
     return paths
+
+
+_CHECK_FIELDS = {
+    "pieces": "штуки",
+    "packages": "места",
+    "amount": "сумма",
+    "net": "нетто",
+    "gross": "брутто",
+    "volume": "объём",
+    "area": "площадь",
+}
+_ROUTE_RU = {
+    "known": "знакомая форма, модель не вызывалась",
+    "similar": "похожая форма, модель без фото",
+    "unknown": "незнакомая форма, смотрела модель",
+}
+
+
+def write_recognition_book(path: Path, recognition: dict[str, Any] | None) -> Path | None:
+    """Рядом с книгами профиля: итог каждого листа и листы, которые в лоты не вошли.
+
+    Два разных числа одного поля остаются двумя числами.
+    """
+    data = recognition or {}
+    checks = [item for item in (data.get("checks") or []) if isinstance(item, dict)]
+    leftovers = [item for item in (data.get("leftovers") or []) if isinstance(item, dict)]
+    unreadable = [item for item in (data.get("unreadable") or []) if isinstance(item, dict)]
+    if not checks and not leftovers and not unreadable:
+        return None
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Проверка"
+    bold = Font(bold=True)
+    headers = ["Лист", "Роль", "Поле", "Сумма строк", "Итог листа", "Замечание"]
+    for col, title in enumerate(headers, start=1):
+        cell = sheet.cell(1, col, title)
+        cell.font = bold
+    row_index = 2
+    reasons = [str(item) for item in (data.get("reasons") or []) if item]
+    sheet.cell(row_index, 1, _ROUTE_RU.get(str(data.get("route") or ""), str(data.get("route") or "")))
+    sheet.cell(row_index, 6, "; ".join(reasons))
+    row_index += 1
+    for check in checks:
+        gaps = {str(item.get("field")): item for item in (check.get("gaps") or []) if isinstance(item, dict)}
+        printed = check.get("printed") if isinstance(check.get("printed"), dict) else {}
+        sums = check.get("sums") if isinstance(check.get("sums"), dict) else {}
+        fields = list(dict.fromkeys([*printed.keys(), *sums.keys(), *gaps.keys()]))
+        for field in fields:
+            gap = gaps.get(str(field)) or {}
+            sheet.cell(row_index, 1, check.get("name") or "")
+            sheet.cell(row_index, 2, check.get("role") or "")
+            sheet.cell(row_index, 3, _CHECK_FIELDS.get(str(field), str(field)))
+            sheet.cell(row_index, 4, gap.get("rows", sums.get(field)))
+            sheet.cell(row_index, 5, gap.get("printed", printed.get(field)))
+            if str(field) in gaps:
+                sheet.cell(row_index, 6, "два числа, одно не выбрано")
+            row_index += 1
+    for item in leftovers:
+        sheet.cell(row_index, 1, item.get("name") or "")
+        sheet.cell(row_index, 2, item.get("role") or "")
+        sheet.cell(row_index, 6, item.get("why") or "не вошло в лоты")
+        row_index += 1
+    for item in unreadable:
+        sheet.cell(row_index, 1, item.get("name") or "")
+        sheet.cell(row_index, 2, item.get("role") or "скан")
+        sheet.cell(row_index, 6, "только картинка")
+        row_index += 1
+    widths = (42, 18, 16, 16, 16, 42)
+    for col, width in enumerate(widths, start=1):
+        sheet.column_dimensions[chr(64 + col)].width = width
+    path.parent.mkdir(parents=True, exist_ok=True)
+    book.save(path)
+    return path

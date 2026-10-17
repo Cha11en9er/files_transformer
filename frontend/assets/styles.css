@@ -823,6 +823,17 @@ button.badge {
   );
 }
 
+.check-banner {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 13px;
+}
+.check-banner.is-known { border-color: var(--accent); }
+.check-banner.is-unknown { border-color: #a33; }
+.check-banner .hint { margin: 0; }
+.check-miss td { background: var(--yellow); }
 .table-legend {
   display: flex;
   flex-wrap: wrap;

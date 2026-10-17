@@ -619,6 +619,7 @@ const PIPELINE = [
   { id: "receive", title: "Приём файлов" },
   { id: "reconcile", title: "Сверка позиций" },
   { id: "read", title: "Чтение файлов кодом" },
+  { id: "check", title: "Сверка итогов" },
   { id: "photos", title: "Фото страниц" },
   { id: "verdict", title: "Обычная модель" },
   { id: "verdict2", title: "Улучшенная модель" },
@@ -835,6 +836,7 @@ function progressModel(message) {
 
 function pipelineStep(filename, stage, message) {
   const text = `${filename || ""} ${message || ""}`.toLowerCase();
+  if (stage === "check" || text.includes("сверка итог")) return "check";
   if (stage === "model2" || text.includes("улучшенная модель") || text.includes("вторая модель")) return "verdict2";
   if (stage === "model" || text.includes("обычная модель") || text.includes("вердикт модели") || text.includes("вердикт")) return "verdict";
   if (text.includes("сборк")) return "assemble";
@@ -897,11 +899,18 @@ async function processShipment() {
       secondStep.detail = secondStep.detail || "после обычной";
     }
     if (doneStep) {
-      if (run.used_second && run.second) {
+      if (run.route === "known") {
+        doneStep.title = "Готово · без модели";
+        doneStep.detail = "суммы сошлись с итогом листов";
+      } else if (run.route === "similar") {
+        doneStep.title = "Готово · модель без фото";
+        doneStep.detail = "похожая форма";
+      } else if (run.used_second && run.second) {
         doneStep.title = "Готово · обычная + улучшенная";
         doneStep.detail = "сначала обычная, потом улучшенная";
       } else if (run.first) {
         doneStep.title = "Готово · обычная модель";
+        doneStep.detail = "незнакомая форма";
       }
     }
     await new Promise((resolve) => window.setTimeout(resolve, 700));
@@ -1598,7 +1607,11 @@ function reviewSources(ws) {
   const pdfs = ctx.pdfs || [];
   const excel = ctx.excel || [];
   const raw = [...pdfs, ...excel];
-  return { pdfs, excel, files: raw.filter((file) => recognizedRows(file).length > 0) };
+  return {
+    pdfs,
+    excel,
+    files: raw.filter((file) => recognizedRows(file).length > 0 || file.note),
+  };
 }
 
 function renderReviewMeta(ws, _review) {
@@ -1608,10 +1621,14 @@ function renderReviewMeta(ws, _review) {
   if (launch) launch.classList.toggle("hidden", !hasTable);
   if (!reviewMeta) return;
   const run = ws.verdict_run || {};
-  if (run.used_second && run.second) {
+  if (run.route === "known") {
+    reviewMeta.textContent = "Суммы сошлись с итогом листов. Модель не вызывалась.";
+  } else if (run.route === "similar") {
+    reviewMeta.textContent = "Похожая форма: модель без фото.";
+  } else if (run.used_second && run.second) {
     reviewMeta.textContent = "Сначала обычная модель, потом улучшенная.";
   } else if (run.first) {
-    reviewMeta.textContent = "Вердикт обычной модели.";
+    reviewMeta.textContent = "Вердикт обычной модели по фото.";
   } else if (_review?.meaning) {
     reviewMeta.textContent = String(_review.meaning).slice(0, 180);
   } else {
@@ -1668,14 +1685,87 @@ function renderFilePane(file) {
     file.total_rows && file.total_rows > (file.table || []).length
       ? `<p class="hint">Показаны первые ${(file.table || []).length} из ${file.total_rows} строк.</p>`
       : "";
+  const note = file.note ? `<p class="hint">${escapeHtml(file.note)}</p>` : "";
+  const table = n
+    ? renderRecognizedTable(file.table, file)
+    : (note ? "" : "<p class=\"hint\">В этом файле таблица товаров не собралась.</p>");
   return `
     <div class="review-file-meta">
       <strong>${escapeHtml(kind)} ${escapeHtml(file.filename || "")}</strong>
-      <span class="hint">${escapeHtml([pages || sheets, file.meaning, `${n} строк`].filter(Boolean).join(" · "))}</span>
+      <span class="hint">${escapeHtml([pages || sheets, file.meaning, n ? `${n} строк` : "без строк"].filter(Boolean).join(" · "))}</span>
     </div>
-    ${renderRecognizedTable(file.table, file)}
+    ${note}
+    ${table}
     ${capped}
   `;
+}
+
+const CHECK_FIELD_RU = {
+  pieces: "штуки",
+  packages: "места",
+  amount: "сумма",
+  net: "нетто",
+  gross: "брутто",
+  volume: "объём",
+  area: "площадь",
+};
+
+function recognitionOf(ws) {
+  const ctx = ws?.model_review?.context || {};
+  return {
+    route: ctx.route || ws?.verdict_run?.route || "",
+    reasons: ctx.reasons || ws?.verdict_run?.reasons || [],
+    checks: ctx.checks || [],
+    leftovers: ctx.leftovers || [],
+    unreadable: ctx.unreadable || [],
+  };
+}
+
+function renderSheetChecks(recognition) {
+  const checks = recognition?.checks || [];
+  const leftovers = recognition?.leftovers || [];
+  const unreadable = recognition?.unreadable || [];
+  const gapRows = [];
+  checks.forEach((check) => {
+    (check.gaps || []).forEach((gap) => {
+      const field = CHECK_FIELD_RU[gap.field] || gap.field || "";
+      gapRows.push(
+        `<tr class="check-miss"><td>${escapeHtml(check.name || "")}</td><td>${escapeHtml(field)}</td><td class="num">${formatNum(gap.rows)}</td><td class="num">${formatNum(gap.printed)}</td><td>два числа, одно не выбрано</td></tr>`
+      );
+    });
+  });
+  leftovers.forEach((item) => {
+    gapRows.push(
+      `<tr class="check-miss"><td>${escapeHtml(item.name || "")}</td><td colspan="3">${escapeHtml(item.why || "не вошло в лоты")}</td><td>${escapeHtml(String(item.rows || ""))}</td></tr>`
+    );
+  });
+  unreadable.forEach((item) => {
+    gapRows.push(
+      `<tr><td>${escapeHtml(item.name || "")}</td><td colspan="4">только картинка, числа код не брал</td></tr>`
+    );
+  });
+  if (!gapRows.length) {
+    const route = recognition?.route;
+    if (route === "known") return `<p class="hint">Суммы строк сошлись с итогом листов. Модель не вызывалась.</p>`;
+    if (route === "similar") return `<p class="hint">Напечатанного итога на части листов нет. Модель смотрела черновик без фото.</p>`;
+    return "";
+  }
+  return `<h4>Сверка с итогом листов</h4>
+    <div class="table-wrap"><table class="context-mini">
+      <thead><tr><th>Лист</th><th>Поле</th><th class="num">Сумма строк</th><th class="num">Итог листа</th><th>Замечание</th></tr></thead>
+      <tbody>${gapRows.join("")}</tbody>
+    </table></div>`;
+}
+
+function paintTableCheck(ws) {
+  const box = $("#table-check");
+  if (!box) return;
+  const recognition = recognitionOf(ws);
+  const html = renderSheetChecks(recognition);
+  box.innerHTML = html;
+  box.classList.toggle("hidden", !html);
+  box.classList.toggle("is-known", recognition.route === "known");
+  box.classList.toggle("is-unknown", recognition.route === "unknown");
 }
 
 function fillReviewDialog(ws, filename) {
@@ -1709,7 +1799,7 @@ function fillReviewDialog(ws, filename) {
     return;
   }
   if (!finalRows.length) {
-    body.innerHTML = "<p class=\"hint\">Таблицу собрать не удалось.</p>";
+    body.innerHTML = `${renderSheetChecks(recognitionOf(ws))}<p class="hint">Таблицу собрать не удалось.</p>`;
     return;
   }
   body.innerHTML = `
@@ -1717,6 +1807,7 @@ function fillReviewDialog(ws, filename) {
       <strong>Итоговая таблица</strong>
       <span class="hint">${finalRows.length} строк после кода и модели</span>
     </div>
+    ${renderSheetChecks(recognitionOf(ws))}
     ${renderRecognizedTable(finalRows)}
   `;
 }
@@ -2068,6 +2159,7 @@ function paintItemsTable() {
   ];
   tfoot.innerHTML = `<tr id="items-totals-row">${totalCells.join("")}</tr>`;
   fillExcelTotals(ws.items || [], ws.model_review);
+  paintTableCheck(ws);
 }
 
 function toggleLongCell(td, open) {
@@ -2500,6 +2592,7 @@ function exportPayload() {
     header_fields: state.workspace.header_fields || {},
     items: state.workspace.items || [],
     column_layout: state.columnLayout,
+    recognition: recognitionOf(state.workspace),
   };
 }
 

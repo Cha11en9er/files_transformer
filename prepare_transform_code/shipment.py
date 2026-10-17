@@ -244,6 +244,12 @@ def analyze(folder):
                 "roles": doc.get("roles") or ([doc["role"]] if doc.get("role") else []),
                 "duplicate_of": doc.get("duplicate_of"),
                 "line_count": len(doc.get("lines") or []),
+                "readable": bool(doc.get("readable", True)),
+                "stated": {
+                    key: value
+                    for key, value in (doc.get("stated") or {}).items()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)
+                },
             }
             for doc in documents
         ],
