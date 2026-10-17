@@ -8,8 +8,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.opencode_review import _model_parts
+from app.services.export import write_recognition_book
 from app.services.prepare_site import (
     apply_verdict,
+    assess_draft,
     fee_rows,
     filled_base_columns,
     header_changes,
@@ -20,8 +22,10 @@ from app.services.prepare_site import (
     needs_second_model,
     overlay_model_header,
     review_files,
+    short_prompt,
     split_uploads,
     verdict_notes,
+    vision_paths,
 )
 
 
@@ -448,3 +452,134 @@ def test_dt_sheet_follows_the_scheme_and_leaves_gaps_empty() -> None:
     assert col("Описание", total) is None
     assert col("страна происхождения", total) is None
     assert "Factory One / Factory Two" not in [col("Изготовитель", row) for row in rows]
+
+
+def _draft_with(**extra):
+    lot = _lot(vendor="A", pieces=2, packages=1, price=3, amount=6, net=1, gross=1.2, hs="11111111")
+    draft = {
+        "lots": [lot],
+        "flags": [],
+        "stated": {"pieces": 2, "amount": 6},
+        "documents": [
+            {
+                "name": "inv.xlsx / Sheet",
+                "role": "invoice",
+                "line_count": 1,
+                "readable": True,
+                "stated": {"pieces": 2, "amount": 6},
+            }
+        ],
+        "document_tables": {
+            "inv.xlsx / Sheet": {"rows": [{"article": "A", "qty": 2, "amount": 6, "rolls": 1}]}
+        },
+    }
+    draft.update(extra)
+    return draft
+
+
+def test_known_form_skips_the_model() -> None:
+    route = assess_draft(_draft_with())
+    assert route["path"] == "known"
+    assert route["leftovers"] == []
+    assert route["checks"][0]["gaps"] == []
+
+
+def test_gap_against_printed_total_is_unknown() -> None:
+    draft = _draft_with()
+    draft["documents"][0]["stated"] = {"pieces": 9, "amount": 6}
+    route = assess_draft(draft)
+    assert route["path"] == "unknown"
+    assert route["checks"][0]["gaps"][0]["field"] == "pieces"
+    assert route["checks"][0]["gaps"][0]["printed"] == 9
+    assert route["checks"][0]["gaps"][0]["rows"] == 2
+
+
+def test_sheet_that_did_not_enter_lots_is_kept() -> None:
+    draft = _draft_with()
+    draft["documents"].append(
+        {"name": "other.xlsx / Sheet", "role": "invoice", "line_count": 1, "readable": True, "stated": {}}
+    )
+    draft["document_tables"]["other.xlsx / Sheet"] = {"rows": [{"article": "B", "qty": 4, "amount": 8}]}
+    route = assess_draft(draft)
+    assert route["path"] == "unknown"
+    assert route["leftovers"][0]["name"] == "other.xlsx / Sheet"
+    assert route["leftovers"][0]["blocking"] is True
+
+
+def test_scan_without_text_is_unknown() -> None:
+    draft = _draft_with()
+    draft["documents"].append({"name": "scan.pdf", "role": "scan", "line_count": 0, "readable": False, "stated": {}})
+    route = assess_draft(draft)
+    assert route["path"] == "unknown"
+    assert route["unreadable"][0]["name"] == "scan.pdf"
+
+
+def test_sheet_without_printed_total_is_similar() -> None:
+    draft = _draft_with()
+    draft["documents"][0]["stated"] = {}
+    draft["stated"] = {}
+    route = assess_draft(draft)
+    assert route["path"] == "similar"
+
+
+def test_quiet_draft_sheet_does_not_call_the_model() -> None:
+    draft = _draft_with()
+    draft["documents"].append(
+        {"name": "calc.xlsx / Sheet", "role": "draft", "line_count": 1, "readable": True, "stated": {}}
+    )
+    draft["document_tables"]["calc.xlsx / Sheet"] = {"rows": [{"article": "Z", "qty": 1, "amount": 1}]}
+    route = assess_draft(draft)
+    assert route["path"] == "known"
+    assert route["leftovers"][0]["blocking"] is False
+
+
+def test_short_prompt_has_no_folder_names_and_keeps_both_numbers() -> None:
+    draft = _draft_with()
+    draft["sheet_checks"] = [{"name": "inv.xlsx / Sheet", "gaps": [{"field": "pieces", "rows": 2, "printed": 9}]}]
+    draft["leftovers"] = [{"name": "other.xlsx / Sheet", "why": "строки с количеством не вошли в лоты"}]
+    text = short_prompt(draft)
+    assert "Шаблон" not in text
+    assert "не выбирай" in text
+    assert "leftovers" in text
+    assert "9" in text
+
+
+def test_vision_paths_keep_only_the_problem_file() -> None:
+    reading = [(Path("inv.xlsx"), "inv.xlsx"), (Path("scan.pdf"), "scan.pdf")]
+    assessment = {"unreadable": [{"name": "scan.pdf", "blocking": True}], "leftovers": [], "checks": []}
+    picked = vision_paths(reading, assessment)
+    assert [path.name for path in picked] == ["scan.pdf"]
+
+
+def test_check_book_writes_both_numbers(tmp_path: Path) -> None:
+    target = tmp_path / "ПРОВЕРКА.xlsx"
+    saved = write_recognition_book(
+        target,
+        {
+            "route": "unknown",
+            "reasons": ["сумма строк не сходится с итогом листа"],
+            "checks": [
+                {
+                    "name": "inv.xlsx / Sheet",
+                    "role": "invoice",
+                    "sums": {"pieces": 2},
+                    "printed": {"pieces": 9},
+                    "gaps": [{"field": "pieces", "rows": 2, "printed": 9}],
+                }
+            ],
+            "leftovers": [{"name": "other.xlsx / Sheet", "role": "invoice", "why": "строки с количеством не вошли в лоты"}],
+            "unreadable": [{"name": "scan.pdf", "role": "scan"}],
+        },
+    )
+    assert saved == target
+    from openpyxl import load_workbook
+
+    book = load_workbook(target)
+    sheet = book.active
+    assert sheet.title == "Проверка"
+    text = " ".join(str(cell.value or "") for row in sheet.iter_rows() for cell in row)
+    assert "9" in text
+    assert "2" in text
+    assert "одно не выбрано" in text
+    assert "только картинка" in text
+    assert write_recognition_book(tmp_path / "empty.xlsx", {}) is None

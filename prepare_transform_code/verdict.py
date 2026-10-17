@@ -291,6 +291,10 @@ def build_prompt(result):
         "freights": list(result.get("freights") or []),
         "lots": result.get("lots") or [],
     }
+    if result.get("sheet_checks"):
+        payload["sheet_checks"] = result.get("sheet_checks")
+    if result.get("leftovers"):
+        payload["leftovers"] = result.get("leftovers")
     data = json.dumps(payload, ensure_ascii=False, indent=2)
     return rules + "\nДАННЫЕ КОДА:\n" + data + "\n"
 

@@ -195,6 +195,7 @@ class ExportRequest(BaseModel):
     header_fields: dict[str, Any] = Field(default_factory=dict)
     items: list[ItemOut] = Field(default_factory=list)
     column_layout: dict[str, ColumnLayoutIn] = Field(default_factory=dict)
+    recognition: dict[str, Any] = Field(default_factory=dict)
 
 
 class PermitCandidate(BaseModel):

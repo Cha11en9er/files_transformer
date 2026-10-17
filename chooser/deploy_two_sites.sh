@@ -1,10 +1,10 @@
 #!/bin/bash
-# Один боевой сайт: ветка prod_update, порт 8200.
+# Один боевой сайт: ветка prod_update_v2, порт 8200.
 # 8100 (ветка prod, 733c735) и выборщик на 8010 больше не поднимаем.
 set -euo pipefail
 REPO=https://github.com/Cha11en9er/files_transformer.git
 DIR=/opt/files_transformer_update
-BRANCH=prod_update
+BRANCH=prod_update_v2
 PORT=8200
 UNIT=excel-transformer-update
 ENV_SRC=/opt/files_transformer/backend/.env
