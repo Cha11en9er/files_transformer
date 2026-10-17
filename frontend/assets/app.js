@@ -212,6 +212,10 @@ function syncFileInput() {
   hint.className = "status kit-ok";
 }
 
+const MAX_UPLOAD_BYTES = 800 * 1024 * 1024;
+const WARN_UPLOAD_BYTES = 200 * 1024 * 1024;
+const MAX_UPLOAD_FILES = 80;
+
 function humanizeClientError(text) {
   const blob = String(text || "");
   const low = blob.toLowerCase();
@@ -231,9 +235,18 @@ function humanizeClientError(text) {
     low.includes("network error") ||
     low.includes("load failed") ||
     low.includes("the network connection was lost") ||
-    low.includes("ns_error_net")
+    low.includes("ns_error_net") ||
+    low.includes("aborted") ||
+    low.includes("timeout") ||
+    low.includes("etimedout")
   ) {
-    return "Связь с сервером оборвалась во время обработки. Повтори загрузку — если код уже прочитал файлы, таблица должна прийти даже без ответа модели.";
+    return "Связь с сервером оборвалась во время обработки. Повтори загрузку - если код уже прочитал файлы, таблица должна прийти даже без ответа модели.";
+  }
+  if (low.includes("413") || low.includes("entity too large") || low.includes("request entity too large") || low.includes("payload too large")) {
+    return "Файлы слишком большие для сервера. Убери лишние или сожми PDF.";
+  }
+  if (low.includes("502") || low.includes("bad gateway") || low.includes("503") || low.includes("service unavailable") || low.includes("504")) {
+    return "Сервер занят или перезапускается. Подожди минуту и повтори.";
   }
   if (low.includes("creditserror") || low.includes("insufficient balance") || low.includes("no payment method")) {
     return "На OpenCode Zen нет оплаты или закончился баланс.";
@@ -251,6 +264,22 @@ function humanizeClientError(text) {
     return "Сервер не вернул результат обработки. Повтори загрузку.";
   }
   return blob;
+}
+
+function uploadGuardMessage(files) {
+  const list = [...(files || [])];
+  if (list.length > MAX_UPLOAD_FILES) {
+    return `Слишком много файлов сразу (${list.length}). Оставь до ${MAX_UPLOAD_FILES}.`;
+  }
+  const total = list.reduce((sum, file) => sum + (Number(file.size) || 0), 0);
+  const heavy = list.filter((file) => (Number(file.size) || 0) > WARN_UPLOAD_BYTES);
+  if (total > MAX_UPLOAD_BYTES) {
+    return `Сумма файлов больше ${Math.round(MAX_UPLOAD_BYTES / (1024 * 1024))} МБ. Разбей поставку.`;
+  }
+  if (heavy.length) {
+    return `Большие файлы: ${heavy.map((f) => f.name).join(", ")}. Обработка может занять дольше обычного.`;
+  }
+  return "";
 }
 
 function fileCountLabel(n) {
@@ -615,16 +644,31 @@ dropzoneWrap?.addEventListener("drop", async (e) => {
   addPendingFiles(files);
 });
 
-const PIPELINE = [
-  { id: "receive", title: "Приём файлов" },
-  { id: "reconcile", title: "Сверка позиций" },
-  { id: "read", title: "Чтение файлов кодом" },
-  { id: "check", title: "Сверка итогов" },
-  { id: "photos", title: "Фото страниц" },
-  { id: "verdict", title: "Обычная модель" },
-  { id: "verdict2", title: "Улучшенная модель" },
-  { id: "assemble", title: "Сборка таблицы" },
-  { id: "done", title: "Распознавание выполнено" },
+const FLOW_NODES = [
+  { id: "receive", title: "Приём", x: 48, y: 78 },
+  { id: "catalog", title: "Справочник", x: 48, y: 28 },
+  { id: "read", title: "Чтение", x: 168, y: 78 },
+  { id: "check", title: "Сверка", x: 300, y: 78 },
+  { id: "photos", title: "Фото", x: 430, y: 28 },
+  { id: "verdict", title: "Модель", x: 560, y: 78 },
+  { id: "verdict2", title: "Сильнее", x: 560, y: 28 },
+  { id: "assemble", title: "Сборка", x: 720, y: 78 },
+  { id: "done", title: "Готово", x: 880, y: 78 },
+];
+
+const FLOW_EDGES = [
+  { id: "receive-catalog", from: "receive", to: "catalog", title: "Справочник в загрузке" },
+  { id: "receive-read", from: "receive", to: "read", title: "Файлы поставки" },
+  { id: "catalog-read", from: "catalog", to: "read", title: "Справочник к чтению" },
+  { id: "read-check", from: "read", to: "check", title: "Что прочитал код" },
+  { id: "check-assemble", from: "check", to: "assemble", title: "Без модели", path: "M300,78 C420,120 560,120 720,78" },
+  { id: "check-photos", from: "check", to: "photos", title: "Почему нужны фото" },
+  { id: "check-verdict", from: "check", to: "verdict", title: "Почему вызвали модель" },
+  { id: "photos-verdict", from: "photos", to: "verdict", title: "Какие кадры ушли" },
+  { id: "verdict-verdict2", from: "verdict", to: "verdict2", title: "Обычная не уверена" },
+  { id: "verdict-assemble", from: "verdict", to: "assemble", title: "Вердикт обычной" },
+  { id: "verdict2-assemble", from: "verdict2", to: "assemble", title: "Вердикт сильной" },
+  { id: "assemble-done", from: "assemble", to: "done", title: "Что распозналось" },
 ];
 
 function formatStepSeconds(ms) {
@@ -635,217 +679,314 @@ function formatStepSeconds(ms) {
   return rest ? `${min} мин ${rest} с` : `${min} мин`;
 }
 
-const pipeline = {
-  index: 0,
-  timer: null,
-  finished: false,
-  failed: false,
-  steps: [],
-  reset() {
-    this.index = 0;
-    this.finished = false;
-    this.failed = false;
-    this.steps = PIPELINE.map((step) => ({
-      ...step,
-      state: "wait",
-      started: 0,
-      ended: 0,
-      serverSeconds: null,
-      detail: "",
-    }));
-    const error = $("#parse-error");
-    error.textContent = "";
-    error.classList.add("hidden");
-    $("#parse-progress").classList.remove("hidden");
-    $("#parse-progress-fill").style.width = "0%";
-    this.reach("receive");
-    this.timer = setInterval(() => this.paint(false), 1000);
-  },
-  stop() {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
-  },
-  reach(id, extra) {
-    const next = this.steps.findIndex((step) => step.id === id);
-    const seconds = extra && Number.isFinite(extra.seconds) ? extra.seconds : null;
-    const detail = extra?.detail || "";
-    if (next < 0) return;
-    if (next === this.index && this.steps[this.index].state === "run") {
-      const current = this.steps[this.index];
-      if (seconds != null) current.serverSeconds = seconds;
-      if (detail) current.detail = detail;
-      this.paint(false);
-      return;
-    }
-    if (next < this.index) return;
-    const now = Date.now();
-    const current = this.steps[this.index];
-    if (current && current.state === "run") {
-      current.ended = now;
-      current.state = "done";
-    }
-    for (let i = this.index + 1; i < next; i += 1) {
-      const skipped = this.steps[i];
-      if (skipped.state === "wait") skipped.state = "skip";
-    }
-    this.index = next;
-    const step = this.steps[next];
-    step.state = "run";
-    step.started = step.started || now;
-    if (seconds != null) step.serverSeconds = seconds;
-    if (detail) step.detail = detail;
-    this.paint(true);
-  },
-  complete() {
-    const now = Date.now();
-    const last = this.steps.length - 1;
-    this.steps.forEach((step, i) => {
-      if (step.state === "done" || step.state === "skip" || step.state === "fail") return;
-      if (step.state === "wait" && i !== last) {
-        step.state = "skip";
-        return;
-      }
-      if (!step.started) step.started = now;
-      step.ended = now;
-      step.state = "done";
-    });
-    this.index = last;
-    this.finished = true;
-    this.stop();
-    this.paint(true);
-  },
-  fail(message) {
-    const step = this.steps[this.index];
-    if (step && step.state === "run") {
-      step.ended = Date.now();
-      step.state = "fail";
-    }
-    this.failed = true;
-    this.stop();
-    const error = $("#parse-error");
-    error.textContent = message;
-    error.classList.remove("hidden");
-    const rail = $("#step-rail");
-    if (rail) rail.dataset.index = "";
-    this.paint(false);
-  },
-  windowOf() {
-    const last = this.steps.length - 1;
-    if (this.finished || this.index >= last) return { start: last, length: 1, highlight: 0 };
-    if (this.index === last - 1) return { start: this.index, length: 2, highlight: 0 };
-    if (this.index <= 1) return { start: 0, length: 3, highlight: this.index };
-    return { start: this.index - 1, length: 3, highlight: 1 };
-  },
-  timeLabel(step, idleText) {
-    const note = step.detail ? ` · ${step.detail}` : "";
-    if (step.state === "run" && step.started) {
-      return `идёт ${formatStepSeconds(Date.now() - step.started)}${note}`;
-    }
-    if ((step.state === "done" || step.state === "fail") && (step.started || step.serverSeconds != null)) {
-      const client = step.started ? (step.ended || Date.now()) - step.started : 0;
-      const server = step.serverSeconds != null ? step.serverSeconds * 1000 : 0;
-      return `${formatStepSeconds(Math.max(client, server))}${note}`;
-    }
-    if (step.state === "skip") return idleText === "" ? "не было" : "";
-    return idleText || "";
-  },
-  paint(animate) {
-    const rail = $("#step-rail");
-    if (!rail) return;
-    const view = this.windowOf();
-    const same = !animate
-      && rail.dataset.start === String(view.start)
-      && rail.dataset.count === String(view.length)
-      && rail.dataset.index === String(this.index);
-    if (same) {
-      this.refreshTimes();
-      return;
-    }
-    const prev = rail.dataset.start;
-    this.paintToken = (this.paintToken || 0) + 1;
-    const token = this.paintToken;
-    rail.dataset.start = String(view.start);
-    rail.dataset.count = String(view.length);
-    rail.dataset.index = String(this.index);
-    const slice = this.steps.slice(view.start, view.start + view.length);
-    const html = slice.map((step, slot) => {
-      const tone = step.state === "fail"
-        ? "is-fail"
-        : slot === view.highlight
-          ? "is-current"
-          : this.steps.indexOf(step) < this.index
-            ? "is-past"
-            : "is-next";
-      const time = this.timeLabel(step);
-      return `<div class="step-chip ${tone}" data-step="${step.id}"><span class="step-name">${escapeHtml(step.title)}</span><span class="step-time">${
-        time ? escapeHtml(time) : ""
-      }</span></div>`;
-    }).join("");
-    const denom = Math.max(1, this.steps.length - 1);
-    const pct = this.finished ? 100 : Math.round((this.index / denom) * 100);
-    const slide = animate && prev !== undefined && prev !== "" && Number(view.start) > Number(prev);
-    const apply = () => {
-      rail.classList.remove("is-leaving", "is-forward");
-      rail.innerHTML = html;
-      if (slide) {
-        void rail.offsetWidth;
-        rail.classList.add("is-forward");
-      }
-      this.refreshTimes();
-      $("#parse-progress-fill").style.width = `${pct}%`;
-    };
-    if (slide && rail.childElementCount) {
-      rail.classList.add("is-leaving");
-      window.setTimeout(() => {
-        if (token !== this.paintToken) return;
-        apply();
-      }, 200);
-      return;
-    }
-    apply();
-  },
-  refreshTimes() {
-    this.steps.forEach((step) => {
-      const chip = document.querySelector(`.step-chip[data-step="${step.id}"] .step-time`);
-      if (chip) chip.textContent = this.timeLabel(step);
-    });
-    const pop = $("#step-popover");
-    pop.innerHTML = this.steps.map((step) => {
-      const time = this.timeLabel(step, "");
-      return `<div class="step-row is-${step.state}"><span>${escapeHtml(step.title)}</span><span>${escapeHtml(time)}</span></div>`;
-    }).join("");
-  },
-};
-
 function progressSeconds(message) {
   const match = String(message || "").match(/\((\d+)\s*с\)/);
   return match ? Number(match[1]) : null;
 }
 
-function progressFrames(message) {
-  const match = String(message || "").match(/(\d+)\s*кадр/);
-  return match ? `${match[1]} кадров` : "";
-}
-
-function progressModel(message) {
-  const text = String(message || "").toLowerCase();
-  if (text.includes("улучшенная")) return "улучшенная модель";
-  if (text.includes("обычная") || text.includes("вердикт модели")) return "обычная модель";
-  return "";
-}
-
 function pipelineStep(filename, stage, message) {
   const text = `${filename || ""} ${message || ""}`.toLowerCase();
+  if (stage === "catalog" || text.includes("справочник")) return "catalog";
   if (stage === "check" || text.includes("сверка итог")) return "check";
   if (stage === "model2" || text.includes("улучшенная модель") || text.includes("вторая модель")) return "verdict2";
   if (stage === "model" || text.includes("обычная модель") || text.includes("вердикт модели") || text.includes("вердикт")) return "verdict";
   if (text.includes("сборк")) return "assemble";
   if (text.includes("фото")) return "photos";
   if (text.includes("чтени")) return "read";
-  if (text.includes("сверк")) return "reconcile";
   if (stage === "parse") return "receive";
   return "";
 }
+
+const pipeline = {
+  timer: null,
+  finished: false,
+  failed: false,
+  current: "receive",
+  route: "",
+  hasCatalog: false,
+  usedSecond: false,
+  nodes: {},
+  edgeHot: new Set(),
+  trace: {},
+  reset() {
+    this.finished = false;
+    this.failed = false;
+    this.current = "receive";
+    this.route = "";
+    this.hasCatalog = [...extraFiles].length > 0;
+    this.usedSecond = false;
+    this.edgeHot = new Set(["receive-read"]);
+    if (this.hasCatalog) {
+      this.edgeHot.add("receive-catalog");
+      this.edgeHot.add("catalog-read");
+    }
+    this.trace = {
+      files: state.pendingFiles.map((f) => ({ name: fileKey(f), size: f.size, catalog: extraFiles.has(f) })),
+      reasons: [],
+      checks: [],
+      leftovers: [],
+      unreadable: [],
+      photos: [],
+      photoCount: 0,
+      model: {},
+      model2: {},
+    };
+    this.nodes = Object.fromEntries(
+      FLOW_NODES.map((node) => [
+        node.id,
+        { ...node, state: "wait", started: 0, ended: 0, serverSeconds: null, detail: "" },
+      ])
+    );
+    if (!this.hasCatalog) this.nodes.catalog.state = "skip";
+    const error = $("#parse-error");
+    if (error) {
+      error.textContent = "";
+      error.classList.add("hidden");
+    }
+    $("#flow-graph")?.classList.remove("hidden");
+    this.reach("receive");
+    this.stop();
+    this.timer = setInterval(() => this.paint(), 1000);
+    this.paint(true);
+  },
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  },
+  note(extra) {
+    if (!extra) return;
+    if (extra.route) this.route = extra.route;
+    if (Array.isArray(extra.reasons)) this.trace.reasons = extra.reasons;
+    if (Array.isArray(extra.checks)) this.trace.checks = extra.checks;
+    if (Array.isArray(extra.leftovers)) this.trace.leftovers = extra.leftovers;
+    if (Array.isArray(extra.unreadable)) this.trace.unreadable = extra.unreadable;
+    if (Array.isArray(extra.photo_names)) this.trace.photos = extra.photo_names;
+    if (Number.isFinite(extra.image_count)) this.trace.photoCount = extra.image_count;
+    if (extra.message && /кадр/i.test(extra.message)) {
+      const frames = String(extra.message).match(/(\d+)\s*кадр/);
+      if (frames) this.trace.photoCount = Number(frames[1]);
+    }
+  },
+  markPath(id) {
+    const map = {
+      receive: ["receive-read"],
+      catalog: ["receive-catalog", "catalog-read"],
+      read: ["receive-read", "read-check"],
+      check: ["read-check"],
+      photos: ["check-photos", "photos-verdict"],
+      verdict: this.route === "similar" ? ["check-verdict", "verdict-assemble"] : ["photos-verdict", "verdict-assemble"],
+      verdict2: ["verdict-verdict2", "verdict2-assemble"],
+      assemble: ["assemble-done"],
+      done: ["assemble-done"],
+    };
+    if (this.route === "known") {
+      map.check = ["read-check", "check-assemble"];
+      map.assemble = ["check-assemble", "assemble-done"];
+    } else if (this.route === "similar") {
+      map.check = ["read-check", "check-verdict"];
+    } else if (this.route === "unknown") {
+      map.check = ["read-check", "check-photos"];
+    }
+    (map[id] || []).forEach((edge) => this.edgeHot.add(edge));
+    if (this.hasCatalog && ["receive", "catalog", "read"].includes(id)) {
+      this.edgeHot.add("receive-catalog");
+      this.edgeHot.add("catalog-read");
+    }
+  },
+  reach(id, extra) {
+    if (!this.nodes[id]) return;
+    this.note(extra);
+    const seconds = extra && Number.isFinite(extra.seconds) ? extra.seconds : null;
+    const detail = extra?.detail || "";
+    const now = Date.now();
+    const order = FLOW_NODES.map((n) => n.id);
+    const next = order.indexOf(id);
+    const cur = order.indexOf(this.current);
+    if (id === this.current && this.nodes[id].state === "run") {
+      if (seconds != null) this.nodes[id].serverSeconds = seconds;
+      if (detail) this.nodes[id].detail = detail;
+      this.paint();
+      return;
+    }
+    if (cur >= 0 && this.nodes[this.current]?.state === "run") {
+      this.nodes[this.current].state = "past";
+      this.nodes[this.current].ended = now;
+    }
+    if (id === "photos" || id === "verdict" || id === "verdict2") {
+      ["photos", "verdict", "verdict2"].forEach((name) => {
+        if (name === id) return;
+        if (this.nodes[name].state === "wait" && this.route === "known") this.nodes[name].state = "skip";
+      });
+    }
+    if (this.route === "known") {
+      ["photos", "verdict", "verdict2"].forEach((name) => {
+        if (this.nodes[name].state === "wait") this.nodes[name].state = "skip";
+      });
+    }
+    if (this.route === "similar") {
+      if (this.nodes.photos.state === "wait") this.nodes.photos.state = "skip";
+      if (this.nodes.verdict2.state === "wait" && id !== "verdict2") this.nodes.verdict2.state = "skip";
+    }
+    if (id === "verdict2") this.usedSecond = true;
+    this.current = id;
+    this.nodes[id].state = "run";
+    this.nodes[id].started = this.nodes[id].started || now;
+    if (seconds != null) this.nodes[id].serverSeconds = seconds;
+    if (detail) this.nodes[id].detail = detail;
+    this.markPath(id);
+    this.paint();
+  },
+  complete(run) {
+    const now = Date.now();
+    this.route = run?.route || this.route;
+    this.usedSecond = Boolean(run?.used_second);
+    Object.values(this.nodes).forEach((node) => {
+      if (node.state === "run") {
+        node.state = "past";
+        node.ended = now;
+      }
+    });
+    if (this.route === "known") {
+      ["photos", "verdict", "verdict2"].forEach((id) => {
+        this.nodes[id].state = "skip";
+      });
+      this.edgeHot.add("check-assemble");
+    } else if (this.route === "similar") {
+      this.nodes.photos.state = "skip";
+      if (!this.usedSecond) this.nodes.verdict2.state = "skip";
+      this.edgeHot.add("check-verdict");
+      this.edgeHot.add("verdict-assemble");
+    } else {
+      this.edgeHot.add("check-photos");
+      this.edgeHot.add("photos-verdict");
+      this.edgeHot.add(this.usedSecond ? "verdict2-assemble" : "verdict-assemble");
+      if (this.usedSecond) this.edgeHot.add("verdict-verdict2");
+      else this.nodes.verdict2.state = "skip";
+    }
+    if (!this.hasCatalog) this.nodes.catalog.state = "skip";
+    this.nodes.assemble.state = "past";
+    this.nodes.done.state = "past";
+    this.edgeHot.add("assemble-done");
+    this.finished = true;
+    this.current = "done";
+    this.stop();
+    this.paint();
+  },
+  fail(message) {
+    const node = this.nodes[this.current];
+    if (node && node.state === "run") {
+      node.state = "fail";
+      node.ended = Date.now();
+    }
+    this.failed = true;
+    this.stop();
+    const error = $("#parse-error");
+    if (error) {
+      error.textContent = message;
+      error.classList.remove("hidden");
+    }
+    this.paint();
+  },
+  timeLabel(node) {
+    const note = node.detail ? ` · ${node.detail}` : "";
+    if (node.state === "run" && node.started) return `идёт ${formatStepSeconds(Date.now() - node.started)}${note}`;
+    if ((node.state === "past" || node.state === "fail") && (node.started || node.serverSeconds != null)) {
+      const client = node.started ? (node.ended || Date.now()) - node.started : 0;
+      const server = node.serverSeconds != null ? node.serverSeconds * 1000 : 0;
+      return `${formatStepSeconds(Math.max(client, server))}${note}`;
+    }
+    if (node.state === "skip") return "не было";
+    return "";
+  },
+  paint() {
+    const svg = $("#flow-svg");
+    if (!svg) return;
+    const byId = Object.fromEntries(FLOW_NODES.map((n) => [n.id, n]));
+    const edgeLines = FLOW_EDGES.map((edge) => {
+      const a = byId[edge.from];
+      const b = byId[edge.to];
+      const d = edge.path || `M${a.x},${a.y} L${b.x},${b.y}`;
+      let klass = "flow-edge";
+      if (this.edgeHot.has(edge.id)) klass += " is-hot";
+      else if (this.nodes[edge.from]?.state === "skip" || this.nodes[edge.to]?.state === "skip") klass += " is-skip";
+      else klass += " is-future";
+      return `<path class="flow-edge-hit" data-edge="${edge.id}" d="${d}" /><path class="${klass}" data-edge="${edge.id}" d="${d}" />`;
+    }).join("");
+    const nodeMarks = FLOW_NODES.map((spec) => {
+      const node = this.nodes[spec.id] || spec;
+      const time = this.timeLabel(node);
+      return `<g class="flow-node is-${node.state || "wait"}" data-node="${spec.id}">
+        <circle cx="${spec.x}" cy="${spec.y}" r="18"></circle>
+        <text x="${spec.x}" y="${spec.y - 28}">${escapeHtml(spec.title)}</text>
+        <text class="flow-sub" x="${spec.x}" y="${spec.y + 34}">${escapeHtml(time)}</text>
+      </g>`;
+    }).join("");
+    svg.innerHTML = edgeLines + nodeMarks;
+  },
+};
+
+function openEdgeDialog(edgeId) {
+  const edge = FLOW_EDGES.find((item) => item.id === edgeId);
+  if (!edge) return;
+  const dialog = $("#edge-dialog");
+  const title = $("#edge-dialog-title");
+  const meta = $("#edge-dialog-meta");
+  const body = $("#edge-dialog-body");
+  if (!dialog || !body) return;
+  if (title) title.textContent = edge.title;
+  if (meta) meta.textContent = `${pipeline.nodes[edge.from]?.title || edge.from} → ${pipeline.nodes[edge.to]?.title || edge.to}`;
+  body.innerHTML = edgeDialogHtml(edgeId);
+  openDialog(dialog);
+}
+
+function edgeDialogHtml(edgeId) {
+  const ws = state.workspace;
+  const rec = recognitionOf(ws);
+  const tr = pipeline.trace || {};
+  if (edgeId === "receive-read" || edgeId === "receive-catalog") {
+    const rows = (tr.files || [])
+      .filter((f) => (edgeId === "receive-catalog" ? f.catalog : !f.catalog))
+      .map((f) => `<li><strong>${escapeHtml(f.name)}</strong> · ${Math.round((f.size || 0) / 1024)} КБ</li>`)
+      .join("");
+    return `<div class="check-card"><h4>${edgeId === "receive-catalog" ? "Справочник" : "Файлы поставки"}</h4><ul>${rows || "<li>пусто</li>"}</ul></div>`;
+  }
+  if (edgeId === "catalog-read") {
+    return `<div class="check-card"><h4>Справочник</h4><p class="check-why">Допишет код и описание только в пустые клетки по артикулу.</p></div>`;
+  }
+  if (edgeId === "read-check") {
+    const files = (ws?.files || []).map((f) => `<li>${escapeHtml(f.filename || "")}: ${escapeHtml(f.parse_message || "")}</li>`).join("");
+    return `<div class="check-card"><h4>Черновик кода</h4><p class="check-why">Таблица собрана до модели. Ниже статусы файлов.</p><ul>${files || "<li>ещё читаем</li>"}</ul></div>`;
+  }
+  if (edgeId === "check-assemble" || edgeId === "check-photos" || edgeId === "check-verdict") {
+    return renderSheetChecks({ ...rec, reasons: rec.reasons?.length ? rec.reasons : tr.reasons, checks: rec.checks?.length ? rec.checks : tr.checks, leftovers: rec.leftovers?.length ? rec.leftovers : tr.leftovers, unreadable: rec.unreadable?.length ? rec.unreadable : tr.unreadable, route: rec.route || pipeline.route })
+      || `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Пока нет расхождений или шаг ещё идёт.</p></div>`;
+  }
+  if (edgeId === "photos-verdict") {
+    const names = (tr.photos || []).map((n) => `<li>${escapeHtml(n)}</li>`).join("");
+    return `<div class="check-card"><h4>Фото для модели</h4><p class="check-why">${tr.photoCount || 0} кадров с проблемных листов. Сами jpg на сервере временные.</p><ul>${names || "<li>имена кадров не пришли</li>"}</ul></div>`;
+  }
+  if (edgeId === "verdict-verdict2") {
+    return `<div class="check-card"><h4>Улучшенная модель</h4><p class="check-why">Мало столбцов, сомнения или дыра мест. Смотрит более сильная модель.</p></div>`;
+  }
+  if (edgeId === "verdict-assemble" || edgeId === "verdict2-assemble") {
+    const review = ws?.model_review || {};
+    return `<div class="check-card"><h4>${edgeId === "verdict2-assemble" ? "Сильная модель" : "Обычная модель"}</h4>
+      <p class="check-why">${escapeHtml(review.meaning || "Вердикт ещё не пришёл.")}</p>
+      ${review.error ? `<p class="parse-error">${escapeHtml(humanizeClientError(review.error))}</p>` : ""}
+      <p class="hint">${escapeHtml(review.model_label || review.model || "")}</p></div>`;
+  }
+  if (edgeId === "assemble-done") {
+    if (!ws) return `<div class="check-card"><h4>Итог</h4><p class="check-why">Таблица ещё собирается.</p></div>`;
+    return `${renderSheetChecks(rec)}<div class="check-card"><h4>Итоговая таблица</h4><p class="check-why">То же, что раньше было в «Что распозналось».</p></div>${renderRecognizedTable(finalReviewRows(ws))}`;
+  }
+  return `<div class="check-card"><p class="check-why">Нет данных по этому ребру.</p></div>`;
+}
+
+$("#flow-svg")?.addEventListener("click", (e) => {
+  const edge = e.target.closest("[data-edge]");
+  if (edge?.dataset.edge) openEdgeDialog(edge.dataset.edge);
+});
+$("#edge-dialog-close")?.addEventListener("click", () => $("#edge-dialog")?.close());
 
 async function processShipment() {
   if (processing || state.sessionLocked) return;
@@ -854,6 +995,13 @@ async function processShipment() {
     showToast("Выберите файлы или папки", { kind: "info" });
     return;
   }
+  const guard = uploadGuardMessage(state.pendingFiles);
+  if (guard && /Слишком много|больше/.test(guard)) {
+    $("#upload-status").textContent = guard;
+    showToast(guard, { kind: "error", ms: 6000 });
+    return;
+  }
+  if (guard) showToast(guard, { kind: "info", ms: 5000 });
   setSessionLocked(true, { busy: true, buttonLabel: "Обработка…" });
   showToast("Началась обработка", { kind: "info", ms: 2500 });
   const form = $("#create-form");
@@ -872,49 +1020,27 @@ async function processShipment() {
     const created = await parseUploadStream(fd, {
       onProgress(_current, _total, filename, extra) {
         const id = pipelineStep(filename, extra?.stage, extra?.message);
-        if (id) {
-          const model = progressModel(extra?.message);
-          const step = pipeline.steps.find((item) => item.id === id);
-          if (step && model) {
-            step.title = id === "verdict2" ? "Улучшенная модель" : "Обычная модель";
-          }
-          pipeline.reach(id, {
-            seconds: progressSeconds(extra?.message),
-            detail: progressFrames(extra?.message) || (model && id === "verdict2" ? model : ""),
-          });
-        }
+        if (!id) return;
+        pipeline.reach(id, {
+          seconds: progressSeconds(extra?.message),
+          detail: extra?.detail || "",
+          route: extra?.route,
+          reasons: extra?.reasons,
+          checks: extra?.checks,
+          leftovers: extra?.leftovers,
+          unreadable: extra?.unreadable,
+          photo_names: extra?.photo_names,
+          image_count: extra?.image_count,
+          message: extra?.message,
+        });
       },
       onFile() {
         pipeline.reach("assemble");
       },
     });
     pipeline.reach("assemble");
-    const run = created.verdict_run || {};
-    const firstStep = pipeline.steps.find((item) => item.id === "verdict");
-    const secondStep = pipeline.steps.find((item) => item.id === "verdict2");
-    const doneStep = pipeline.steps.find((item) => item.id === "done");
-    if (firstStep && run.first) firstStep.title = "Обычная модель";
-    if (secondStep && run.used_second && run.second) {
-      secondStep.title = "Улучшенная модель";
-      secondStep.detail = secondStep.detail || "после обычной";
-    }
-    if (doneStep) {
-      if (run.route === "known") {
-        doneStep.title = "Готово · без модели";
-        doneStep.detail = "суммы сошлись с итогом листов";
-      } else if (run.route === "similar") {
-        doneStep.title = "Готово · модель без фото";
-        doneStep.detail = "похожая форма";
-      } else if (run.used_second && run.second) {
-        doneStep.title = "Готово · обычная + улучшенная";
-        doneStep.detail = "сначала обычная, потом улучшенная";
-      } else if (run.first) {
-        doneStep.title = "Готово · обычная модель";
-        doneStep.detail = "незнакомая форма";
-      }
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, 700));
-    pipeline.complete();
+    await new Promise((resolve) => window.setTimeout(resolve, 400));
+    pipeline.complete(created.verdict_run || {});
     state.shipmentId = created.id;
     state.workspace = created;
     applyShipmentTitle(created.title, { force: true });
@@ -928,7 +1054,7 @@ async function processShipment() {
       (skipped ? `, пропущено: ${skipped}` : "") +
       `, замечаний: ${created.warning_count}.` +
       (modelErr ? ` Модель: ${modelErr}` : "") +
-      ` Чтобы обработать другой комплект, обновите страницу.`;
+      ` Нажми линию у «Готово», чтобы открыть распознанное. Чтобы обработать другой комплект, обновите страницу.`;
     setSessionLocked(true, { busy: false, buttonLabel: "Обработано" });
     try {
       renderWorkspace();
@@ -996,6 +1122,14 @@ async function parseUploadStream(fd, hooks) {
           hooks.onProgress(event.current, event.total, event.filename, {
             stage: event.stage,
             message: event.message,
+            detail: event.detail,
+            route: event.route,
+            reasons: event.reasons,
+            checks: event.checks,
+            leftovers: event.leftovers,
+            unreadable: event.unreadable,
+            photo_names: event.photo_names,
+            image_count: event.image_count,
           });
         } else if (event.event === "file") {
           hooks.onFile(event.filename, event.status, event.message);
@@ -1615,24 +1749,9 @@ function reviewSources(ws) {
 }
 
 function renderReviewMeta(ws, _review) {
-  const reviewMeta = $("#model-review-meta");
-  const launch = $("#review-launch");
-  const hasTable = (ws.items || []).length > 0 || reviewSources(ws).files.length > 0;
-  if (launch) launch.classList.toggle("hidden", !hasTable);
-  if (!reviewMeta) return;
-  const run = ws.verdict_run || {};
-  if (run.route === "known") {
-    reviewMeta.textContent = "Суммы сошлись с итогом листов. Модель не вызывалась.";
-  } else if (run.route === "similar") {
-    reviewMeta.textContent = "Похожая форма: модель без фото.";
-  } else if (run.used_second && run.second) {
-    reviewMeta.textContent = "Сначала обычная модель, потом улучшенная.";
-  } else if (run.first) {
-    reviewMeta.textContent = "Вердикт обычной модели по фото.";
-  } else if (_review?.meaning) {
-    reviewMeta.textContent = String(_review.meaning).slice(0, 180);
-  } else {
-    reviewMeta.textContent = "";
+  if (ws && pipeline.finished) {
+    pipeline.route = ws.verdict_run?.route || pipeline.route;
+    pipeline.paint();
   }
 }
 
@@ -1725,47 +1844,45 @@ function renderSheetChecks(recognition) {
   const checks = recognition?.checks || [];
   const leftovers = recognition?.leftovers || [];
   const unreadable = recognition?.unreadable || [];
-  const gapRows = [];
+  const reasons = recognition?.reasons || [];
+  const cards = [];
+  if (reasons.length) {
+    cards.push(
+      `<div class="check-card"><h4>Почему так решили</h4><ul>${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>`
+    );
+  }
   checks.forEach((check) => {
     (check.gaps || []).forEach((gap) => {
       const field = CHECK_FIELD_RU[gap.field] || gap.field || "";
-      gapRows.push(
-        `<tr class="check-miss"><td>${escapeHtml(check.name || "")}</td><td>${escapeHtml(field)}</td><td class="num">${formatNum(gap.rows)}</td><td class="num">${formatNum(gap.printed)}</td><td>два числа, одно не выбрано</td></tr>`
-      );
+      cards.push(`<div class="check-card">
+        <h4>${escapeHtml(check.name || "лист")}</h4>
+        <p class="check-why">Столбец «${escapeHtml(field)}»: сумма строк ${formatNum(gap.rows)}, итог листа ${formatNum(gap.printed)}. Оба числа оставляем.</p>
+      </div>`);
     });
   });
   leftovers.forEach((item) => {
-    gapRows.push(
-      `<tr class="check-miss"><td>${escapeHtml(item.name || "")}</td><td colspan="3">${escapeHtml(item.why || "не вошло в лоты")}</td><td>${escapeHtml(String(item.rows || ""))}</td></tr>`
-    );
+    cards.push(`<div class="check-card">
+      <h4>${escapeHtml(item.name || "лист")}</h4>
+      <p class="check-why">${escapeHtml(item.why || "Строки с количеством не вошли в лоты")}. Лист помечен, не пропал.</p>
+    </div>`);
   });
   unreadable.forEach((item) => {
-    gapRows.push(
-      `<tr><td>${escapeHtml(item.name || "")}</td><td colspan="4">только картинка, числа код не брал</td></tr>`
-    );
+    cards.push(`<div class="check-card">
+      <h4>${escapeHtml(item.name || "файл")}</h4>
+      <p class="check-why">Нет текстового слоя. Числа берёт только модель с фото.</p>
+    </div>`);
   });
-  if (!gapRows.length) {
+  if (!cards.length) {
     const route = recognition?.route;
-    if (route === "known") return `<p class="hint">Суммы строк сошлись с итогом листов. Модель не вызывалась.</p>`;
-    if (route === "similar") return `<p class="hint">Напечатанного итога на части листов нет. Модель смотрела черновик без фото.</p>`;
+    if (route === "known") {
+      return `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Суммы строк совпали с итогом листов. Модель не вызывали.</p></div>`;
+    }
+    if (route === "similar") {
+      return `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">На части листов нет напечатанного итога. Модель сверила черновик без фото.</p></div>`;
+    }
     return "";
   }
-  return `<h4>Сверка с итогом листов</h4>
-    <div class="table-wrap"><table class="context-mini">
-      <thead><tr><th>Лист</th><th>Поле</th><th class="num">Сумма строк</th><th class="num">Итог листа</th><th>Замечание</th></tr></thead>
-      <tbody>${gapRows.join("")}</tbody>
-    </table></div>`;
-}
-
-function paintTableCheck(ws) {
-  const box = $("#table-check");
-  if (!box) return;
-  const recognition = recognitionOf(ws);
-  const html = renderSheetChecks(recognition);
-  box.innerHTML = html;
-  box.classList.toggle("hidden", !html);
-  box.classList.toggle("is-known", recognition.route === "known");
-  box.classList.toggle("is-unknown", recognition.route === "unknown");
+  return `<h4>Сверка с итогом листов</h4>${cards.join("")}`;
 }
 
 function fillReviewDialog(ws, filename) {
@@ -2159,7 +2276,6 @@ function paintItemsTable() {
   ];
   tfoot.innerHTML = `<tr id="items-totals-row">${totalCells.join("")}</tr>`;
   fillExcelTotals(ws.items || [], ws.model_review);
-  paintTableCheck(ws);
 }
 
 function toggleLongCell(td, open) {
@@ -2329,7 +2445,6 @@ $("#review-dialog")?.addEventListener("click", (e) => {
   fillReviewDialog(state.workspace, $("#review-dialog-tabs .review-tab.active")?.dataset.reviewFile);
 });
 
-$("#btn-review")?.addEventListener("click", () => openReviewPanel());
 $("#review-dialog-close")?.addEventListener("click", () => $("#review-dialog")?.close());
 document.querySelectorAll("dialog").forEach((dialog) => {
   dialog.addEventListener("close", setModalScrollLock);
