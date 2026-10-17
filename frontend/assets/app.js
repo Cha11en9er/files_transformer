@@ -199,7 +199,8 @@ function syncFileInput() {
   const hint = $("#kit-check");
   if (!hint) return;
   if (state.sessionLocked) {
-    hint.textContent = "Файлы этой обработки зафиксированы. Новый комплект - обновите страницу.";
+    hint.textContent =
+      "Файлы зафиксированы. Граф под кнопкой - нажми линии. Новый комплект: обнови страницу.";
     hint.className = "status";
     return;
   }
@@ -743,11 +744,45 @@ const pipeline = {
       error.textContent = "";
       error.classList.add("hidden");
     }
-    $("#flow-graph")?.classList.remove("hidden");
+    const graph = $("#flow-graph");
+    if (graph) {
+      graph.classList.remove("is-idle");
+      graph.classList.add("is-live");
+    }
+    const hint = $("#flow-hint");
+    if (hint) hint.textContent = "Идёт обработка. Активный кружок темнее. Нажми линию - подробности шага.";
     this.reach("receive");
     this.stop();
     this.timer = setInterval(() => this.paint(), 1000);
-    this.paint(true);
+    this.paint();
+    graph?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  },
+  idle() {
+    this.finished = false;
+    this.failed = false;
+    this.current = "";
+    this.route = "";
+    this.hasCatalog = false;
+    this.usedSecond = false;
+    this.edgeHot = new Set();
+    this.trace = {};
+    this.nodes = Object.fromEntries(
+      FLOW_NODES.map((node) => [
+        node.id,
+        { ...node, state: "wait", started: 0, ended: 0, serverSeconds: null, detail: "" },
+      ])
+    );
+    const graph = $("#flow-graph");
+    if (graph) {
+      graph.classList.add("is-idle");
+      graph.classList.remove("is-live");
+    }
+    const hint = $("#flow-hint");
+    if (hint) {
+      hint.textContent =
+        "После «Обработать» кружки загорятся по ходу шагов. Нажми линию между ними - откроется, что сделал шаг.";
+    }
+    this.paint();
   },
   stop() {
     if (this.timer) clearInterval(this.timer);
@@ -870,6 +905,12 @@ const pipeline = {
     this.finished = true;
     this.current = "done";
     this.stop();
+    const hint = $("#flow-hint");
+    if (hint) {
+      hint.textContent =
+        "Готово. Нажми линию у «Готово» или «Сверка» - там таблица и причины модели. Новый комплект - обнови страницу.";
+    }
+    $("#flow-graph")?.classList.add("is-live");
     this.paint();
   },
   fail(message) {
@@ -989,7 +1030,14 @@ $("#flow-svg")?.addEventListener("click", (e) => {
 $("#edge-dialog-close")?.addEventListener("click", () => $("#edge-dialog")?.close());
 
 async function processShipment() {
-  if (processing || state.sessionLocked) return;
+  if (processing) return;
+  if (state.sessionLocked) {
+    const msg = "Эта поставка уже обработана. Обнови страницу, чтобы загрузить новый комплект.";
+    $("#upload-status").textContent = msg;
+    showToast(msg, { kind: "info", ms: 5000 });
+    $("#flow-graph")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    return;
+  }
   if (!state.pendingFiles.length) {
     $("#upload-status").textContent = "Выберите файлы или папки.";
     showToast("Выберите файлы или папки", { kind: "info" });
@@ -1002,6 +1050,7 @@ async function processShipment() {
     return;
   }
   if (guard) showToast(guard, { kind: "info", ms: 5000 });
+  pipeline.reset();
   setSessionLocked(true, { busy: true, buttonLabel: "Обработка…" });
   showToast("Началась обработка", { kind: "info", ms: 2500 });
   const form = $("#create-form");
@@ -1014,8 +1063,7 @@ async function processShipment() {
     if (extraFiles.has(f)) fd.append("extra_files", f, name);
     else fd.append("files", f, name);
   });
-  $("#upload-status").textContent = "";
-  pipeline.reset();
+  $("#upload-status").textContent = "Идёт обработка - смотри граф под кнопкой.";
   try {
     const created = await parseUploadStream(fd, {
       onProgress(_current, _total, filename, extra) {
@@ -3030,3 +3078,4 @@ async function pingOpenCode() {
 $("#opencode-status")?.addEventListener("click", pingOpenCode);
 refreshOpenCodeStatus();
 setInterval(() => refreshOpenCodeStatus(), 15000);
+pipeline.idle();
