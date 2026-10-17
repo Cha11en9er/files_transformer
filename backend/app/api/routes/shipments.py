@@ -548,6 +548,16 @@ def _iter_create_events(
         goods, references = split_uploads(saved, catalog_names)
         # Справочник и описание читаются тем же кодом, что инвойс. Куда файл положили, роли не задаёт.
         reading = [*goods, *references]
+        if references:
+            yield {
+                "event": "progress",
+                "current": total,
+                "total": total,
+                "filename": "Справочник",
+                "stage": "catalog",
+                "message": f"Справочник: {len(references)} файл(ов)",
+                "detail": ", ".join(name for _path, name in references[:8]),
+            }
         draft = yield from _while_busy("Чтение файлов кодом", lambda: read_goods(reading))
         catalog = load_catalogs(references)
         assessment = assess_draft(draft)
@@ -559,6 +569,15 @@ def _iter_create_events(
             "known": "Сверка итогов: форма знакомая, модель не вызывается",
             "similar": "Сверка итогов: похожая форма, модель без фото",
         }.get(route, "Сверка итогов: незнакомая форма, дальше фото и модель")
+        gap_checks = [
+            {
+                "name": item.get("name"),
+                "role": item.get("role"),
+                "gaps": item.get("gaps") or [],
+            }
+            for item in (assessment.get("checks") or [])
+            if item.get("gaps")
+        ]
         yield {
             "event": "progress",
             "current": total,
@@ -566,6 +585,11 @@ def _iter_create_events(
             "filename": "Сверка итогов",
             "stage": "check",
             "message": route_text,
+            "route": route,
+            "reasons": list(assessment.get("reasons") or []),
+            "checks": gap_checks,
+            "leftovers": list(assessment.get("leftovers") or []),
+            "unreadable": list(assessment.get("unreadable") or []),
         }
         vision_dir = tmp_dir / "vision"
         first_model = model_spec(1)
@@ -584,6 +608,12 @@ def _iter_create_events(
                     return []
 
             vision_pages = yield from _while_busy("Фото страниц", _photos)
+            photo_names: list[str] = []
+            for page in vision_pages:
+                label = getattr(page, "source_name", None) or getattr(page, "path", None)
+                name = Path(str(label)).name if label else ""
+                if name and name not in photo_names:
+                    photo_names.append(name)
             yield {
                 "event": "progress",
                 "current": total,
@@ -591,6 +621,9 @@ def _iter_create_events(
                 "filename": "Фото страниц",
                 "stage": "reconcile",
                 "message": f"Фото страниц, {len(vision_pages)} кадров",
+                "image_count": len(vision_pages),
+                "photo_names": photo_names,
+                "detail": f"{len(vision_pages)} кадров",
             }
         if route == "similar" and first_model:
             prompt = short_prompt(draft)
@@ -996,6 +1029,29 @@ async def create_shipment(
         raise HTTPException(
             status_code=400,
             detail="Не найдены файлы Excel, PDF или изображений для обработки",
+        )
+    if len(incoming) > 80:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Слишком много файлов сразу ({len(incoming)}). Оставь до 80.",
+        )
+    upload_bytes = 0
+    for upload in incoming:
+        size = getattr(upload, "size", None)
+        if isinstance(size, int) and size > 0:
+            upload_bytes += size
+        elif hasattr(upload, "file"):
+            try:
+                pos = upload.file.tell()
+                upload.file.seek(0, os.SEEK_END)
+                upload_bytes += max(0, upload.file.tell() - pos)
+                upload.file.seek(pos)
+            except Exception:
+                pass
+    if upload_bytes > 800 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail="Сумма файлов больше 800 МБ. Разбей поставку или сожми PDF.",
         )
     mixed = mixed_shipment_error([upload.filename or "" for upload in incoming])
     if mixed:

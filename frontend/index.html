@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=46" />
+  <link rel="stylesheet" href="/assets/styles.css?v=47" />
 </head>
 <body>
   <div class="app">
@@ -66,18 +66,13 @@
           <ul id="file-list"></ul>
         </div>
         <p id="kit-check" class="status"></p>
-        <div class="parse-progress hidden" id="parse-progress">
-          <div class="step-carousel" id="step-carousel">
-            <div class="step-viewport">
-              <div class="step-rail" id="step-rail" data-count="3"></div>
-            </div>
-            <div class="step-popover" id="step-popover"></div>
-          </div>
-          <div class="parse-progress-track"><span id="parse-progress-fill"></span></div>
-          <p id="parse-error" class="parse-error hidden"></p>
-        </div>
         <div class="form-actions">
           <button type="submit" class="btn primary" id="btn-process">Обработать</button>
+        </div>
+        <div class="flow-graph hidden" id="flow-graph" aria-label="Ход обработки">
+          <svg class="flow-svg" id="flow-svg" viewBox="0 0 960 150" role="img" aria-hidden="true"></svg>
+          <p id="parse-error" class="parse-error hidden"></p>
+          <p class="flow-hint hint">Нажми на линию между кружками - откроется, что сделал этот шаг.</p>
         </div>
       </form>
       <p id="upload-status" class="status"></p>
@@ -98,10 +93,6 @@
       </div>
 
       <div class="files-badges" id="files-badges"></div>
-      <div class="review-launch hidden" id="review-launch">
-        <button type="button" class="btn" id="btn-review">Что распозналось</button>
-        <span id="model-review-meta" class="hint"></span>
-      </div>
 
       <details class="header-panel" id="header-panel">
         <summary>Реквизиты документа <span id="header-summary-badge" class="header-badge" hidden></span></summary>
@@ -134,7 +125,6 @@
         </div>
         <p class="field-note table-role-note">Таблица показывает столбцы выбранного файла. Наведите на название, чтобы удалить столбец.</p>
       </div>
-      <div id="table-check" class="check-banner hidden"></div>
       <div class="legend table-legend">
         <span class="pill red">Расхождение</span>
         <span class="pill yellow">Пропуск или нет соответствия</span>
@@ -198,6 +188,17 @@
     <div id="review-dialog-body" class="review-dialog-body"></div>
   </dialog>
 
+  <dialog id="edge-dialog" class="review-dialog">
+    <div class="review-dialog-head">
+      <div>
+        <h3 id="edge-dialog-title">Шаг обработки</h3>
+        <p id="edge-dialog-meta" class="hint"></p>
+      </div>
+      <button type="button" class="btn" id="edge-dialog-close">Закрыть</button>
+    </div>
+    <div id="edge-dialog-body" class="review-dialog-body"></div>
+  </dialog>
+
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
   <dialog id="column-delete-dialog">
@@ -228,6 +229,6 @@
     </form>
   </dialog>
 
-  <script src="/assets/app.js?v=63"></script>
+  <script src="/assets/app.js?v=64"></script>
 </body>
 </html>
