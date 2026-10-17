@@ -6,6 +6,7 @@
 *.db
 backend/uploads/
 backend/exports/
+backend/data/vision_cache/
 uploads/
 exports/
 documents/

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from app.models.enums import (
     DocType,
@@ -44,6 +44,7 @@ from app.schemas.api import (
 )
 from app.services.opencode_review import review_with_opencode
 from app.services.pdf_pages import collect_vision_images
+from app.services.vision_cache import resolve_vision_file, stash_vision_pages
 from app.services.prepare_site import (
     apply_verdict,
     fee_rows,
@@ -565,6 +566,25 @@ def _iter_create_events(
         draft["sheet_checks"] = assessment.get("checks") or []
         draft["leftovers"] = assessment.get("leftovers") or []
         lots = goods_lots(draft)
+        draft_docs = [
+            {
+                "name": str(doc.get("name") or ""),
+                "role": str(doc.get("role") or ""),
+                "roles": [str(r) for r in (doc.get("roles") or []) if r],
+            }
+            for doc in (draft.get("documents") or [])
+        ]
+        yield {
+            "event": "progress",
+            "current": total,
+            "total": total,
+            "filename": "Чтение файлов кодом",
+            "stage": "reconcile",
+            "message": f"Код прочитал: {len(lots)} лот(ов), {len(draft_docs)} файл(ов)",
+            "draft_lots": len(lots),
+            "draft_docs": draft_docs,
+            "detail": f"{len(lots)} лотов",
+        }
         route_text = {
             "known": "Сверка итогов: форма знакомая, модель не вызывается",
             "similar": "Сверка итогов: похожая форма, модель без фото",
@@ -590,6 +610,8 @@ def _iter_create_events(
             "checks": gap_checks,
             "leftovers": list(assessment.get("leftovers") or []),
             "unreadable": list(assessment.get("unreadable") or []),
+            "draft_lots": len(lots),
+            "draft_docs": draft_docs,
         }
         vision_dir = tmp_dir / "vision"
         first_model = model_spec(1)
@@ -598,6 +620,8 @@ def _iter_create_events(
         second_chip = _model_chip(second_model) if second_model else ""
         need_photos = route == "unknown" and bool(first_model)
         vision_pages: list = []
+        vision_token = ""
+        vision_photos: list[dict[str, Any]] = []
         if need_photos:
             focus = vision_paths(reading, assessment)
 
@@ -608,12 +632,9 @@ def _iter_create_events(
                     return []
 
             vision_pages = yield from _while_busy("Фото страниц", _photos)
-            photo_names: list[str] = []
-            for page in vision_pages:
-                label = getattr(page, "source_name", None) or getattr(page, "path", None)
-                name = Path(str(label)).name if label else ""
-                if name and name not in photo_names:
-                    photo_names.append(name)
+            vision_token = uuid.uuid4().hex
+            vision_photos = stash_vision_pages(vision_token, vision_pages)
+            photo_names = [item["name"] for item in vision_photos]
             yield {
                 "event": "progress",
                 "current": total,
@@ -623,6 +644,8 @@ def _iter_create_events(
                 "message": f"Фото страниц, {len(vision_pages)} кадров",
                 "image_count": len(vision_pages),
                 "photo_names": photo_names,
+                "photos": vision_photos,
+                "vision_token": vision_token,
                 "detail": f"{len(vision_pages)} кадров",
             }
         if route == "similar" and first_model:
@@ -1007,7 +1030,23 @@ def _iter_create_events(
                 "reasons": list(assessment.get("reasons") or []),
             },
         )
-        yield {"event": "done", **payload.model_dump(mode="json")}
+        done = payload.model_dump(mode="json")
+        if vision_photos:
+            done["vision_photos"] = vision_photos
+            done["vision_token"] = vision_token
+        yield {"event": "done", **done}
+
+
+@router.get("/vision/{token}/{filename}")
+def get_vision_frame(token: str, filename: str) -> FileResponse:
+    path = resolve_vision_file(token, filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Фото уже удалено или не найдено")
+    return FileResponse(
+        path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @router.post("/")
