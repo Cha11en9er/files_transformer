@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=48" />
+  <link rel="stylesheet" href="/assets/styles.css?v=50" />
 </head>
 <body>
   <div class="app">
@@ -67,13 +67,12 @@
         </div>
         <p id="kit-check" class="status"></p>
         <div class="form-actions">
-          <button type="submit" class="btn primary" id="btn-process">Обработать</button>
+          <button type="button" class="btn primary" id="btn-process">Обработать</button>
         </div>
       </form>
       <div class="flow-graph is-idle" id="flow-graph" aria-label="Ход обработки">
-        <svg class="flow-svg" id="flow-svg" viewBox="0 0 960 150" role="img" aria-hidden="true"></svg>
+        <svg class="flow-svg" id="flow-svg" viewBox="0 0 1200 220" role="img" aria-hidden="true"></svg>
         <p id="parse-error" class="parse-error hidden"></p>
-        <p class="flow-hint hint" id="flow-hint">После «Обработать» кружки загорятся по ходу шагов. Нажми линию между ними - откроется, что сделал шаг.</p>
       </div>
       <p id="upload-status" class="status"></p>
     </section>
@@ -229,6 +228,6 @@
     </form>
   </dialog>
 
-  <script src="/assets/app.js?v=65"></script>
+  <script src="/assets/app.js?v=67"></script>
 </body>
 </html>

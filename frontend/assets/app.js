@@ -194,8 +194,11 @@ function syncFileInput() {
     li.textContent = msg;
     list.appendChild(li);
   });
-  const submitBtn = $("#btn-process") || $("#create-form button[type='submit']");
-  if (submitBtn && !state.sessionLocked && !processing) submitBtn.textContent = "Обработать";
+  const submitBtn = processButton();
+  if (submitBtn && !state.sessionLocked && !processing) {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Обработать";
+  }
   const hint = $("#kit-check");
   if (!hint) return;
   if (state.sessionLocked) {
@@ -646,30 +649,39 @@ dropzoneWrap?.addEventListener("drop", async (e) => {
 });
 
 const FLOW_NODES = [
-  { id: "receive", title: "Приём", x: 48, y: 78 },
-  { id: "catalog", title: "Справочник", x: 48, y: 28 },
-  { id: "read", title: "Чтение", x: 168, y: 78 },
-  { id: "check", title: "Сверка", x: 300, y: 78 },
-  { id: "photos", title: "Фото", x: 430, y: 28 },
-  { id: "verdict", title: "Модель", x: 560, y: 78 },
-  { id: "verdict2", title: "Сильнее", x: 560, y: 28 },
-  { id: "assemble", title: "Сборка", x: 720, y: 78 },
-  { id: "done", title: "Готово", x: 880, y: 78 },
+  { id: "receive", title: "Приём", x: 70, y: 155 },
+  { id: "catalog", title: "Справочник", x: 70, y: 55 },
+  { id: "read", title: "Чтение", x: 250, y: 155 },
+  { id: "check", title: "Сверка", x: 430, y: 155 },
+  { id: "photos", title: "Фото", x: 610, y: 55 },
+  { id: "verdict", title: "Модель", x: 790, y: 155 },
+  { id: "verdict2", title: "Сильнее", x: 790, y: 55 },
+  { id: "assemble", title: "Сборка", x: 990, y: 155 },
+  { id: "done", title: "Готово", x: 1140, y: 155 },
 ];
 
 const FLOW_EDGES = [
-  { id: "receive-catalog", from: "receive", to: "catalog", title: "Справочник в загрузке" },
-  { id: "receive-read", from: "receive", to: "read", title: "Файлы поставки" },
-  { id: "catalog-read", from: "catalog", to: "read", title: "Справочник к чтению" },
-  { id: "read-check", from: "read", to: "check", title: "Что прочитал код" },
-  { id: "check-assemble", from: "check", to: "assemble", title: "Без модели", path: "M300,78 C420,120 560,120 720,78" },
-  { id: "check-photos", from: "check", to: "photos", title: "Почему нужны фото" },
-  { id: "check-verdict", from: "check", to: "verdict", title: "Почему вызвали модель" },
-  { id: "photos-verdict", from: "photos", to: "verdict", title: "Какие кадры ушли" },
-  { id: "verdict-verdict2", from: "verdict", to: "verdict2", title: "Обычная не уверена" },
-  { id: "verdict-assemble", from: "verdict", to: "assemble", title: "Вердикт обычной" },
-  { id: "verdict2-assemble", from: "verdict2", to: "assemble", title: "Вердикт сильной" },
-  { id: "assemble-done", from: "assemble", to: "done", title: "Что распозналось" },
+  { id: "receive-catalog", from: "receive", to: "catalog", title: "Справочник в загрузке", mark: "справочник" },
+  { id: "receive-read", from: "receive", to: "read", title: "Файлы поставки", mark: "файлы" },
+  { id: "catalog-read", from: "catalog", to: "read", title: "Справочник к чтению", mark: "в чтение" },
+  { id: "read-check", from: "read", to: "check", title: "Что прочитал код", mark: "код" },
+  {
+    id: "check-assemble",
+    from: "check",
+    to: "assemble",
+    title: "Без модели",
+    mark: "без модели",
+    path: "M430,155 C580,210 820,210 990,155",
+    lx: 710,
+    ly: 205,
+  },
+  { id: "check-photos", from: "check", to: "photos", title: "Почему нужны фото", mark: "нужны фото" },
+  { id: "check-verdict", from: "check", to: "verdict", title: "Почему вызвали модель", mark: "в модель" },
+  { id: "photos-verdict", from: "photos", to: "verdict", title: "Какие кадры ушли", mark: "кадры" },
+  { id: "verdict-verdict2", from: "verdict", to: "verdict2", title: "Обычная не уверена", mark: "сильнее" },
+  { id: "verdict-assemble", from: "verdict", to: "assemble", title: "Вердикт обычной", mark: "вердикт" },
+  { id: "verdict2-assemble", from: "verdict2", to: "assemble", title: "Вердикт сильной", mark: "вердикт+" },
+  { id: "assemble-done", from: "assemble", to: "done", title: "Что распозналось", mark: "итог" },
 ];
 
 function formatStepSeconds(ms) {
@@ -749,8 +761,6 @@ const pipeline = {
       graph.classList.remove("is-idle");
       graph.classList.add("is-live");
     }
-    const hint = $("#flow-hint");
-    if (hint) hint.textContent = "Идёт обработка. Активный кружок темнее. Нажми линию - подробности шага.";
     this.reach("receive");
     this.stop();
     this.timer = setInterval(() => this.paint(), 1000);
@@ -776,11 +786,6 @@ const pipeline = {
     if (graph) {
       graph.classList.add("is-idle");
       graph.classList.remove("is-live");
-    }
-    const hint = $("#flow-hint");
-    if (hint) {
-      hint.textContent =
-        "После «Обработать» кружки загорятся по ходу шагов. Нажми линию между ними - откроется, что сделал шаг.";
     }
     this.paint();
   },
@@ -905,11 +910,6 @@ const pipeline = {
     this.finished = true;
     this.current = "done";
     this.stop();
-    const hint = $("#flow-hint");
-    if (hint) {
-      hint.textContent =
-        "Готово. Нажми линию у «Готово» или «Сверка» - там таблица и причины модели. Новый комплект - обнови страницу.";
-    }
     $("#flow-graph")?.classList.add("is-live");
     this.paint();
   },
@@ -939,6 +939,14 @@ const pipeline = {
     if (node.state === "skip") return "не было";
     return "";
   },
+  edgeLabelAt(edge, a, b) {
+    if (Number.isFinite(edge.lx) && Number.isFinite(edge.ly)) return { x: edge.lx, y: edge.ly };
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    if (Math.abs(a.x - b.x) < 8) return { x: mx + 36, y: my };
+    if (Math.abs(a.y - b.y) < 8) return { x: mx, y: my - 12 };
+    return { x: mx + 10, y: my - 8 };
+  },
   paint() {
     const svg = $("#flow-svg");
     if (!svg) return;
@@ -947,11 +955,20 @@ const pipeline = {
       const a = byId[edge.from];
       const b = byId[edge.to];
       const d = edge.path || `M${a.x},${a.y} L${b.x},${b.y}`;
+      const mid = this.edgeLabelAt(edge, a, b);
       let klass = "flow-edge";
-      if (this.edgeHot.has(edge.id)) klass += " is-hot";
-      else if (this.nodes[edge.from]?.state === "skip" || this.nodes[edge.to]?.state === "skip") klass += " is-skip";
-      else klass += " is-future";
-      return `<path class="flow-edge-hit" data-edge="${edge.id}" d="${d}" /><path class="${klass}" data-edge="${edge.id}" d="${d}" />`;
+      let labelKlass = "flow-edge-label";
+      if (this.edgeHot.has(edge.id)) {
+        klass += " is-hot";
+        labelKlass += " is-hot";
+      } else if (this.nodes[edge.from]?.state === "skip" || this.nodes[edge.to]?.state === "skip") {
+        klass += " is-skip";
+        labelKlass += " is-skip";
+      } else {
+        klass += " is-future";
+      }
+      const mark = edge.mark ? `<text class="${labelKlass}" x="${mid.x}" y="${mid.y}">${escapeHtml(edge.mark)}</text>` : "";
+      return `<path class="flow-edge-hit" data-edge="${edge.id}" d="${d}" /><path class="${klass}" data-edge="${edge.id}" d="${d}" />${mark}`;
     }).join("");
     const nodeMarks = FLOW_NODES.map((spec) => {
       const node = this.nodes[spec.id] || spec;
@@ -1218,6 +1235,10 @@ async function parseUploadStream(fd, hooks) {
 }
 
 $("#create-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  await processShipment();
+});
+$("#btn-process")?.addEventListener("click", async (e) => {
   e.preventDefault();
   await processShipment();
 });
