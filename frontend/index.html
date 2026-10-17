@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=50" />
+  <link rel="stylesheet" href="/assets/styles.css?v=51" />
 </head>
 <body>
   <div class="app">
@@ -198,6 +198,16 @@
     <div id="edge-dialog-body" class="review-dialog-body"></div>
   </dialog>
 
+  <dialog id="photo-lightbox" class="photo-lightbox">
+    <div class="photo-lightbox-head">
+      <h3 id="photo-lightbox-title">Фото</h3>
+      <button type="button" class="btn" id="photo-lightbox-close">Закрыть</button>
+    </div>
+    <div class="photo-zoom-stage" id="photo-zoom-stage">
+      <img id="photo-lightbox-img" alt="" />
+    </div>
+  </dialog>
+
   <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
   <dialog id="column-delete-dialog">
@@ -228,6 +238,6 @@
     </form>
   </dialog>
 
-  <script src="/assets/app.js?v=68"></script>
+  <script src="/assets/app.js?v=69"></script>
 </body>
 </html>

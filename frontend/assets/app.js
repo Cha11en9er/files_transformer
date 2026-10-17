@@ -705,7 +705,7 @@ function pipelineStep(filename, stage, message) {
   if (stage === "model" || text.includes("обычная модель") || text.includes("вердикт модели") || text.includes("вердикт")) return "verdict";
   if (text.includes("сборк")) return "assemble";
   if (text.includes("фото")) return "photos";
-  if (text.includes("чтени")) return "read";
+  if (text.includes("чтени") || text.includes("прочитал")) return "read";
   if (stage === "parse") return "receive";
   return "";
 }
@@ -740,7 +740,11 @@ const pipeline = {
       leftovers: [],
       unreadable: [],
       photos: [],
+      photoNames: [],
       photoCount: 0,
+      visionToken: "",
+      draftLots: null,
+      draftDocs: [],
       model: {},
       model2: {},
     };
@@ -800,8 +804,12 @@ const pipeline = {
     if (Array.isArray(extra.checks)) this.trace.checks = extra.checks;
     if (Array.isArray(extra.leftovers)) this.trace.leftovers = extra.leftovers;
     if (Array.isArray(extra.unreadable)) this.trace.unreadable = extra.unreadable;
-    if (Array.isArray(extra.photo_names)) this.trace.photos = extra.photo_names;
+    if (Array.isArray(extra.photo_names)) this.trace.photoNames = extra.photo_names;
+    if (Array.isArray(extra.photos) && extra.photos.length) this.trace.photos = extra.photos;
+    if (extra.vision_token) this.trace.visionToken = extra.vision_token;
     if (Number.isFinite(extra.image_count)) this.trace.photoCount = extra.image_count;
+    if (Number.isFinite(extra.draft_lots)) this.trace.draftLots = extra.draft_lots;
+    if (Array.isArray(extra.draft_docs)) this.trace.draftDocs = extra.draft_docs;
     if (extra.message && /кадр/i.test(extra.message)) {
       const frames = String(extra.message).match(/(\d+)\s*кадр/);
       if (frames) this.trace.photoCount = Number(frames[1]);
@@ -975,6 +983,7 @@ const pipeline = {
       const time = this.timeLabel(node);
       return `<g class="flow-node is-${node.state || "wait"}" data-node="${spec.id}">
         <circle cx="${spec.x}" cy="${spec.y}" r="18"></circle>
+        <circle class="flow-node-hit" cx="${spec.x}" cy="${spec.y}" r="26" fill="transparent" stroke="none"></circle>
         <text x="${spec.x}" y="${spec.y - 28}">${escapeHtml(spec.title)}</text>
         <text class="flow-sub" x="${spec.x}" y="${spec.y + 34}">${escapeHtml(time)}</text>
       </g>`;
@@ -983,18 +992,136 @@ const pipeline = {
   },
 };
 
+const NODE_STATE_RU = {
+  wait: "ещё не было",
+  run: "сейчас",
+  past: "уже прошло",
+  skip: "не вызывали",
+  fail: "ошибка",
+};
+
+function stepBadge(state) {
+  const key = state || "wait";
+  return `<span class="step-badge is-${escapeHtml(key)}">${escapeHtml(NODE_STATE_RU[key] || key)}</span>`;
+}
+
+function openStepDialog({ title, meta, html }) {
+  const dialog = $("#edge-dialog");
+  const titleEl = $("#edge-dialog-title");
+  const metaEl = $("#edge-dialog-meta");
+  const body = $("#edge-dialog-body");
+  if (!dialog || !body) return;
+  if (titleEl) titleEl.textContent = title || "Шаг обработки";
+  if (metaEl) metaEl.textContent = meta || "";
+  body.innerHTML = html || "";
+  openDialog(dialog);
+}
+
 function openEdgeDialog(edgeId) {
   const edge = FLOW_EDGES.find((item) => item.id === edgeId);
   if (!edge) return;
-  const dialog = $("#edge-dialog");
-  const title = $("#edge-dialog-title");
-  const meta = $("#edge-dialog-meta");
-  const body = $("#edge-dialog-body");
-  if (!dialog || !body) return;
-  if (title) title.textContent = edge.title;
-  if (meta) meta.textContent = `${pipeline.nodes[edge.from]?.title || edge.from} → ${pipeline.nodes[edge.to]?.title || edge.to}`;
-  body.innerHTML = edgeDialogHtml(edgeId);
-  openDialog(dialog);
+  const from = pipeline.nodes[edge.from];
+  const to = pipeline.nodes[edge.to];
+  openStepDialog({
+    title: edge.title,
+    meta: `${from?.title || edge.from} → ${to?.title || edge.to}`,
+    html: `${stepBadge(pipeline.edgeHot.has(edgeId) ? "past" : to?.state || from?.state)}${edgeDialogHtml(edgeId)}`,
+  });
+}
+
+function openNodeDialog(nodeId) {
+  const node = pipeline.nodes[nodeId];
+  const spec = FLOW_NODES.find((item) => item.id === nodeId);
+  if (!node && !spec) return;
+  const title = spec?.title || nodeId;
+  const time = node ? pipeline.timeLabel(node) : "";
+  openStepDialog({
+    title,
+    meta: time ? `${NODE_STATE_RU[node.state] || node.state} · ${time}` : NODE_STATE_RU[node?.state] || "",
+    html: `${stepBadge(node?.state)}${nodeDialogHtml(nodeId)}`,
+  });
+}
+
+function draftReadHtml() {
+  const ws = state.workspace;
+  const tr = pipeline.trace || {};
+  const sources = reviewSources(ws).files;
+  const fileStatuses = (ws?.files || [])
+    .filter((f) => f.filename && f.filename !== "сверка" && f.filename !== "модель")
+    .map((f) => `<li><strong>${escapeHtml(f.filename || "")}</strong>: ${escapeHtml(f.parse_message || "")}</li>`)
+    .join("");
+  const draftDocs = (tr.draftDocs || [])
+    .map((d) => {
+      const roles = (d.roles || []).length ? ` · ${(d.roles || []).join(", ")}` : d.role ? ` · ${d.role}` : "";
+      return `<li><strong>${escapeHtml(d.name || "")}</strong>${escapeHtml(roles)}</li>`;
+    })
+    .join("");
+  const lots = Number.isFinite(tr.draftLots) ? tr.draftLots : null;
+  const readDone = ["past", "run", "fail"].includes(pipeline.nodes.read?.state) || pipeline.finished;
+  let head = "";
+  if (lots != null) {
+    head = `<p class="check-why">Код уже прочитал: ${lots} лот(ов)${draftDocs ? `, файлы ниже` : ""}.</p>`;
+  } else if (readDone) {
+    head = `<p class="check-why">Чтение закончено. Ниже то, что собрал код до модели.</p>`;
+  } else {
+    head = `<p class="check-why">Идёт чтение файлов кодом.</p>`;
+  }
+  const docsBlock = draftDocs
+    ? `<div class="check-card"><h4>Файлы в черновике</h4><ul>${draftDocs}</ul></div>`
+    : "";
+  const statusBlock = fileStatuses
+    ? `<div class="check-card"><h4>Статусы файлов</h4><ul>${fileStatuses}</ul></div>`
+    : "";
+  const tables = sources
+    .map(
+      (file) => `<div class="check-card"><h4>${escapeHtml(file.filename || "файл")}</h4>
+        <p class="check-why">${escapeHtml(file.note || file.meaning || "Таблица из черновика кода")}</p>
+        ${renderRecognizedTable(file.table, file)}</div>`
+    )
+    .join("");
+  if (tables || docsBlock || statusBlock) {
+    return `<div class="check-card"><h4>Черновик кода</h4>${head}</div>${docsBlock}${statusBlock}${tables}`;
+  }
+  if (readDone) {
+    return `<div class="check-card"><h4>Черновик кода</h4>${head}<p class="hint">Подробная таблица появится после сборки - открой «Готово».</p></div>`;
+  }
+  return `<div class="check-card"><h4>Черновик кода</h4>${head}</div>`;
+}
+
+function visionPhotosList() {
+  const tr = pipeline.trace || {};
+  if (Array.isArray(tr.photos) && tr.photos.length && typeof tr.photos[0] === "object") {
+    return tr.photos;
+  }
+  const token = tr.visionToken || "";
+  return (tr.photoNames || []).map((name) => ({
+    name,
+    source: name,
+    url: token ? `/api/v1/shipments/vision/${encodeURIComponent(token)}/${encodeURIComponent(name)}` : "",
+  }));
+}
+
+function renderVisionGallery() {
+  const photos = visionPhotosList().filter((p) => p.url);
+  const count = photos.length || pipeline.trace.photoCount || 0;
+  if (!photos.length) {
+    const names = (pipeline.trace.photoNames || []).map((n) => `<li>${escapeHtml(n)}</li>`).join("");
+    return `<div class="check-card"><h4>Фото для модели</h4>
+      <p class="check-why">${count} кадров. Хранятся до обновления страницы или около часа.</p>
+      <ul>${names || "<li>кадры ещё не пришли или уже удалены</li>"}</ul></div>`;
+  }
+  const grid = photos
+    .map(
+      (photo, index) => `<figure>
+        <img class="photo-thumb" src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.name || "")}"
+          data-photo-url="${escapeHtml(photo.url)}" data-photo-title="${escapeHtml(photo.source || photo.name || `кадр ${index + 1}`)}" />
+        <figcaption class="photo-thumb-cap">${escapeHtml(photo.source || photo.name || "")}</figcaption>
+      </figure>`
+    )
+    .join("");
+  return `<div class="check-card"><h4>Фото для модели</h4>
+    <p class="check-why">${photos.length} кадров с проблемных листов. Хранятся до обновления страницы или около часа. Нажми кадр - полный размер и зум.</p>
+    <div class="photo-grid">${grid}</div></div>`;
 }
 
 function edgeDialogHtml(edgeId) {
@@ -1011,18 +1138,25 @@ function edgeDialogHtml(edgeId) {
   if (edgeId === "catalog-read") {
     return `<div class="check-card"><h4>Справочник</h4><p class="check-why">Допишет код и описание только в пустые клетки по артикулу.</p></div>`;
   }
-  if (edgeId === "read-check") {
-    const files = (ws?.files || []).map((f) => `<li>${escapeHtml(f.filename || "")}: ${escapeHtml(f.parse_message || "")}</li>`).join("");
-    return `<div class="check-card"><h4>Черновик кода</h4><p class="check-why">Таблица собрана до модели. Ниже статусы файлов.</p><ul>${files || "<li>ещё читаем</li>"}</ul></div>`;
-  }
-  if (edgeId === "check-assemble" || edgeId === "check-photos" || edgeId === "check-verdict") {
+  if (edgeId === "read-check") return draftReadHtml();
+  if (edgeId === "check-assemble" || edgeId === "check-verdict") {
     return renderSheetChecks({ ...rec, reasons: rec.reasons?.length ? rec.reasons : tr.reasons, checks: rec.checks?.length ? rec.checks : tr.checks, leftovers: rec.leftovers?.length ? rec.leftovers : tr.leftovers, unreadable: rec.unreadable?.length ? rec.unreadable : tr.unreadable, route: rec.route || pipeline.route })
       || `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Пока нет расхождений или шаг ещё идёт.</p></div>`;
   }
-  if (edgeId === "photos-verdict") {
-    const names = (tr.photos || []).map((n) => `<li>${escapeHtml(n)}</li>`).join("");
-    return `<div class="check-card"><h4>Фото для модели</h4><p class="check-why">${tr.photoCount || 0} кадров с проблемных листов. Сами jpg на сервере временные.</p><ul>${names || "<li>имена кадров не пришли</li>"}</ul></div>`;
+  if (edgeId === "check-photos") {
+    const checks =
+      renderSheetChecks({
+        ...rec,
+        reasons: rec.reasons?.length ? rec.reasons : tr.reasons,
+        checks: rec.checks?.length ? rec.checks : tr.checks,
+        leftovers: rec.leftovers?.length ? rec.leftovers : tr.leftovers,
+        unreadable: rec.unreadable?.length ? rec.unreadable : tr.unreadable,
+        route: rec.route || pipeline.route,
+      }) ||
+      `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Нужны фото: форма незнакомая или текст не читается.</p></div>`;
+    return `${checks}${renderVisionGallery()}`;
   }
+  if (edgeId === "photos-verdict") return renderVisionGallery();
   if (edgeId === "verdict-verdict2") {
     return `<div class="check-card"><h4>Улучшенная модель</h4><p class="check-why">Мало столбцов, сомнения или дыра мест. Смотрит более сильная модель.</p></div>`;
   }
@@ -1040,11 +1174,106 @@ function edgeDialogHtml(edgeId) {
   return `<div class="check-card"><p class="check-why">Нет данных по этому ребру.</p></div>`;
 }
 
+function nodeDialogHtml(nodeId) {
+  const map = {
+    receive: ["receive-read", "receive-catalog"],
+    catalog: ["receive-catalog", "catalog-read"],
+    read: ["read-check"],
+    check: ["check-assemble", "check-photos", "check-verdict"],
+    photos: ["photos-verdict"],
+    verdict: ["verdict-assemble", "check-verdict"],
+    verdict2: ["verdict-verdict2", "verdict2-assemble"],
+    assemble: ["assemble-done"],
+    done: ["assemble-done"],
+  };
+  if (nodeId === "read") return draftReadHtml();
+  if (nodeId === "photos") return renderVisionGallery();
+  if (nodeId === "check") {
+    const tr = pipeline.trace || {};
+    const rec = recognitionOf(state.workspace);
+    return renderSheetChecks({
+      ...rec,
+      reasons: rec.reasons?.length ? rec.reasons : tr.reasons,
+      checks: rec.checks?.length ? rec.checks : tr.checks,
+      leftovers: rec.leftovers?.length ? rec.leftovers : tr.leftovers,
+      unreadable: rec.unreadable?.length ? rec.unreadable : tr.unreadable,
+      route: rec.route || pipeline.route,
+    }) || `<div class="check-card"><h4>Сверка</h4><p class="check-why">Пока нет данных сверки.</p></div>`;
+  }
+  const edges = map[nodeId] || [];
+  const parts = edges.map((id) => edgeDialogHtml(id)).filter(Boolean);
+  return parts.join("") || `<div class="check-card"><p class="check-why">По этому шагу пока нечего показать.</p></div>`;
+}
+
+const photoZoom = { scale: 1, x: 0, y: 0, drag: false, lastX: 0, lastY: 0 };
+
+function applyPhotoZoom() {
+  const img = $("#photo-lightbox-img");
+  if (!img) return;
+  img.style.transform = `translate(${photoZoom.x}px, ${photoZoom.y}px) scale(${photoZoom.scale})`;
+}
+
+function openPhotoLightbox(url, title) {
+  const dialog = $("#photo-lightbox");
+  const img = $("#photo-lightbox-img");
+  const heading = $("#photo-lightbox-title");
+  if (!dialog || !img || !url) return;
+  photoZoom.scale = 1;
+  photoZoom.x = 0;
+  photoZoom.y = 0;
+  img.src = url;
+  if (heading) heading.textContent = title || "Фото";
+  applyPhotoZoom();
+  openDialog(dialog);
+}
+
 $("#flow-svg")?.addEventListener("click", (e) => {
   const edge = e.target.closest("[data-edge]");
-  if (edge?.dataset.edge) openEdgeDialog(edge.dataset.edge);
+  if (edge?.dataset.edge) {
+    openEdgeDialog(edge.dataset.edge);
+    return;
+  }
+  const node = e.target.closest("[data-node]");
+  if (node?.dataset.node) openNodeDialog(node.dataset.node);
 });
 $("#edge-dialog-close")?.addEventListener("click", () => $("#edge-dialog")?.close());
+$("#edge-dialog-body")?.addEventListener("click", (e) => {
+  const thumb = e.target.closest("[data-photo-url]");
+  if (!thumb) return;
+  openPhotoLightbox(thumb.dataset.photoUrl, thumb.dataset.photoTitle);
+});
+$("#photo-lightbox-close")?.addEventListener("click", () => $("#photo-lightbox")?.close());
+$("#photo-zoom-stage")?.addEventListener(
+  "wheel",
+  (e) => {
+    e.preventDefault();
+    const next = photoZoom.scale * (e.deltaY < 0 ? 1.12 : 0.9);
+    photoZoom.scale = Math.min(6, Math.max(0.4, next));
+    applyPhotoZoom();
+  },
+  { passive: false }
+);
+$("#photo-zoom-stage")?.addEventListener("pointerdown", (e) => {
+  photoZoom.drag = true;
+  photoZoom.lastX = e.clientX;
+  photoZoom.lastY = e.clientY;
+  e.currentTarget.classList.add("is-dragging");
+  e.currentTarget.setPointerCapture?.(e.pointerId);
+});
+$("#photo-zoom-stage")?.addEventListener("pointermove", (e) => {
+  if (!photoZoom.drag) return;
+  photoZoom.x += e.clientX - photoZoom.lastX;
+  photoZoom.y += e.clientY - photoZoom.lastY;
+  photoZoom.lastX = e.clientX;
+  photoZoom.lastY = e.clientY;
+  applyPhotoZoom();
+});
+["pointerup", "pointercancel", "pointerleave"].forEach((evt) => {
+  $("#photo-zoom-stage")?.addEventListener(evt, (e) => {
+    photoZoom.drag = false;
+    e.currentTarget.classList.remove("is-dragging");
+  });
+});
 
 async function processShipment() {
   if (processing) return;
@@ -1095,7 +1324,11 @@ async function processShipment() {
           leftovers: extra?.leftovers,
           unreadable: extra?.unreadable,
           photo_names: extra?.photo_names,
+          photos: extra?.photos,
+          vision_token: extra?.vision_token,
           image_count: extra?.image_count,
+          draft_lots: extra?.draft_lots,
+          draft_docs: extra?.draft_docs,
           message: extra?.message,
         });
       },
@@ -1106,6 +1339,12 @@ async function processShipment() {
     pipeline.reach("assemble");
     await new Promise((resolve) => window.setTimeout(resolve, 400));
     pipeline.complete(created.verdict_run || {});
+    if (Array.isArray(created.vision_photos) && created.vision_photos.length) {
+      pipeline.trace.photos = created.vision_photos;
+      pipeline.trace.photoCount = created.vision_photos.length;
+      pipeline.trace.photoNames = created.vision_photos.map((p) => p.name).filter(Boolean);
+    }
+    if (created.vision_token) pipeline.trace.visionToken = created.vision_token;
     state.shipmentId = created.id;
     state.workspace = created;
     applyShipmentTitle(created.title, { force: true });
@@ -1194,7 +1433,11 @@ async function parseUploadStream(fd, hooks) {
             leftovers: event.leftovers,
             unreadable: event.unreadable,
             photo_names: event.photo_names,
+            photos: event.photos,
+            vision_token: event.vision_token,
             image_count: event.image_count,
+            draft_lots: event.draft_lots,
+            draft_docs: event.draft_docs,
           });
         } else if (event.event === "file") {
           hooks.onFile(event.filename, event.status, event.message);
