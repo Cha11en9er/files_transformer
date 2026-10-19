@@ -657,13 +657,16 @@ dropzoneWrap?.addEventListener("drop", async (e) => {
 
 const FLOW_NODES = [
   { id: "receive", title: "Приём", x: 70, y: 155 },
-  { id: "catalog", title: "Справочник", x: 70, y: 55 },
-  { id: "read", title: "Чтение", x: 250, y: 155 },
-  { id: "check", title: "Сверка", x: 430, y: 155 },
-  { id: "files", title: "Файлы", x: 610, y: 55 },
-  { id: "verdict", title: "Модель", x: 790, y: 155 },
-  { id: "verdict2", title: "Сильнее", x: 790, y: 55 },
-  { id: "assemble", title: "Сборка", x: 990, y: 155 },
+  { id: "catalog", title: "Справочник", x: 55, y: 40 },
+  { id: "read", title: "Чтение", x: 170, y: 155 },
+  { id: "header", title: "Шапка", x: 300, y: 55 },
+  { id: "lines", title: "Строки", x: 420, y: 55 },
+  { id: "join", title: "Склейка", x: 540, y: 55 },
+  { id: "check", title: "Сверка", x: 420, y: 155 },
+  { id: "files", title: "Файлы", x: 660, y: 55 },
+  { id: "verdict", title: "Модель", x: 800, y: 155 },
+  { id: "verdict2", title: "Сильнее", x: 800, y: 55 },
+  { id: "assemble", title: "Сборка", x: 980, y: 155 },
   { id: "done", title: "Готово", x: 1140, y: 155 },
 ];
 
@@ -671,6 +674,10 @@ const FLOW_EDGES = [
   { id: "receive-catalog", from: "receive", to: "catalog", title: "Справочник в загрузке", mark: "справочник" },
   { id: "receive-read", from: "receive", to: "read", title: "Файлы поставки", mark: "файлы" },
   { id: "catalog-read", from: "catalog", to: "read", title: "Справочник к чтению", mark: "в чтение" },
+  { id: "read-header", from: "read", to: "header", title: "Шапка из документов", mark: "шапка" },
+  { id: "header-lines", from: "header", to: "lines", title: "Строки тела", mark: "строки" },
+  { id: "lines-join", from: "lines", to: "join", title: "Склейка лотов", mark: "склейка" },
+  { id: "join-check", from: "join", to: "check", title: "К сверке итогов", mark: "к сверке" },
   { id: "read-check", from: "read", to: "check", title: "Что прочитал код", mark: "код" },
   {
     id: "check-assemble",
@@ -678,8 +685,8 @@ const FLOW_EDGES = [
     to: "assemble",
     title: "Без модели",
     mark: "без модели",
-    path: "M430,155 C580,210 820,210 990,155",
-    lx: 710,
+    path: "M420,155 C580,210 820,210 980,155",
+    lx: 700,
     ly: 205,
   },
   { id: "check-files", from: "check", to: "files", title: "Файлы на диске для модели", mark: "на диск" },
@@ -691,9 +698,9 @@ const FLOW_EDGES = [
   { id: "assemble-done", from: "assemble", to: "done", title: "Что распозналось", mark: "итог" },
 ];
 
-/** Основные этапы кольца вокруг активной вершины. */
-const FLOW_RING_STAGES = ["receive", "read", "check", "files", "verdict", "assemble", "done"];
-const MODEL_PHASE_ORDER = ["session", "read", "think", "limit", "timeout", "error"];
+/** Этапы кольца: чтение → шапка → строки → склейка → сверка → файлы → модель → сборка. */
+const FLOW_RING_STAGES = ["receive", "read", "header", "lines", "join", "check", "files", "verdict", "assemble", "done"];
+const MODEL_PHASE_ORDER = ["open", "header", "packing", "lots", "error"];
 
 function formatStepSeconds(ms) {
   const sec = Math.max(0, Math.round(ms / 1000));
@@ -734,6 +741,9 @@ function progressSeconds(message) {
 function pipelineStep(filename, stage, message) {
   const text = `${filename || ""} ${message || ""}`.toLowerCase();
   if (stage === "catalog" || text.includes("справочник")) return "catalog";
+  if (stage === "header" || text.startsWith("шапка")) return "header";
+  if (stage === "lines" || text.startsWith("строки")) return "lines";
+  if (stage === "join" || text.includes("склейк")) return "join";
   if (stage === "check" || text.includes("сверка итог")) return "check";
   if (stage === "model2" || text.includes("улучшенная модель") || text.includes("вторая модель")) return "verdict2";
   if (stage === "model" || text.includes("обычная модель") || text.includes("вердикт модели") || text.includes("вердикт")) return "verdict";
@@ -852,8 +862,11 @@ const pipeline = {
     const map = {
       receive: ["receive-read"],
       catalog: ["receive-catalog", "catalog-read"],
-      read: ["receive-read", "read-check"],
-      check: ["read-check", "check-files"],
+      read: ["receive-read", "read-header", "read-check"],
+      header: ["read-header", "header-lines"],
+      lines: ["header-lines", "lines-join"],
+      join: ["lines-join", "join-check"],
+      check: ["join-check", "read-check", "check-files"],
       files: ["check-files", "files-verdict"],
       verdict: ["files-verdict", "verdict-assemble"],
       verdict2: ["verdict-verdict2", "verdict2-assemble"],
@@ -1189,6 +1202,9 @@ function edgeDialogHtml(edgeId) {
     return `<div class="check-card"><h4>Справочник</h4><p class="check-why">Допишет код и описание только в пустые клетки по артикулу.</p></div>`;
   }
   if (edgeId === "read-check") return draftReadHtml();
+  if (edgeId === "read-header") return codeStageHtml("header");
+  if (edgeId === "header-lines") return codeStageHtml("lines");
+  if (edgeId === "lines-join" || edgeId === "join-check") return codeStageHtml("join");
   if (edgeId === "check-assemble" || edgeId === "check-verdict") {
     return renderSheetChecks({ ...rec, reasons: rec.reasons?.length ? rec.reasons : tr.reasons, checks: rec.checks?.length ? rec.checks : tr.checks, leftovers: rec.leftovers?.length ? rec.leftovers : tr.leftovers, unreadable: rec.unreadable?.length ? rec.unreadable : tr.unreadable, route: rec.route || pipeline.route })
       || `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Пока нет расхождений или шаг ещё идёт.</p></div>`;
@@ -1250,11 +1266,35 @@ function recognizedAllFilesHtml() {
     </div>${panes}${empty}`;
 }
 
+function codeStageHtml(kind) {
+  const tr = pipeline.trace || {};
+  const titles = {
+    header: "Шапка",
+    lines: "Строки тела",
+    join: "Склейка лотов",
+  };
+  const why = {
+    header: "Код снял продавца, покупателя, номер и даты из документов.",
+    lines: "Код собрал строки тела до TOTAL по ролям.",
+    join: "Код склеил инвойс, пакинг и спецификацию в лоты.",
+  };
+  const detail = tr.detail || "";
+  const lots = Number.isFinite(tr.draftLots) ? tr.draftLots : null;
+  const preview = draftPreviewTableHtml(tr.draftPreview || []);
+  return `<div class="check-card"><h4>${escapeHtml(titles[kind] || kind)}</h4>
+    <p class="check-why">${escapeHtml(why[kind] || "")}</p>
+    ${lots != null ? `<p class="check-why">Лотов в черновике: ${lots}${detail ? ` · ${escapeHtml(detail)}` : ""}</p>` : ""}
+  </div>${preview || ""}`;
+}
+
 function nodeDialogHtml(nodeId) {
   const map = {
     receive: ["receive-read", "receive-catalog"],
     catalog: ["receive-catalog", "catalog-read"],
     read: ["read-check"],
+    header: ["read-header"],
+    lines: ["header-lines"],
+    join: ["lines-join"],
     check: ["check-assemble", "check-files", "check-verdict"],
     files: ["files-verdict"],
     verdict: ["verdict-assemble", "check-verdict"],
@@ -1263,6 +1303,7 @@ function nodeDialogHtml(nodeId) {
     done: ["assemble-done"],
   };
   if (nodeId === "read") return draftReadHtml();
+  if (nodeId === "header" || nodeId === "lines" || nodeId === "join") return codeStageHtml(nodeId);
   if (nodeId === "files") return renderDiskFiles();
   if (nodeId === "assemble" || nodeId === "done") return recognizedAllFilesHtml();
   if (nodeId === "check") {

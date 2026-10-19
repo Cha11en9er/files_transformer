@@ -270,9 +270,62 @@ def prompt_mode():
     return "compact" if mode == "compact" else "full"
 
 
-def build_prompt(result, file_paths=None):
-    """Правила плюс то, что код уже собрал. Словарь результата не меняется."""
-    rules = FULL_RULES if prompt_mode() == "full" else RULES
+def _excel_only_draft(result) -> bool:
+    """Только книги Excel без скана/PDF — короткий промпт на известной форме уместен."""
+    for doc in result.get("documents") or []:
+        name = str(doc.get("name") or "").lower()
+        role = str(doc.get("role") or "")
+        if role in {"image", "scan"}:
+            return False
+        if name.endswith((".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp")):
+            return False
+        if not doc.get("readable", True) and not (doc.get("line_count") or 0):
+            return False
+    return True
+
+
+def _slim_lot(lot: dict) -> dict:
+    skip = {
+        "index",
+        "action",
+        "reason",
+        "freight",
+        "unit_conflict",
+        "packages_conflict",
+        "conflicts",
+        "weight_suspect",
+        "span_continued",
+        "packages_continued",
+        "amount_continued",
+        "extra",
+        "raw",
+        "qty_text",
+    }
+    out = {}
+    for key, value in (lot or {}).items():
+        if key in skip or value in (None, "", [], {}, set()):
+            continue
+        if isinstance(value, str) and key == "description" and len(value) > 240:
+            out[key] = value[:240]
+        else:
+            out[key] = value
+    return out
+
+
+def build_prompt(result, file_paths=None, *, mode=None, route=None):
+    """Правила плюс то, что код уже собрал. Словарь результата не меняется.
+
+    route=known и только Excel → компактные правила и быстрый режим сверки,
+    чтобы простая поставка не крутилась десятки минут на полном трактате.
+    """
+    chosen = (mode or "").strip().lower() or prompt_mode()
+    fast = route == "known" and _excel_only_draft(result)
+    if fast:
+        chosen = "compact"
+    rules = FULL_RULES if chosen == "full" else RULES
+    lots = result.get("lots") or []
+    if fast:
+        lots = [_slim_lot(lot) for lot in lots if not lot.get("freight")]
     payload = {
         "documents": result.get("documents") or [],
         "columns": list(result.get("columns") or []),
@@ -300,12 +353,13 @@ def build_prompt(result, file_paths=None):
         },
         "flags": list(result.get("flags") or []),
         "freights": list(result.get("freights") or []),
-        "lots": result.get("lots") or [],
+        "lots": lots,
     }
-    if result.get("sheet_checks"):
-        payload["sheet_checks"] = result.get("sheet_checks")
-    if result.get("leftovers"):
-        payload["leftovers"] = result.get("leftovers")
+    if not fast:
+        if result.get("sheet_checks"):
+            payload["sheet_checks"] = result.get("sheet_checks")
+        if result.get("leftovers"):
+            payload["leftovers"] = result.get("leftovers")
     data = json.dumps(payload, ensure_ascii=False, indent=2)
     paths = [str(p) for p in (file_paths or []) if p]
     files_block = ""
@@ -315,10 +369,18 @@ def build_prompt(result, file_paths=None):
             + "\n".join(paths)
             + "\n"
         )
-    priority = (
-        "\nПРИОРИТЕТ: сначала открой файлы из списка путей, потом смотри JSON черновика. "
-        "В ответе должна получиться поставка как в файлах, а не копия черновика.\n"
-    )
+    if fast:
+        priority = (
+            "\nПРИОРИТЕТ (быстрый проход): суммы черновика уже сошлись с итогами листов. "
+            "Открой файлы, сверь шапку и числа на 2-3 строках плюс TOTAL. "
+            "Если совпало — keep по всем строкам; в header поправь только явные дыры из файла. "
+            "Не перечитывай каждую клетку по кругу и не раздувай ответ.\n"
+        )
+    else:
+        priority = (
+            "\nПРИОРИТЕТ: сначала открой файлы из списка путей, потом смотри JSON черновика. "
+            "В ответе должна получиться поставка как в файлах, а не копия черновика.\n"
+        )
     return rules + priority + "\nДАННЫЕ КОДА:\n" + data + "\n" + files_block
 
 

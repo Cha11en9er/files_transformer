@@ -33,8 +33,9 @@
 - Ветка: `prod_update_v2`
 - Порт: 8200, каталог `/opt/files_transformer_update`, unit `excel-transformer-update`
 - Один раз: `mkdir -p /opt/files_transformer_update/data/model_inputs`
-- В `.env`: `MODEL_INPUTS_ROOT=/opt/files_transformer_update/data/model_inputs`, `ALLOW_SKIP_MODEL=0`, `VERDICT_PROMPT=full`, `OPENCODE_TIMEOUT_S=300`
-- Лимит модели 5 мин: дальше черновик кода. На графе кольцо этапов + фазы ожидания модели. Под «Файлы» - число файлов. Клик «Чтение» - таблица черновика кода.
+- В `.env`: `MODEL_INPUTS_ROOT=/opt/files_transformer_update/data/model_inputs`, `ALLOW_SKIP_MODEL=0`, `VERDICT_PROMPT=full`, `OPENCODE_TIMEOUT_S=0` (ждать ответ)
+- Known + только Excel: компактный быстрый промпт (сверка шапки и 2-3 строк), не полный трактат. Модель дожидаемся.
+- Граф: шапка → строки → склейка → сверка; у модели фазы «открывает файлы / шапка / пакинг / строки». Под «Файлы» - число. Клик «Чтение» - черновик кода.
 
 ## Не трогали
 - OpenCode-сервис на :4096 (кроме tools в запросе вердикта)

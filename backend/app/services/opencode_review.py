@@ -390,13 +390,14 @@ def settings() -> dict[str, Any]:
 
 
 def _timeout_seconds() -> float:
-    raw = (os.getenv("OPENCODE_TIMEOUT_S") or "300").strip()
+    """Ждём ответ модели. 0 или пусто = без лимита httpx (дождаться)."""
+    raw = (os.getenv("OPENCODE_TIMEOUT_S") or "0").strip()
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        return 300.0
-    if value <= 0:
-        return 300.0
+        return 0.0
+    if value < 0:
+        return 0.0
     return value
 
 
