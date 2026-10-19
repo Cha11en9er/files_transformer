@@ -84,27 +84,15 @@ def _model_chip(spec: str) -> str:
     return "обычная модель" if spec else "модель"
 
 
-def _model_timeout_s() -> float:
-    """Лимит ожидания ответа модели. По умолчанию и при 0 - 5 минут."""
-    raw = (os.getenv("OPENCODE_TIMEOUT_S") or "300").strip()
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return 300.0
-    if value <= 0:
-        return 300.0
-    return value
-
-
-def _model_wait_phase(waited: int, limit: float) -> tuple[str, str]:
-    """Подэтап ожидания модели для кольца и подписи на графе."""
-    if waited < 20:
-        return "session", "сессия и отправка"
-    if waited < 60:
-        return "read", "читает файлы"
-    if limit > 0 and waited >= max(60, limit * 0.7):
-        return "limit", "ещё считает, близко к лимиту"
-    return "think", "сверяет с черновиком"
+def _model_wait_phase(waited: int) -> tuple[str, str]:
+    """Подписи ожидания модели по смыслу шагов, не про лимит времени."""
+    if waited < 25:
+        return "open", "открывает файлы"
+    if waited < 70:
+        return "header", "сверяет шапку"
+    if waited < 140:
+        return "packing", "сверяет пакинг и веса"
+    return "lots", "сверяет строки"
 
 
 def _draft_preview_rows(lots: list[dict[str, Any]], limit: int = 60) -> list[dict[str, Any]]:
@@ -632,6 +620,45 @@ def _iter_create_events(
             "draft_preview": draft_preview,
             "detail": f"{len(lots)} лотов",
         }
+        seller = str(draft.get("seller") or "")[:40]
+        buyer = str(draft.get("buyer") or "")[:40]
+        inv = str(draft.get("invoice_no") or "")
+        yield {
+            "event": "progress",
+            "current": total,
+            "total": total,
+            "filename": "Шапка",
+            "stage": "header",
+            "message": f"Шапка: инвойс {inv or '—'}; продавец/покупатель",
+            "detail": " / ".join(part for part in (seller, buyer) if part) or "шапка",
+            "draft_lots": len(lots),
+            "draft_docs": draft_docs,
+            "draft_preview": draft_preview,
+        }
+        yield {
+            "event": "progress",
+            "current": total,
+            "total": total,
+            "filename": "Строки",
+            "stage": "lines",
+            "message": f"Строки тела: {len(lots)} лот(ов)",
+            "detail": f"{len(lots)} строк",
+            "draft_lots": len(lots),
+            "draft_docs": draft_docs,
+            "draft_preview": draft_preview,
+        }
+        yield {
+            "event": "progress",
+            "current": total,
+            "total": total,
+            "filename": "Склейка",
+            "stage": "join",
+            "message": "Склейка ролей, мест и весов по лотам",
+            "detail": "склейка",
+            "draft_lots": len(lots),
+            "draft_docs": draft_docs,
+            "draft_preview": draft_preview,
+        }
         skip_model = allow_skip_model() and route == "known"
         route_text = {
             "known": (
@@ -673,7 +700,6 @@ def _iter_create_events(
         disk_paths: list[Path] = []
         disk_names: list[str] = []
         prompt = ""
-        model_limit = _model_timeout_s()
         call_model = bool(first_model) and not skip_model
         if call_model:
             postavka_dir = new_postavka_dir()
@@ -684,14 +710,15 @@ def _iter_create_events(
             disk_paths = yield from _while_busy("Файлы для модели", _stash)
             disk_names = [path.name for path in disk_paths]
             abs_paths = [str(path) for path in disk_paths]
-            prompt = verdict_prompt(draft, file_paths=abs_paths)
+            prompt = verdict_prompt(draft, file_paths=abs_paths, route=route)
             yield {
                 "event": "progress",
                 "current": total,
                 "total": total,
                 "filename": "Файлы для модели",
                 "stage": "files",
-                "message": f"Файлы на диске: {len(disk_paths)}",
+                "message": f"Файлы на диске: {len(disk_paths)}"
+                + (" · быстрый промпт" if route == "known" else ""),
                 "disk_files": abs_paths,
                 "disk_names": disk_names,
                 "disk_count": len(disk_paths),
@@ -703,16 +730,15 @@ def _iter_create_events(
                 "total": total,
                 "filename": first_model or "модель",
                 "stage": "model",
-                "model_phase": "session",
-                "message": "Обычная модель: сессия и отправка",
-                "detail": "сессия",
+                "model_phase": "open",
+                "message": "Обычная модель: открывает файлы",
+                "detail": "открывает файлы",
             }
 
         def _ask(spec: str, stage: str = "model") -> dict[str, Any]:
-            """Спросить модель. Ошибка модели не рвёт поток: отдаём status=error и оставляем черновик кода."""
+            """Спросить модель и дождаться ответа. Обрыв только если упал httpx/OpenCode."""
             box: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
             label = "Улучшенная модель" if stage == "model2" else "Обычная модель"
-            limit = model_limit
 
             def _call() -> None:
                 try:
@@ -737,7 +763,7 @@ def _iter_create_events(
                 worker.join(timeout=8.0)
                 if worker.is_alive():
                     waited += 8
-                    phase, phase_ru = _model_wait_phase(waited, limit)
+                    phase, phase_ru = _model_wait_phase(waited)
                     yield {
                         "event": "progress",
                         "current": total,
@@ -748,35 +774,6 @@ def _iter_create_events(
                         "message": f"{label}: {phase_ru} ({waited} с)",
                         "detail": phase_ru,
                     }
-                    if limit > 0 and waited >= limit:
-                        yield {
-                            "event": "progress",
-                            "current": total,
-                            "total": total,
-                            "filename": spec or "модель",
-                            "stage": stage,
-                            "model_phase": "timeout",
-                            "message": f"{label}: лимит {int(limit)} с, оставляем черновик кода",
-                            "detail": "лимит",
-                        }
-                        return {
-                            "status": "error",
-                            "model": spec or "",
-                            "model_label": _model_chip(spec),
-                            "raw_text": "",
-                            "payload": None,
-                            "error": f"Модель не ответила за {int(limit)} с. В таблице черновик кода.",
-                            "image_count": 0,
-                            "excel_attached": bool(disk_paths),
-                            "excel_files": disk_names,
-                            "disk_files": [str(path) for path in disk_paths],
-                            "meaning": f"{label} не уложилась в {int(limit)} с. В таблице черновик кода.",
-                            "header": {},
-                            "tables": [],
-                            "totals": None,
-                            "items": [],
-                            "context": {"excel": [], "pdfs": []},
-                        }
             status, payload = box.get()
             if status == "err":
                 err_text = humanize_exception(payload)
@@ -787,7 +784,7 @@ def _iter_create_events(
                     "filename": spec or "модель",
                     "stage": stage,
                     "model_phase": "error",
-                    "message": f"{label}: не ответила, оставляем черновик кода",
+                    "message": f"{label}: ошибка, оставляем черновик кода",
                 }
                 return {
                     "status": "error",

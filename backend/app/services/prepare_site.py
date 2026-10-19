@@ -129,8 +129,13 @@ def _add_ocr_hints(folder: Path, draft: dict[str, Any]) -> None:
             doc["ocr_text"] = text[:6000]
 
 
-def verdict_prompt(draft: dict[str, Any], file_paths: list[str] | list[Path] | None = None) -> str:
-    return build_prompt(draft, file_paths=file_paths)
+def verdict_prompt(
+    draft: dict[str, Any],
+    file_paths: list[str] | list[Path] | None = None,
+    *,
+    route: str | None = None,
+) -> str:
+    return build_prompt(draft, file_paths=file_paths, route=route)
 
 
 def _filled(value: Any) -> bool:
