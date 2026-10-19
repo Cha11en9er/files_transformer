@@ -384,9 +384,20 @@ def settings() -> dict[str, Any]:
         "provider_id": provider,
         "model_id": model_id,
         "enabled": enabled,
-        # 0 = wait until the model answers. A short read timeout drops the whole draft.
-        "timeout_s": float(os.getenv("OPENCODE_TIMEOUT_S", "0")),
+        # По умолчанию 5 минут. 0 или пусто на сайте тоже 300: иначе зависает на десятки минут.
+        "timeout_s": _timeout_seconds(),
     }
+
+
+def _timeout_seconds() -> float:
+    raw = (os.getenv("OPENCODE_TIMEOUT_S") or "300").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 300.0
+    if value <= 0:
+        return 300.0
+    return value
 
 
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"

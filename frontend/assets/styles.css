@@ -523,6 +523,45 @@ button.badge {
   stroke: #0a3f44;
   filter: drop-shadow(0 4px 10px rgba(15, 92, 99, 0.28));
 }
+.flow-seg {
+  fill: none;
+  stroke: #c5d4d8;
+  stroke-width: 4;
+  stroke-linecap: butt;
+  pointer-events: none;
+}
+.flow-seg.is-done {
+  stroke: var(--accent);
+}
+.flow-seg.is-active {
+  stroke: #0a3f44;
+  stroke-width: 5;
+  animation: flow-seg-pulse 1.2s ease-in-out infinite;
+}
+@keyframes flow-seg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.mini-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.mini-table th,
+.mini-table td {
+  border: 1px solid #d5e0e4;
+  padding: 4px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+.mini-table th {
+  background: #eef4f6;
+  font-weight: 600;
+}
+.table-scroll {
+  max-height: 360px;
+  overflow: auto;
+}
 .flow-node.is-run text,
 .flow-node.is-run .flow-sub,
 .flow-node.is-past text,
