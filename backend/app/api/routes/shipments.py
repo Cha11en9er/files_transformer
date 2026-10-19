@@ -54,6 +54,7 @@ from app.services.prepare_site import (
     goods_lots,
     header_diff,
     header_from_draft,
+    is_fast_verdict,
     load_catalogs,
     lots_to_rows,
     model_spec,
@@ -692,8 +693,10 @@ def _iter_create_events(
             "draft_docs": draft_docs,
             "draft_preview": draft_preview,
         }
-        first_model = model_spec(1)
-        second_model = model_spec(2)
+        fast_verdict = is_fast_verdict(draft, route)
+        first_model = model_spec(1, fast=fast_verdict)
+        # На known Excel вторую (тяжёлую) модель не зовём — суммы уже сошлись.
+        second_model = "" if fast_verdict else model_spec(2)
         first_chip = _model_chip(first_model)
         second_chip = _model_chip(second_model) if second_model else ""
         postavka_dir: Path | None = None
@@ -718,11 +721,12 @@ def _iter_create_events(
                 "filename": "Файлы для модели",
                 "stage": "files",
                 "message": f"Файлы на диске: {len(disk_paths)}"
-                + (" · быстрый промпт" if route == "known" else ""),
+                + (" · быстрый промпт" if fast_verdict else (" · known" if route == "known" else "")),
                 "disk_files": abs_paths,
                 "disk_names": disk_names,
                 "disk_count": len(disk_paths),
                 "detail": f"{len(disk_paths)} файлов",
+                "fast_verdict": fast_verdict,
             }
             yield {
                 "event": "progress",
@@ -731,8 +735,12 @@ def _iter_create_events(
                 "filename": first_model or "модель",
                 "stage": "model",
                 "model_phase": "open",
-                "message": "Обычная модель: открывает файлы",
-                "detail": "открывает файлы",
+                "message": (
+                    "Быстрая модель: короткая сверка"
+                    if fast_verdict
+                    else "Обычная модель: открывает файлы"
+                ),
+                "detail": "открывает файлы" if not fast_verdict else "быстрая сверка",
             }
 
         def _ask(spec: str, stage: str = "model") -> dict[str, Any]:
@@ -750,6 +758,7 @@ def _iter_create_events(
                                 disk_paths=disk_paths,
                                 user_prompt=prompt,
                                 model_override=spec or None,
+                                fast=fast_verdict and stage == "model",
                             ),
                         )
                     )
