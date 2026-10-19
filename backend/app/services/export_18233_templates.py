@@ -469,7 +469,9 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                 group_amount += float(amount or 0)
             no += 1
         first = group_items[0]
-        label_name = (first.get("article") or fam).split()[0] if fabric else (first.get("article") or "")
+        # Пустой артикул у описания без кода: .split()[0] ронял выгрузку.
+        article_bits = str(first.get("article") or fam or "").split()
+        label_name = article_bits[0] if fabric and article_bits else (first.get("article") or "")
         group_design = f"{prefix}\n{label_name}".strip() if prefix else str(first.get("article") or "")
         group_amount = _r2(float(price) * group_meters) if fabric and price is not None else _r2(group_amount)
         if fabric and is_family:

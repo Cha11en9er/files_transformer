@@ -50,6 +50,8 @@ const state = {
   roleColumnsKey: "",
   pendingDelete: null,
   pendingAdd: null,
+  excelView: false,
+  excelPreviewCache: null,
 };
 const extraFiles = new WeakSet();
 
@@ -404,7 +406,12 @@ function hideOldWorkspace() {
   state.columnLayout = emptyColumnLayout();
   state.roleColumns = null;
   state.roleColumnsKey = "";
+  state.excelView = false;
+  state.excelPreviewCache = null;
   $("#workspace")?.classList.add("hidden");
+  setExcelView(false, { refresh: false });
+  const preview = $("#export-preview");
+  if (preview) preview.innerHTML = "";
   const tbody = $("#items-table tbody");
   if (tbody) tbody.innerHTML = "";
   const thead = $("#items-table thead");
@@ -653,7 +660,7 @@ const FLOW_NODES = [
   { id: "catalog", title: "Справочник", x: 70, y: 55 },
   { id: "read", title: "Чтение", x: 250, y: 155 },
   { id: "check", title: "Сверка", x: 430, y: 155 },
-  { id: "photos", title: "Фото", x: 610, y: 55 },
+  { id: "files", title: "Файлы", x: 610, y: 55 },
   { id: "verdict", title: "Модель", x: 790, y: 155 },
   { id: "verdict2", title: "Сильнее", x: 790, y: 55 },
   { id: "assemble", title: "Сборка", x: 990, y: 155 },
@@ -675,9 +682,9 @@ const FLOW_EDGES = [
     lx: 710,
     ly: 205,
   },
-  { id: "check-photos", from: "check", to: "photos", title: "Почему нужны фото", mark: "нужны фото" },
+  { id: "check-files", from: "check", to: "files", title: "Файлы на диске для модели", mark: "на диск" },
   { id: "check-verdict", from: "check", to: "verdict", title: "Почему вызвали модель", mark: "в модель" },
-  { id: "photos-verdict", from: "photos", to: "verdict", title: "Какие кадры ушли", mark: "кадры" },
+  { id: "files-verdict", from: "files", to: "verdict", title: "Какие пути ушли", mark: "пути" },
   { id: "verdict-verdict2", from: "verdict", to: "verdict2", title: "Обычная не уверена", mark: "сильнее" },
   { id: "verdict-assemble", from: "verdict", to: "assemble", title: "Вердикт обычной", mark: "вердикт" },
   { id: "verdict2-assemble", from: "verdict2", to: "assemble", title: "Вердикт сильной", mark: "вердикт+" },
@@ -704,7 +711,7 @@ function pipelineStep(filename, stage, message) {
   if (stage === "model2" || text.includes("улучшенная модель") || text.includes("вторая модель")) return "verdict2";
   if (stage === "model" || text.includes("обычная модель") || text.includes("вердикт модели") || text.includes("вердикт")) return "verdict";
   if (text.includes("сборк")) return "assemble";
-  if (text.includes("фото")) return "photos";
+  if (stage === "files" || text.includes("файлы на диске") || text.includes("файлы для модели")) return "files";
   if (text.includes("чтени") || text.includes("прочитал")) return "read";
   if (stage === "parse") return "receive";
   return "";
@@ -739,10 +746,8 @@ const pipeline = {
       checks: [],
       leftovers: [],
       unreadable: [],
-      photos: [],
-      photoNames: [],
-      photoCount: 0,
-      visionToken: "",
+      diskFiles: [],
+      diskNames: [],
       draftLots: null,
       draftDocs: [],
       model: {},
@@ -804,37 +809,23 @@ const pipeline = {
     if (Array.isArray(extra.checks)) this.trace.checks = extra.checks;
     if (Array.isArray(extra.leftovers)) this.trace.leftovers = extra.leftovers;
     if (Array.isArray(extra.unreadable)) this.trace.unreadable = extra.unreadable;
-    if (Array.isArray(extra.photo_names)) this.trace.photoNames = extra.photo_names;
-    if (Array.isArray(extra.photos) && extra.photos.length) this.trace.photos = extra.photos;
-    if (extra.vision_token) this.trace.visionToken = extra.vision_token;
-    if (Number.isFinite(extra.image_count)) this.trace.photoCount = extra.image_count;
+    if (Array.isArray(extra.disk_files)) this.trace.diskFiles = extra.disk_files;
+    if (Array.isArray(extra.disk_names)) this.trace.diskNames = extra.disk_names;
     if (Number.isFinite(extra.draft_lots)) this.trace.draftLots = extra.draft_lots;
     if (Array.isArray(extra.draft_docs)) this.trace.draftDocs = extra.draft_docs;
-    if (extra.message && /кадр/i.test(extra.message)) {
-      const frames = String(extra.message).match(/(\d+)\s*кадр/);
-      if (frames) this.trace.photoCount = Number(frames[1]);
-    }
   },
   markPath(id) {
     const map = {
       receive: ["receive-read"],
       catalog: ["receive-catalog", "catalog-read"],
       read: ["receive-read", "read-check"],
-      check: ["read-check"],
-      photos: ["check-photos", "photos-verdict"],
-      verdict: this.route === "similar" ? ["check-verdict", "verdict-assemble"] : ["photos-verdict", "verdict-assemble"],
+      check: ["read-check", "check-files"],
+      files: ["check-files", "files-verdict"],
+      verdict: ["files-verdict", "verdict-assemble"],
       verdict2: ["verdict-verdict2", "verdict2-assemble"],
       assemble: ["assemble-done"],
       done: ["assemble-done"],
     };
-    if (this.route === "known") {
-      map.check = ["read-check", "check-assemble"];
-      map.assemble = ["check-assemble", "assemble-done"];
-    } else if (this.route === "similar") {
-      map.check = ["read-check", "check-verdict"];
-    } else if (this.route === "unknown") {
-      map.check = ["read-check", "check-photos"];
-    }
     (map[id] || []).forEach((edge) => this.edgeHot.add(edge));
     if (this.hasCatalog && ["receive", "catalog", "read"].includes(id)) {
       this.edgeHot.add("receive-catalog");
@@ -848,7 +839,6 @@ const pipeline = {
     const detail = extra?.detail || "";
     const now = Date.now();
     const order = FLOW_NODES.map((n) => n.id);
-    const next = order.indexOf(id);
     const cur = order.indexOf(this.current);
     if (id === this.current && this.nodes[id].state === "run") {
       if (seconds != null) this.nodes[id].serverSeconds = seconds;
@@ -859,21 +849,6 @@ const pipeline = {
     if (cur >= 0 && this.nodes[this.current]?.state === "run") {
       this.nodes[this.current].state = "past";
       this.nodes[this.current].ended = now;
-    }
-    if (id === "photos" || id === "verdict" || id === "verdict2") {
-      ["photos", "verdict", "verdict2"].forEach((name) => {
-        if (name === id) return;
-        if (this.nodes[name].state === "wait" && this.route === "known") this.nodes[name].state = "skip";
-      });
-    }
-    if (this.route === "known") {
-      ["photos", "verdict", "verdict2"].forEach((name) => {
-        if (this.nodes[name].state === "wait") this.nodes[name].state = "skip";
-      });
-    }
-    if (this.route === "similar") {
-      if (this.nodes.photos.state === "wait") this.nodes.photos.state = "skip";
-      if (this.nodes.verdict2.state === "wait" && id !== "verdict2") this.nodes.verdict2.state = "skip";
     }
     if (id === "verdict2") this.usedSecond = true;
     this.current = id;
@@ -894,19 +869,15 @@ const pipeline = {
         node.ended = now;
       }
     });
-    if (this.route === "known") {
-      ["photos", "verdict", "verdict2"].forEach((id) => {
+    const skippedModel = !run?.first && this.route === "known";
+    if (skippedModel) {
+      ["files", "verdict", "verdict2"].forEach((id) => {
         this.nodes[id].state = "skip";
       });
       this.edgeHot.add("check-assemble");
-    } else if (this.route === "similar") {
-      this.nodes.photos.state = "skip";
-      if (!this.usedSecond) this.nodes.verdict2.state = "skip";
-      this.edgeHot.add("check-verdict");
-      this.edgeHot.add("verdict-assemble");
     } else {
-      this.edgeHot.add("check-photos");
-      this.edgeHot.add("photos-verdict");
+      this.edgeHot.add("check-files");
+      this.edgeHot.add("files-verdict");
       this.edgeHot.add(this.usedSecond ? "verdict2-assemble" : "verdict-assemble");
       if (this.usedSecond) this.edgeHot.add("verdict-verdict2");
       else this.nodes.verdict2.state = "skip";
@@ -1088,40 +1059,17 @@ function draftReadHtml() {
   return `<div class="check-card"><h4>Черновик кода</h4>${head}</div>`;
 }
 
-function visionPhotosList() {
+function renderDiskFiles() {
   const tr = pipeline.trace || {};
-  if (Array.isArray(tr.photos) && tr.photos.length && typeof tr.photos[0] === "object") {
-    return tr.photos;
-  }
-  const token = tr.visionToken || "";
-  return (tr.photoNames || []).map((name) => ({
-    name,
-    source: name,
-    url: token ? `/api/v1/shipments/vision/${encodeURIComponent(token)}/${encodeURIComponent(name)}` : "",
-  }));
-}
-
-function renderVisionGallery() {
-  const photos = visionPhotosList().filter((p) => p.url);
-  const count = photos.length || pipeline.trace.photoCount || 0;
-  if (!photos.length) {
-    const names = (pipeline.trace.photoNames || []).map((n) => `<li>${escapeHtml(n)}</li>`).join("");
-    return `<div class="check-card"><h4>Фото для модели</h4>
-      <p class="check-why">${count} кадров. Хранятся до обновления страницы или около часа.</p>
-      <ul>${names || "<li>кадры ещё не пришли или уже удалены</li>"}</ul></div>`;
-  }
-  const grid = photos
-    .map(
-      (photo, index) => `<figure>
-        <img class="photo-thumb" src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.name || "")}"
-          data-photo-url="${escapeHtml(photo.url)}" data-photo-title="${escapeHtml(photo.source || photo.name || `кадр ${index + 1}`)}" />
-        <figcaption class="photo-thumb-cap">${escapeHtml(photo.source || photo.name || "")}</figcaption>
-      </figure>`
-    )
-    .join("");
-  return `<div class="check-card"><h4>Фото для модели</h4>
-    <p class="check-why">${photos.length} кадров с проблемных листов. Хранятся до обновления страницы или около часа. Нажми кадр - полный размер и зум.</p>
-    <div class="photo-grid">${grid}</div></div>`;
+  const paths = tr.diskFiles || [];
+  const names = tr.diskNames || paths.map((p) => String(p).split(/[/\\]/).pop());
+  const rows = names.map((name, index) => {
+    const path = paths[index] || "";
+    return `<li><strong>${escapeHtml(name)}</strong>${path ? `<br><span class="hint">${escapeHtml(path)}</span>` : ""}</li>`;
+  }).join("");
+  return `<div class="check-card"><h4>Файлы для модели</h4>
+    <p class="check-why">Исходники на диске сервера. Модель читает их по абсолютному пути (без JPEG-кадров).</p>
+    <ul>${rows || "<li>пути ещё не пришли</li>"}</ul></div>`;
 }
 
 function edgeDialogHtml(edgeId) {
@@ -1143,7 +1091,7 @@ function edgeDialogHtml(edgeId) {
     return renderSheetChecks({ ...rec, reasons: rec.reasons?.length ? rec.reasons : tr.reasons, checks: rec.checks?.length ? rec.checks : tr.checks, leftovers: rec.leftovers?.length ? rec.leftovers : tr.leftovers, unreadable: rec.unreadable?.length ? rec.unreadable : tr.unreadable, route: rec.route || pipeline.route })
       || `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Пока нет расхождений или шаг ещё идёт.</p></div>`;
   }
-  if (edgeId === "check-photos") {
+  if (edgeId === "check-files") {
     const checks =
       renderSheetChecks({
         ...rec,
@@ -1153,10 +1101,10 @@ function edgeDialogHtml(edgeId) {
         unreadable: rec.unreadable?.length ? rec.unreadable : tr.unreadable,
         route: rec.route || pipeline.route,
       }) ||
-      `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Нужны фото: форма незнакомая или текст не читается.</p></div>`;
-    return `${checks}${renderVisionGallery()}`;
+      `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Дальше модель сверяет черновик с исходными файлами.</p></div>`;
+    return `${checks}${renderDiskFiles()}`;
   }
-  if (edgeId === "photos-verdict") return renderVisionGallery();
+  if (edgeId === "files-verdict") return renderDiskFiles();
   if (edgeId === "verdict-verdict2") {
     return `<div class="check-card"><h4>Улучшенная модель</h4><p class="check-why">Мало столбцов, сомнения или дыра мест. Смотрит более сильная модель.</p></div>`;
   }
@@ -1205,15 +1153,15 @@ function nodeDialogHtml(nodeId) {
     receive: ["receive-read", "receive-catalog"],
     catalog: ["receive-catalog", "catalog-read"],
     read: ["read-check"],
-    check: ["check-assemble", "check-photos", "check-verdict"],
-    photos: ["photos-verdict"],
+    check: ["check-assemble", "check-files", "check-verdict"],
+    files: ["files-verdict"],
     verdict: ["verdict-assemble", "check-verdict"],
     verdict2: ["verdict-verdict2", "verdict2-assemble"],
     assemble: ["assemble-done"],
     done: ["assemble-done"],
   };
   if (nodeId === "read") return draftReadHtml();
-  if (nodeId === "photos") return renderVisionGallery();
+  if (nodeId === "files") return renderDiskFiles();
   if (nodeId === "assemble" || nodeId === "done") return recognizedAllFilesHtml();
   if (nodeId === "check") {
     const tr = pipeline.trace || {};
@@ -1350,10 +1298,8 @@ async function processShipment() {
           checks: extra?.checks,
           leftovers: extra?.leftovers,
           unreadable: extra?.unreadable,
-          photo_names: extra?.photo_names,
-          photos: extra?.photos,
-          vision_token: extra?.vision_token,
-          image_count: extra?.image_count,
+          disk_files: extra?.disk_files,
+          disk_names: extra?.disk_names,
           draft_lots: extra?.draft_lots,
           draft_docs: extra?.draft_docs,
           message: extra?.message,
@@ -1366,12 +1312,8 @@ async function processShipment() {
     pipeline.reach("assemble");
     await new Promise((resolve) => window.setTimeout(resolve, 400));
     pipeline.complete(created.verdict_run || {});
-    if (Array.isArray(created.vision_photos) && created.vision_photos.length) {
-      pipeline.trace.photos = created.vision_photos;
-      pipeline.trace.photoCount = created.vision_photos.length;
-      pipeline.trace.photoNames = created.vision_photos.map((p) => p.name).filter(Boolean);
-    }
-    if (created.vision_token) pipeline.trace.visionToken = created.vision_token;
+    if (Array.isArray(created.disk_files)) pipeline.trace.diskFiles = created.disk_files;
+    if (Array.isArray(created.disk_names)) pipeline.trace.diskNames = created.disk_names;
     state.shipmentId = created.id;
     state.workspace = created;
     applyShipmentTitle(created.title, { force: true });
@@ -1459,10 +1401,8 @@ async function parseUploadStream(fd, hooks) {
             checks: event.checks,
             leftovers: event.leftovers,
             unreadable: event.unreadable,
-            photo_names: event.photo_names,
-            photos: event.photos,
-            vision_token: event.vision_token,
-            image_count: event.image_count,
+            disk_files: event.disk_files,
+            disk_names: event.disk_names,
             draft_lots: event.draft_lots,
             draft_docs: event.draft_docs,
           });
@@ -2208,16 +2148,16 @@ function renderSheetChecks(recognition) {
   unreadable.forEach((item) => {
     cards.push(`<div class="check-card">
       <h4>${escapeHtml(item.name || "файл")}</h4>
-      <p class="check-why">Нет текстового слоя. Числа берёт только модель с фото.</p>
+      <p class="check-why">Нет текстового слоя. Числа берёт модель из исходного файла.</p>
     </div>`);
   });
   if (!cards.length) {
     const route = recognition?.route;
     if (route === "known") {
-      return `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Суммы строк совпали с итогом листов. Модель не вызывали.</p></div>`;
+      return `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Суммы строк совпали с итогом листов. Модель всё равно сверяет исходные файлы.</p></div>`;
     }
     if (route === "similar") {
-      return `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">На части листов нет напечатанного итога. Модель сверила черновик без фото.</p></div>`;
+      return `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">На части листов нет напечатанного итога. Модель сверяет черновик с исходными файлами.</p></div>`;
     }
     return "";
   }
@@ -2339,26 +2279,36 @@ function renderExportPreview(data) {
   const meta = $("#export-preview-meta");
   if (!host) return;
   host.innerHTML = "";
+  state.excelPreviewCache = data || null;
   const files = data?.files || [];
   if (meta) {
     meta.textContent = files.length
-      ? `В архив пойдёт ${files.length} файл(ов). В инвойсе, пакинге и спецификации одни и те же позиции.`
+      ? `Так уйдут в ZIP ${files.length} файл(ов) профиля ${data?.profile_type || ""}. Столбцы и листы как при «Сформировать Excel».`
       : "Нет файлов для выгрузки.";
   }
-  files.forEach((file) => {
+  files.forEach((file, fileIndex) => {
     const card = document.createElement("article");
     card.className = "preview-file";
     const sheets = file.sheets || [];
+    const tabs =
+      sheets.length > 1
+        ? `<div class="preview-tabs" role="tablist">${sheets
+            .map(
+              (sheet, sheetIndex) =>
+                `<button type="button" class="preview-tab${sheetIndex === 0 ? " active" : ""}" data-preview-file="${fileIndex}" data-preview-sheet="${sheetIndex}">${escapeHtml(sheet.title || `Лист ${sheetIndex + 1}`)}</button>`
+            )
+            .join("")}</div>`
+        : "";
     const tables = sheets
-      .map((sheet) => {
+      .map((sheet, sheetIndex) => {
         const headers = (sheet.headers || []).map((h) => `<th>${escapeHtml(h)}</th>`).join("");
         const rows = sheet.rows || [];
         const body = rows
-          .slice(0, 80)
+          .slice(0, 120)
           .map((row) => {
             const cells = (row || [])
               .map((cell) => {
-                const text = cell == null || cell === "" ? "-" : String(cell);
+                const text = cell == null || cell === "" ? "" : String(cell);
                 return longCell(text);
               })
               .join("");
@@ -2366,12 +2316,15 @@ function renderExportPreview(data) {
           })
           .join("");
         const more =
-          rows.length > 80 ? `<p class="hint">Показаны первые 80 из ${rows.length} строк</p>` : "";
-        return `<h4>${escapeHtml(sheet.title || "")} · ${rows.length} строк</h4>
-          <div class="table-wrap"><table class="preview-table"><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div>${more}`;
+          rows.length > 120 ? `<p class="hint">Показаны первые 120 из ${rows.length} строк</p>` : "";
+        const hidden = sheetIndex === 0 ? "" : " hidden";
+        return `<div class="preview-sheet${hidden}" data-preview-file="${fileIndex}" data-preview-sheet="${sheetIndex}">
+          <h4>${escapeHtml(sheet.title || "")} · ${rows.length} строк</h4>
+          <div class="table-wrap"><table class="preview-table"><thead><tr>${headers}</tr></thead><tbody>${body || `<tr><td colspan="${Math.max((sheet.headers || []).length, 1)}">Пусто</td></tr>`}</tbody></table></div>${more}
+        </div>`;
       })
       .join("");
-    card.innerHTML = `<h3>${escapeHtml(file.filename || "")}</h3>${tables}`;
+    card.innerHTML = `<h3>${escapeHtml(file.filename || "")}</h3>${tabs}${tables}`;
     host.appendChild(card);
   });
 }
@@ -2379,6 +2332,7 @@ function renderExportPreview(data) {
 async function refreshExportPreview() {
   const meta = $("#export-preview-meta");
   if (!state.workspace) return;
+  if (meta) meta.textContent = "Собираю вид как в Excel…";
   try {
     const data = await api("/api/v1/shipments/export/preview", {
       method: "POST",
@@ -2388,6 +2342,31 @@ async function refreshExportPreview() {
     renderExportPreview(data);
   } catch (err) {
     if (meta) meta.textContent = `Предпросмотр недоступен: ${humanizeClientError(err.message)}`;
+  }
+}
+
+function setExcelView(on, { refresh = true } = {}) {
+  state.excelView = Boolean(on);
+  const work = $("#work-table-panel");
+  const excel = $("#excel-view-panel");
+  const btn = $("#btn-excel-view");
+  if (work) {
+    work.classList.toggle("hidden", state.excelView);
+    work.hidden = state.excelView;
+  }
+  if (excel) {
+    excel.classList.toggle("hidden", !state.excelView);
+    excel.hidden = !state.excelView;
+  }
+  if (btn) {
+    btn.setAttribute("aria-pressed", state.excelView ? "true" : "false");
+    btn.textContent = state.excelView ? "Обычный вид" : "Посмотреть как в Excel";
+    btn.title = state.excelView
+      ? "Вернуть таблицу с ошибками и предупреждениями"
+      : "Показать те же книги и листы, что уйдут в скачиваемый Excel";
+  }
+  if (state.excelView && refresh) {
+    refreshExportPreview();
   }
 }
 
@@ -2446,14 +2425,14 @@ function renderHeaderChanges(ws, form) {
       const was = document.createElement("span");
       was.className = "header-was";
       was.textContent = filled
-        ? "Код поля не нашёл, значение вписала модель по фото"
+        ? "Код поля не нашёл, значение вписала модель по файлу"
         : `Код прочитал: ${change.before}`;
       label.appendChild(was);
     }
     rows.push(
       filled
         ? `<li><strong>${escapeHtml(change.label)}</strong>: код не нашёл, модель вписала «${escapeHtml(change.after)}»</li>`
-        : `<li><strong>${escapeHtml(change.label)}</strong>: код прочитал «${escapeHtml(change.before)}», модель по фото поставила «${escapeHtml(change.after)}»</li>`
+        : `<li><strong>${escapeHtml(change.label)}</strong>: код прочитал «${escapeHtml(change.before)}», модель по файлу поставила «${escapeHtml(change.after)}»</li>`
     );
   });
   const noteRows = notes.map((text) => `<li class="header-note-row">${escapeHtml(text)}</li>`);
@@ -2523,9 +2502,6 @@ function renderWorkspace() {
   });
 
   renderScanReview(ws, ws.model_review);
-  if ($("#export-preview-panel")) {
-    refreshExportPreview();
-  }
 
   const hf = ws.header_fields || {};
   const headerForm = $("#header-form");
@@ -2554,7 +2530,10 @@ function renderWorkspace() {
     .catch(() => {
       state.roleColumns = state.roleColumns || {};
     })
-    .finally(() => paintItemsTable());
+    .finally(() => {
+      paintItemsTable();
+      setExcelView(state.excelView, { refresh: state.excelView });
+    });
 }
 
 function paintItemsTable() {
@@ -3160,6 +3139,9 @@ $("#header-form").addEventListener("submit", async (e) => {
     }
     applyHeaderFields(readHeaderForm(), { syncItems: true });
     renderWorkspace();
+    if (state.excelView) {
+      await refreshExportPreview();
+    }
     $("#upload-status").textContent =
       "Реквизиты сохранены в текущем сеансе. При обновлении страницы правки будут потеряны.";
     showToast("Реквизиты изменились", { kind: "ok" });
@@ -3167,6 +3149,31 @@ $("#header-form").addEventListener("submit", async (e) => {
     alert(`Не удалось сохранить шапку: ${err.message}`);
     showToast(`Не удалось сохранить реквизиты: ${err.message}`, { kind: "error", ms: 4500 });
   }
+});
+
+$("#btn-excel-view")?.addEventListener("click", () => {
+  if (!state.workspace) {
+    showToast("Сначала обработай поставку", { kind: "info" });
+    return;
+  }
+  setExcelView(!state.excelView);
+});
+
+$("#export-preview")?.addEventListener("click", (e) => {
+  const tab = e.target.closest(".preview-tab");
+  if (!tab) return;
+  const fileIndex = tab.dataset.previewFile;
+  const sheetIndex = tab.dataset.previewSheet;
+  const card = tab.closest(".preview-file");
+  if (!card) return;
+  card.querySelectorAll(".preview-tab").forEach((node) => {
+    node.classList.toggle("active", node === tab);
+  });
+  card.querySelectorAll(".preview-sheet").forEach((sheet) => {
+    const match =
+      sheet.dataset.previewFile === fileIndex && sheet.dataset.previewSheet === sheetIndex;
+    sheet.classList.toggle("hidden", !match);
+  });
 });
 
 $("#btn-export").addEventListener("click", async () => {
@@ -3301,7 +3308,7 @@ function paintBusyModelStatus() {
 async function refreshOpenCodeStatus({ force = false } = {}) {
   if (serviceStatus.inFlight) return serviceStatus.inFlight;
   serviceStatus.inFlight = (async () => {
-    // Во время разбора OpenCode занят запросом с фото и не отвечает на probe —
+    // Во время разбора OpenCode занят запросом с файлами и не отвечает на probe —
     // не красим индикатор в «модель молчит» / «сайт недоступен» из-за этого.
     if (processing && !force) {
       paintBusyModelStatus();

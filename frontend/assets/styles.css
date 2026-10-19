@@ -169,6 +169,14 @@ input, select, button, textarea {
   font-weight: 600;
   height: fit-content;
 }
+.header-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
 .header-form .btn-save-header {
   background: linear-gradient(180deg, var(--accent-2), var(--accent));
   color: #fff;
@@ -180,6 +188,61 @@ input, select, button, textarea {
 }
 .header-form .btn-save-header:active {
   filter: brightness(0.96);
+}
+.header-form .btn-excel-view {
+  background: #fff;
+  border: 1px solid #b7c9d1;
+  color: var(--ink);
+}
+.header-form .btn-excel-view[aria-pressed="true"] {
+  background: #e8f3f4;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.work-table-panel,
+.excel-view-panel {
+  min-width: 0;
+  max-width: 100%;
+}
+.excel-view-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+.excel-view-panel[hidden],
+.excel-view-panel.hidden {
+  display: none !important;
+}
+.excel-view-meta {
+  margin: 0;
+}
+.preview-file {
+  background: #fff;
+  border: 1px solid #dde7ec;
+  border-radius: 10px;
+  padding: 12px;
+}
+.preview-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.preview-tab {
+  border: 1px solid #c5d5dc;
+  background: #f4f8fb;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.preview-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.preview-sheet.hidden {
+  display: none;
 }
 .dropzone-wrap {
   grid-column: 1 / -1;
@@ -1439,10 +1502,33 @@ pre {
 
 @media (max-width: 1100px) {
   .header-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .header-actions { grid-column: 1 / -1; }
 }
 @media (max-width: 800px) {
   .form-grid, .form-grid.compact, .header-form, .upload-fields { grid-template-columns: 1fr; }
   .upload-fields > label { grid-template-rows: auto 40px auto; }
   .scan-totals { grid-template-columns: 1fr 1fr; }
   .toast-stack { right: 10px; bottom: 10px; }
+  .header-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .header-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .preview-table {
+    font-size: 11.5px;
+  }
+  .preview-table th,
+  .preview-table td {
+    padding: 3px 6px;
+  }
+  .export-actions {
+    align-items: stretch;
+    max-width: 100%;
+  }
+  .export-status {
+    text-align: left;
+  }
 }

@@ -38,9 +38,22 @@ EXCEL_MIME = {
     ".xlsm": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".xls": "application/vnd.ms-excel",
 }
+# PDF и исходные сканы можно класть в parts. Excel — нет: провайдер отвечает
+# "must be a valid PDF" и роняет остальные вложения. Excel открывается через tool read.
+ATTACH_MIME = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".bmp": "image/bmp",
+}
 SKIP_EXCEL_ATTACH = ("сводная", "справочник", "catalog", "catalogue")
 MAX_EXCEL_ATTACH_BYTES = 4 * 1024 * 1024
 MAX_EXCEL_ATTACH_FILES = 8
+MAX_ATTACH_BYTES = 25 * 1024 * 1024
 
 
 def collect_excel_attachments(paths: list[Path] | None) -> list[Path]:
@@ -103,11 +116,12 @@ def to_jsonable(value: Any) -> Any:
             pass
     return str(value)
 
-DISABLED_TOOLS = {
+# false = выключен. read включён в вердикте: модель открывает абсолютные пути из промпта.
+SESSION_TOOLS = {
     "bash": False,
     "edit": False,
     "write": False,
-    "read": False,
+    "read": True,
     "glob": False,
     "grep": False,
     "webfetch": False,
@@ -115,6 +129,7 @@ DISABLED_TOOLS = {
     "task": False,
     "todowrite": False,
 }
+DISABLED_TOOLS = {key: False for key in SESSION_TOOLS}
 
 SYSTEM_PROMPT = (
     "You extract and verify commercial invoice / packing list / specification data from Excel tables and from scans. "
@@ -1237,32 +1252,56 @@ def _assistant_text(payload: Any) -> str:
     return ""
 
 
-def _binary_file_part(path: Path) -> dict[str, Any]:
-    mime = EXCEL_MIME.get(path.suffix.lower()) or "application/octet-stream"
-    data = path.read_bytes()
+def _binary_file_part(path: Path, mime: str | None = None) -> dict[str, Any]:
+    resolved = Path(path)
+    kind = mime or ATTACH_MIME.get(resolved.suffix.lower()) or EXCEL_MIME.get(resolved.suffix.lower()) or "application/octet-stream"
+    data = resolved.read_bytes()
     b64 = base64.b64encode(data).decode("ascii")
     return {
         "type": "file",
-        "mime": mime,
-        "filename": path.name,
-        "url": f"data:{mime};base64,{b64}",
+        "mime": kind,
+        "filename": resolved.name,
+        "url": f"data:{kind};base64,{b64}",
     }
 
 
 def _file_part(page: VisionPage) -> dict[str, Any]:
-    data = page.path.read_bytes()
-    b64 = base64.b64encode(data).decode("ascii")
-    return {
-        "type": "file",
-        "mime": "image/jpeg",
-        "filename": page.path.name,
-        "url": f"data:image/jpeg;base64,{b64}",
-    }
+    """Совместимость: старые JPEG-кадры. Боевой путь их больше не шлёт."""
+    return _binary_file_part(page.path, "image/jpeg")
+
+
+def collect_disk_attachments(paths: list[Path] | None) -> tuple[list[Path], list[Path]]:
+    """Делит пути: что кладём в parts (PDF/сканы) и что только читают через tool (Excel и прочее)."""
+    attach: list[Path] = []
+    via_read: list[Path] = []
+    seen: set[str] = set()
+    for raw in paths or []:
+        path = Path(raw)
+        if not path.is_file():
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        if size <= 0:
+            continue
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        suffix = path.suffix.lower()
+        if suffix in ATTACH_MIME and size <= MAX_ATTACH_BYTES:
+            attach.append(path.resolve())
+        else:
+            via_read.append(path.resolve())
+    return attach, via_read
 
 
 VERDICT_SYSTEM = (
     "Следуй правилам в сообщении пользователя. Ответ — один JSON без пояснения вокруг. "
-    "Число, которого нет в черновике и на страницах, не выдумывай."
+    "Источник истины — файлы поставки, не черновик кода. Открой пути инструментом read. "
+    "Бланки разные: названия, места полей, склейки, переносы страниц — решай по файлу, без жёсткой привязки к шаблону. "
+    "Число, которого нет в черновике и в файлах, не выдумывай. Не делай keep всем строкам без сверки с файлом."
 )
 
 
@@ -1289,25 +1328,36 @@ def review_with_opencode(
     pages: list[VisionPage] | None = None,
     image_paths: list[Path] | None = None,
     excel_paths: list[Path] | None = None,
+    disk_paths: list[Path] | None = None,
     user_prompt: str | None = None,
     model_override: str | None = None,
 ) -> dict[str, Any]:
     cfg = settings()
     model_name = (model_override or cfg["model"]).strip()
+    # pages/image_paths — устаревший JPEG-путь; боевой контур передаёт disk_paths.
     vision_pages = list(pages or [])
     if not vision_pages and image_paths:
         vision_pages = [VisionPage(path=path, source_name=path.name, page=None) for path in image_paths]
     excel_files = collect_excel_attachments(excel_paths)
+    attach_files, read_files = collect_disk_attachments(disk_paths)
+    # Excel из disk_paths уже в read_files; excel_paths дублируем в список имён для UI.
+    for path in excel_files:
+        resolved = path.resolve()
+        if resolved not in read_files and resolved not in attach_files:
+            read_files.append(resolved)
+    all_disk = [*(disk_paths or []), *excel_files]
     snapshot["excel_attachments"] = [path.name for path in excel_files]
+    snapshot["disk_files"] = [str(path) for path in all_disk]
     result: dict[str, Any] = {
         "status": "skipped",
         "model": model_name,
         "raw_text": "",
         "payload": None,
         "error": None,
-        "image_count": len(vision_pages),
-        "excel_attached": bool(excel_files),
-        "excel_files": [path.name for path in excel_files],
+        "image_count": 0,
+        "excel_attached": bool(read_files or attach_files),
+        "excel_files": [path.name for path in (*attach_files, *read_files)],
+        "disk_files": [str(path) for path in (*attach_files, *read_files)],
         "meaning": None,
         "header": {},
         "tables": [],
@@ -1328,11 +1378,13 @@ def review_with_opencode(
     prompt = user_prompt if user_prompt is not None else build_user_prompt(snapshot)
     system_prompt = VERDICT_SYSTEM if user_prompt is not None else SYSTEM_PROMPT
     parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-    # An xlsx sent as a file is rejected ("must be a valid PDF") and the
-    # provider then drops the page images too. Cell text from the workbook
-    # is already in the prompt. Images are extra pages of the same sheets.
-    for page in vision_pages:
-        parts.append(_file_part(page))
+    for path in attach_files:
+        parts.append(_binary_file_part(path))
+    # Старые JPEG-кадры только если нового disk_paths нет (legacy/тесты).
+    if not attach_files and not read_files:
+        for page in vision_pages:
+            parts.append(_file_part(page))
+            result["image_count"] = len(vision_pages)
 
     auth = None
     if cfg["password"]:
@@ -1354,7 +1406,7 @@ def review_with_opencode(
             message: dict[str, Any] = {
                 "system": system_prompt,
                 "model": {"providerID": provider_id, "modelID": model_id},
-                "tools": DISABLED_TOOLS,
+                "tools": SESSION_TOOLS,
                 "parts": parts,
             }
             if variant:

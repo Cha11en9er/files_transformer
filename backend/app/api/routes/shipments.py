@@ -42,10 +42,11 @@ from app.schemas.api import (
     ShipmentCreateResponse,
     ValidationErrorOut,
 )
+from app.services.model_inputs import new_postavka_dir, remove_postavka, stash_reading
 from app.services.opencode_review import review_with_opencode
-from app.services.pdf_pages import collect_vision_images
-from app.services.vision_cache import resolve_vision_file, stash_vision_pages
+from app.services.vision_cache import resolve_vision_file
 from app.services.prepare_site import (
+    allow_skip_model,
     apply_verdict,
     fee_rows,
     fill_from_catalog,
@@ -61,11 +62,9 @@ from app.services.prepare_site import (
     assess_draft,
     read_goods,
     review_files,
-    short_prompt,
     split_uploads,
     verdict_notes,
     verdict_prompt,
-    vision_paths,
 )
 from app.services.scan_reconcile import compute_excel_totals
 from app.services.export import build_export_preview, export_18233, export_beijing, write_recognition_book
@@ -585,10 +584,14 @@ def _iter_create_events(
             "draft_docs": draft_docs,
             "detail": f"{len(lots)} лотов",
         }
+        skip_model = allow_skip_model() and route == "known"
         route_text = {
-            "known": "Сверка итогов: форма знакомая, модель не вызывается",
-            "similar": "Сверка итогов: похожая форма, модель без фото",
-        }.get(route, "Сверка итогов: незнакомая форма, дальше фото и модель")
+            "known": (
+                "Сверка итогов: суммы сходятся"
+                + (", модель пропускаем (ALLOW_SKIP_MODEL)" if skip_model else ", дальше модель по файлам")
+            ),
+            "similar": "Сверка итогов: на части листов нет итога, дальше модель по файлам",
+        }.get(route, "Сверка итогов: спорная форма, дальше модель по файлам")
         gap_checks = [
             {
                 "name": item.get("name"),
@@ -613,63 +616,44 @@ def _iter_create_events(
             "draft_lots": len(lots),
             "draft_docs": draft_docs,
         }
-        vision_dir = tmp_dir / "vision"
         first_model = model_spec(1)
         second_model = model_spec(2)
         first_chip = _model_chip(first_model)
         second_chip = _model_chip(second_model) if second_model else ""
-        need_photos = route == "unknown" and bool(first_model)
-        vision_pages: list = []
-        vision_token = ""
-        vision_photos: list[dict[str, Any]] = []
-        if need_photos:
-            focus = vision_paths(reading, assessment)
+        postavka_dir: Path | None = None
+        disk_paths: list[Path] = []
+        disk_names: list[str] = []
+        prompt = ""
+        call_model = bool(first_model) and not skip_model
+        if call_model:
+            postavka_dir = new_postavka_dir()
 
-            def _photos() -> list:
-                try:
-                    return collect_vision_images(focus, vision_dir)
-                except Exception:
-                    return []
+            def _stash() -> list[Path]:
+                return stash_reading(reading, postavka_dir)
 
-            vision_pages = yield from _while_busy("Фото страниц", _photos)
-            vision_token = uuid.uuid4().hex
-            vision_photos = stash_vision_pages(vision_token, vision_pages)
-            photo_names = [item["name"] for item in vision_photos]
+            disk_paths = yield from _while_busy("Файлы для модели", _stash)
+            disk_names = [path.name for path in disk_paths]
+            abs_paths = [str(path) for path in disk_paths]
+            prompt = verdict_prompt(draft, file_paths=abs_paths)
             yield {
                 "event": "progress",
                 "current": total,
                 "total": total,
-                "filename": "Фото страниц",
-                "stage": "reconcile",
-                "message": f"Фото страниц, {len(vision_pages)} кадров",
-                "image_count": len(vision_pages),
-                "photo_names": photo_names,
-                "photos": vision_photos,
-                "vision_token": vision_token,
-                "detail": f"{len(vision_pages)} кадров",
+                "filename": "Файлы для модели",
+                "stage": "files",
+                "message": f"Файлы на диске: {len(disk_paths)}",
+                "disk_files": abs_paths,
+                "disk_names": disk_names,
+                "detail": ", ".join(disk_names[:6]),
             }
-        if route == "similar" and first_model:
-            prompt = short_prompt(draft)
             yield {
                 "event": "progress",
                 "current": total,
                 "total": total,
                 "filename": first_model or "модель",
                 "stage": "model",
-                "message": "Обычная модель без фото: подтверждение черновика",
+                "message": "Обычная модель: сверка черновика с файлами",
             }
-        elif route == "unknown" and first_model:
-            prompt = verdict_prompt(draft)
-            yield {
-                "event": "progress",
-                "current": total,
-                "total": total,
-                "filename": first_model or "модель",
-                "stage": "model",
-                "message": "Обычная модель: сверка черновика с фото",
-            }
-        else:
-            prompt = ""
 
         def _ask(spec: str, stage: str = "model") -> dict[str, Any]:
             """Спросить модель. Ошибка модели не рвёт поток: отдаём status=error и оставляем черновик кода."""
@@ -683,7 +667,7 @@ def _iter_create_events(
                             "ok",
                             review_with_opencode(
                                 snapshot={"title": title or "shipment", "context": {"excel": [], "pdfs": []}},
-                                pages=vision_pages,
+                                disk_paths=disk_paths,
                                 user_prompt=prompt,
                                 model_override=spec or None,
                             ),
@@ -725,9 +709,10 @@ def _iter_create_events(
                     "raw_text": "",
                     "payload": None,
                     "error": err_text,
-                    "image_count": len(vision_pages),
-                    "excel_attached": False,
-                    "excel_files": [],
+                    "image_count": 0,
+                    "excel_attached": bool(disk_paths),
+                    "excel_files": disk_names,
+                    "disk_files": [str(path) for path in disk_paths],
                     "meaning": f"{label} не ответила. В таблице черновик кода.",
                     "header": {},
                     "tables": [],
@@ -739,12 +724,20 @@ def _iter_create_events(
 
         review_dict: dict[str, Any] = {
             "status": "skipped",
-            "model": "" if route == "known" else first_model,
+            "model": "" if skip_model else first_model,
             "error": None,
-            "meaning": "Суммы строк сошлись с итогом листов. Модель не вызывалась." if route == "known" else None,
+            "meaning": (
+                "Суммы строк сошлись с итогом листов. Модель не вызывалась (ALLOW_SKIP_MODEL)."
+                if skip_model
+                else None
+            ),
+            "image_count": 0,
+            "disk_files": [str(path) for path in disk_paths],
+            "excel_files": disk_names,
         }
         verdict_dropped: list[str] = []
         second_used = False
+
         def _apply_model(target_lots: list[dict[str, Any]], payload: Any) -> tuple[list[dict[str, Any]], list[str]]:
             try:
                 applied = apply_verdict(target_lots, payload)
@@ -753,13 +746,13 @@ def _iter_create_events(
             except Exception as exc:  # noqa: BLE001 — кривой вердикт не должен ронять поставку
                 return target_lots, [f"Вердикт модели не применился ({humanize_exception(exc)}). Оставлен черновик кода."]
 
-        if first_model and route != "known":
+        if call_model:
             review_dict = yield from _ask(first_model, "model")
             if review_dict.get("status") == "ok":
                 lots, verdict_dropped = _apply_model(goods_lots(draft), review_dict.get("payload"))
             elif review_dict.get("error"):
                 verdict_dropped.append(f"Модель: {review_dict.get('error')}. Показан черновик кода.")
-        if route == "unknown" and second_model and needs_second_model(lots, draft.get("flags")):
+        if call_model and second_model and needs_second_model(lots, draft.get("flags")):
             second_used = True
             yield {
                 "event": "progress",
@@ -774,7 +767,6 @@ def _iter_create_events(
                 lots, verdict_dropped = _apply_model(goods_lots(draft), second.get("payload"))
                 review_dict = second
             elif second.get("error"):
-                # Первая модель (или код) уже в lots — вторую ошибку только помечаем.
                 if review_dict.get("status") == "ok":
                     verdict_dropped.append(
                         f"Улучшенная модель: {second.get('error')}. Оставляем вердикт обычной."
@@ -784,7 +776,7 @@ def _iter_create_events(
                     verdict_dropped.append(
                         f"Улучшенная модель: {second.get('error')}. Показан черновик кода."
                     )
-        shutil.rmtree(vision_dir, ignore_errors=True)
+        remove_postavka(postavka_dir)
 
         def _assemble() -> tuple[list[dict[str, Any]], list[str], dict[str, Any], list[dict[str, str]], list[str], list[dict[str, Any]]]:
             filled = list(lots)
@@ -969,13 +961,14 @@ def _iter_create_events(
             review_dict["meaning"] = (
                 "Обычная модель не собрала таблицу уверенно, смотрела улучшенная."
             )
-        elif route == "similar" and first_model:
-            review_dict["meaning"] = "Похожая форма: модель сверила черновик без фото."
-        elif route == "known":
-            review_dict["meaning"] = "Суммы строк сошлись с итогом листов. Модель не вызывалась."
+        elif skip_model:
+            review_dict["meaning"] = "Суммы строк сошлись с итогом листов. Модель не вызывалась (ALLOW_SKIP_MODEL)."
         elif first_model:
-            review_dict["meaning"] = "Вердикт обычной модели по фото."
-        review_dict["model_label"] = second_chip if second_used else ("" if route == "known" else first_chip)
+            review_dict["meaning"] = "Вердикт обычной модели по исходным файлам."
+        review_dict["model_label"] = second_chip if second_used else ("" if skip_model else first_chip)
+        review_dict["image_count"] = 0
+        review_dict.setdefault("disk_files", [str(path) for path in disk_paths])
+        review_dict.setdefault("excel_files", disk_names)
         try:
             model_review = ModelReviewOut.model_validate(review_dict)
         except Exception as exc:  # noqa: BLE001 — ответ модели кривой, таблицу кода всё равно отдаём
@@ -1023,17 +1016,18 @@ def _iter_create_events(
             header_changes=header_changed,
             header_notes=header_notes,
             verdict_run={
-                "first": "" if route == "known" else first_chip,
+                "first": "" if skip_model else first_chip,
                 "second": second_chip if second_used else "",
                 "used_second": second_used,
                 "route": route,
                 "reasons": list(assessment.get("reasons") or []),
+                "disk_files": [str(path) for path in disk_paths],
             },
         )
         done = payload.model_dump(mode="json")
-        if vision_photos:
-            done["vision_photos"] = vision_photos
-            done["vision_token"] = vision_token
+        if disk_names:
+            done["disk_files"] = [str(path) for path in disk_paths]
+            done["disk_names"] = disk_names
         yield {"event": "done", **done}
 
 

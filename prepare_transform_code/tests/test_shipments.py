@@ -200,6 +200,9 @@ class LanguageTest(unittest.TestCase):
         self.assertEqual(column_of("Box/коробка"), "packages")
         self.assertEqual(column_of("Specifications"), "description")
         self.assertEqual(column_of("Net weight kg 1 pair"), "unit_net")
+        self.assertEqual(column_of("Вес нетто\n1 груз. места"), "unit_net")
+        self.assertEqual(column_of("Груз.мест"), "packages")
+        self.assertEqual(column_of("Т.М"), "brand")
         self.assertEqual(currencies_of("SAY TOTAL: YUAN ONLY"), ["CNY"])
         buyer = party_after('BUYER: LIMITED LIABILITY COMPANY "TD 21 VEK" DATE: 22.12.2025')
         self.assertIn("TD 21 VEK", buyer["buyer"])
@@ -254,6 +257,69 @@ class LanguageTest(unittest.TestCase):
         self.assertEqual(_INVOICE_NO.search("No INVOICE RU30006").group(1), "RU30006")
         self.assertEqual(_INVOICE_NO.search("INVOICE NO: SG1251").group(1), "SG1251")
         self.assertEqual(_INVOICE_NO.search("INVOICE No. CI240301RU").group(1), "CI240301RU")
+
+
+class PravkaHeaderWeightTest(unittest.TestCase):
+    def test_terms_header_is_not_invoice_number(self):
+        from prepare_transform_code.shipment import _invoice_no_from_text, _delivery, _labeled_date, _party_head
+
+        blob = (
+            "INVOICE NO. TERMS OF SALE CURRENSY\n"
+            "Bank name: LONGJIANG BANK\n"
+            "Address: No.436, YOUYI ROAD, HARBIN\n"
+            "1310267841 ОТ 13.10.26 CPT USSURIYSK\n"
+        )
+        self.assertEqual(_invoice_no_from_text(blob), "1310267841")
+        self.assertEqual(_labeled_date(blob), "13.10.2026")
+        delivery, _ = _delivery(blob)
+        self.assertIn("CPT", delivery.upper())
+        self.assertIn("USSURIYSK", delivery.upper())
+        self.assertEqual(
+            _party_head(
+                "HEILONGJIANG SHIJIZHONGLONG BIO-TECHNOLOGY CO., LTD DONGXIN VILLAGE, TIELING TOWN"
+            ),
+            "HEILONGJIANG SHIJIZHONGLONG BIO-TECHNOLOGY CO., LTD",
+        )
+
+    def test_marking_note_is_not_vendor_and_tm_code_is_brand(self):
+        from prepare_transform_code.lines import Line, assign_cell, is_bare_total
+
+        note = Line(source="excel")
+        assign_cell(note, "vendor", "Указана на грузовых местах и инд-ых упаковках")
+        self.assertEqual(note.vendor, "")
+        brand = Line(source="excel")
+        assign_cell(brand, "brand", "87")
+        self.assertEqual(brand.brand, "87")
+        zero = Line(source="excel")
+        assign_cell(zero, "brand", "0")
+        self.assertEqual(zero.brand, "")
+        prev = [Line(source="excel", packages=10, net=100, pieces=50, amount=20) for _ in range(3)]
+        total = Line(source="excel", packages=30, net=300, pieces=150, price=999)
+        self.assertTrue(is_bare_total(total, prev))
+
+    def test_empty_article_fabric_export_does_not_crash(self):
+        import sys
+        import tempfile
+
+        backend = Path(__file__).resolve().parents[2] / "backend"
+        if str(backend) not in sys.path:
+            sys.path.insert(0, str(backend))
+        from app.services.export import export_18233
+
+        items = [
+            {
+                "article": "",
+                "commercial_data": {"qty": 1, "price": 2, "amount": 2, "unit": "pcs"},
+                "packing_data": {"rolls": 1, "net_weight": 1, "gross_weight": 2},
+                "customs_data": {"description": "sample", "hs_code": "1234567890"},
+                "source_traces": {"invoice": {"no": 1}},
+            }
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            paths = export_18233(items, Path(td), header={"currency": "CNY"}, shipment_title="probe")
+            self.assertEqual(len(paths), 3)
+            for path in paths:
+                self.assertTrue(path.exists())
 
 
 class NoTemplateBranchTest(unittest.TestCase):
@@ -483,11 +549,13 @@ class DatesAndPromptModesTest(unittest.TestCase):
         from prepare_transform_code.verdict import FULL_RULES, RULES, build_prompt
 
         self.assertLess(len(RULES), len(FULL_RULES))
-        os.environ["VERDICT_PROMPT"] = "full"
+        os.environ.pop("VERDICT_PROMPT", None)
         try:
             self.assertTrue(build_prompt({"lots": []}).startswith(FULL_RULES))
+            os.environ["VERDICT_PROMPT"] = "compact"
+            self.assertTrue(build_prompt({"lots": []}).startswith(RULES))
         finally:
-            del os.environ["VERDICT_PROMPT"]
+            os.environ.pop("VERDICT_PROMPT", None)
 
 
 class PhotoTileTest(unittest.TestCase):
@@ -562,10 +630,12 @@ class Shipment8Test(unittest.TestCase):
 
 class PromptTest(unittest.TestCase):
     def test_rules_stay_free_of_shipment_facts(self):
-        from prepare_transform_code.verdict import RULES, build_prompt
+        import os
+        from prepare_transform_code.verdict import FULL_RULES, RULES, build_prompt
 
         for banned in ("Шаблон", "TIG200", "JH21024", "HUAH", "81A"):
             self.assertNotIn(banned, RULES)
+            self.assertNotIn(banned, FULL_RULES)
         sample = {
             "documents": [{"name": "a.pdf", "role": "invoice", "line_count": 1}],
             "columns": ["description", "pieces"],
@@ -581,12 +651,19 @@ class PromptTest(unittest.TestCase):
             "order_nos": [],
             "contract": "",
         }
-        text = build_prompt(sample)
-        self.assertTrue(text.startswith(RULES))
-        self.assertIn("sample row", text)
-        self.assertIn("split", text)
-        self.assertIn("add", text)
-        self.assertEqual(sample["lots"][0]["description"], "sample row")
+        os.environ["VERDICT_PROMPT"] = "compact"
+        try:
+            text = build_prompt(sample, file_paths=["/opt/files_transformer_update/data/model_inputs/postavka_x/a.pdf"])
+            self.assertTrue(text.startswith(RULES))
+            self.assertIn("sample row", text)
+            self.assertIn("split", text)
+            self.assertIn("add", text)
+            self.assertIn("ФАЙЛЫ НА ДИСКЕ", text)
+            self.assertIn("ПРИОРИТЕТ", text)
+            self.assertIn("postavka_x/a.pdf", text)
+            self.assertEqual(sample["lots"][0]["description"], "sample row")
+        finally:
+            os.environ.pop("VERDICT_PROMPT", None)
 
     def test_stronger_model_only_when_the_draft_is_empty(self):
         from prepare_transform_code.verdict import needs_stronger_model

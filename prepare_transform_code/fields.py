@@ -7,10 +7,10 @@ from prepare_transform_code.numbers import collapse_letter_spacing
 
 # Более длинные фразы проверяются раньше коротких.
 COLUMNS = (
-    ("packages", ("q-ty packages", "q/ty cases", "qty cases", "qty of packages", "number of packages", "quantity of places", "quantity of place", "количество упаковок", "box qty", "koli adedi", "кол-во упаковок", "кол-во коробок", "кол-во мест", "количество мест", "количество коробок", "quantity/package", "места", "ctns", "ctn", "коробка", "boxes", "box", "bundles", "bundle", "связок", "связки", "件数")),
-    ("unit_net", ("вес ед", "нетт за", "n.w./ctn", "nw/ctn", "n.w./bundle", "nw/bundle", "unit n.w", "unit nw", "unit net")),
+    ("packages", ("q-ty packages", "q/ty cases", "qty cases", "qty of packages", "number of packages", "quantity of places", "quantity of place", "количество упаковок", "box qty", "koli adedi", "кол-во упаковок", "кол-во коробок", "кол-во мест", "количество мест", "количество коробок", "quantity/package", "груз.мест", "груз мест", "грузовых мест", "грузомест", "места", "ctns", "ctn", "коробка", "boxes", "box", "bundles", "bundle", "связок", "связки", "件数")),
+    ("unit_net", ("вес ед", "нетт за", "n.w./ctn", "nw/ctn", "n.w./bundle", "nw/bundle", "unit n.w", "unit nw", "unit net", "1 груз", "1 мест", "за место", "на 1 место", "per place", "per package", "per carton")),
     ("gross_with_pallet", ("with pallet", "брутто с", "с весом паллет", "с паллет")),
-    ("qty", ("q-ty items", "q/ty pairs", "quantity(mts)", "quantity (mts)", "qty(m)", "net meters", "net metres", "net meter", "net metre", "net mt", "goods pcs", "mal adedi", "кол-во пар", "кол-во штук", "кол-во шт", "количество", "装箱数")),
+    ("qty", ("q-ty items", "q/ty pairs", "quantity(mts)", "quantity (mts)", "qty(m)", "net meters", "net metres", "net meter", "net metre", "net mt", "goods pcs", "mal adedi", "кол-во пар", "кол-во штук", "кол-во шт", "количество", "штуки", "装箱数")),
     ("price", ("unit price", "price per", "price for pair", "price for unit", "eur unit", "цена за пару", "цена за ед", "цена за шт", "unitprice")),
     ("amount", ("gesamtpreis", "total price", "total amount", "total value", "eur item", "amount", "стоимость", "общая стоимость")),
     ("gross", ("w/o pallet", "without pallet", "без паллет", "gross weight", "gross wt", "gesamtgewicht", "total g. weight", "total kg", "gross kg", "итого вес брутто", "g.w", "gw", "брутто", "brutto", "brut", "毛重")),
@@ -106,12 +106,22 @@ def column_of(header):
         return "vendor"
     if text in {"код", "код тнвэд"}:
         return "hs"
-    if text in {"состав", "composition"}:
+    # Состав/composition — текст карточки в description. Дубль через // режет description_holds.
+    if text in {"состав", "composition"} or text.startswith("состав ") or text.startswith("composition "):
         return "description"
     if text in {"пр-ль", "пр-тель"}:
         return "producer"
     if text == "страна":
         return "origin"
+    # Т.М / Т.М. — торговая марка (как ТМ).
+    if re.fullmatch(r"т\.?\s*м\.?", text) or text in {"t.m", "t.m.", "tm"}:
+        return "brand"
+    # «Номер сертификата» / certificate — не товарная колонка лота, не артикул.
+    if "сертификат" in text or "certificate" in text or re.search(r"\bcert\b", text):
+        return None
+    # «Фото» в спецификации — картинка, не поле лота.
+    if text in {"фото", "photo", "image", "picture"}:
+        return None
     text = compact
     # Art No. — артикул. «part no» сюда не входит: перед art стоит буква.
     if re.search(r"(?<![a-z])art\.?\s*no\.?\b", text):
@@ -157,6 +167,13 @@ def column_of(header):
             continue
         if name == "net" and any(mark in text for mark in ("1 pair", "per pair", "per pc", "за шт", "за пар")):
             return "unit_net"
+        # «Вес нетто 1 груз. места» / net per place — вес одной упаковки, не нетто строки.
+        if name == "net" and (
+            re.search(r"\b1\b.*(?:груз|мест|place|package|carton|короб)", text)
+            or re.search(r"(?:груз|мест|place|package).*\b1\b", text)
+            or any(mark in text for mark in ("за место", "на 1 место", "per place", "per package"))
+        ):
+            return "unit_net"
         if name == "net" and any(
             mark in text
             for mark in (
@@ -173,11 +190,14 @@ def column_of(header):
             )
         ):
             return "unit_net"
+        # «Груз.мест» — места. Не путать с «вес … места».
         if name == "packages" and any(
             mark in text
             for mark in ("/ctn", "per ctn", "per carton", "/bundle", "n.w", "g.w", "weight", "вес", "нетто", "брут", "размер", "size", "cbm", "объ", "kg", "kgs", "кг")
         ):
             continue
+        if name == "packages" and re.search(r"груз", text) and re.search(r"мест", text):
+            return "packages"
         # ROLL No. — номер рулона, не количество мест.
         if name == "packages" and re.search(r"\broll\s*(?:no|nr|number|#|№)\b", text):
             continue
