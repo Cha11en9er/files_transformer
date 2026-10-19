@@ -691,12 +691,39 @@ const FLOW_EDGES = [
   { id: "assemble-done", from: "assemble", to: "done", title: "Что распозналось", mark: "итог" },
 ];
 
+/** Основные этапы кольца вокруг активной вершины. */
+const FLOW_RING_STAGES = ["receive", "read", "check", "files", "verdict", "assemble", "done"];
+const MODEL_PHASE_ORDER = ["session", "read", "think", "limit", "timeout", "error"];
+
 function formatStepSeconds(ms) {
   const sec = Math.max(0, Math.round(ms / 1000));
   if (sec < 60) return `${sec} с`;
   const min = Math.floor(sec / 60);
   const rest = sec % 60;
   return rest ? `${min} мин ${rest} с` : `${min} мин`;
+}
+
+function ringArcPaths(cx, cy, r, total, filled, activeIndex) {
+  const gap = 0.14;
+  const sweep = (Math.PI * 2 - gap * total) / total;
+  let angle = -Math.PI / 2;
+  const parts = [];
+  for (let i = 0; i < total; i += 1) {
+    const next = angle + sweep;
+    const x0 = cx + r * Math.cos(angle);
+    const y0 = cy + r * Math.sin(angle);
+    const x1 = cx + r * Math.cos(next);
+    const y1 = cy + r * Math.sin(next);
+    const large = sweep > Math.PI ? 1 : 0;
+    let klass = "flow-seg";
+    if (i < filled) klass += " is-done";
+    else if (i === activeIndex) klass += " is-active";
+    parts.push(
+      `<path class="${klass}" d="M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}" />`
+    );
+    angle = next + gap;
+  }
+  return parts.join("");
 }
 
 function progressSeconds(message) {
@@ -748,15 +775,18 @@ const pipeline = {
       unreadable: [],
       diskFiles: [],
       diskNames: [],
+      diskCount: 0,
       draftLots: null,
       draftDocs: [],
+      draftPreview: [],
+      modelPhase: "",
       model: {},
       model2: {},
     };
     this.nodes = Object.fromEntries(
       FLOW_NODES.map((node) => [
         node.id,
-        { ...node, state: "wait", started: 0, ended: 0, serverSeconds: null, detail: "" },
+        { ...node, state: "wait", started: 0, ended: 0, serverSeconds: null, detail: "", modelPhase: "" },
       ])
     );
     if (!this.hasCatalog) this.nodes.catalog.state = "skip";
@@ -811,8 +841,12 @@ const pipeline = {
     if (Array.isArray(extra.unreadable)) this.trace.unreadable = extra.unreadable;
     if (Array.isArray(extra.disk_files)) this.trace.diskFiles = extra.disk_files;
     if (Array.isArray(extra.disk_names)) this.trace.diskNames = extra.disk_names;
+    if (Number.isFinite(extra.disk_count)) this.trace.diskCount = extra.disk_count;
+    else if (Array.isArray(extra.disk_names)) this.trace.diskCount = extra.disk_names.length;
     if (Number.isFinite(extra.draft_lots)) this.trace.draftLots = extra.draft_lots;
     if (Array.isArray(extra.draft_docs)) this.trace.draftDocs = extra.draft_docs;
+    if (Array.isArray(extra.draft_preview)) this.trace.draftPreview = extra.draft_preview;
+    if (extra.model_phase) this.trace.modelPhase = extra.model_phase;
   },
   markPath(id) {
     const map = {
@@ -836,13 +870,24 @@ const pipeline = {
     if (!this.nodes[id]) return;
     this.note(extra);
     const seconds = extra && Number.isFinite(extra.seconds) ? extra.seconds : null;
-    const detail = extra?.detail || "";
+    let detail = extra?.detail || "";
+    if (id === "files") {
+      const count =
+        Number.isFinite(extra?.disk_count) ? extra.disk_count
+        : Array.isArray(extra?.disk_names) ? extra.disk_names.length
+        : this.trace.diskCount || (this.trace.diskNames || []).length || 0;
+      detail = count ? `${count} файлов` : detail || "файлы";
+    }
+    if ((id === "verdict" || id === "verdict2") && extra?.model_phase) {
+      detail = extra.detail || extra.model_phase;
+    }
     const now = Date.now();
     const order = FLOW_NODES.map((n) => n.id);
     const cur = order.indexOf(this.current);
     if (id === this.current && this.nodes[id].state === "run") {
       if (seconds != null) this.nodes[id].serverSeconds = seconds;
       if (detail) this.nodes[id].detail = detail;
+      if (extra?.model_phase) this.nodes[id].modelPhase = extra.model_phase;
       this.paint();
       return;
     }
@@ -856,6 +901,7 @@ const pipeline = {
     this.nodes[id].started = this.nodes[id].started || now;
     if (seconds != null) this.nodes[id].serverSeconds = seconds;
     if (detail) this.nodes[id].detail = detail;
+    if (extra?.model_phase) this.nodes[id].modelPhase = extra.model_phase;
     this.markPath(id);
     this.paint();
   },
@@ -926,6 +972,31 @@ const pipeline = {
     if (Math.abs(a.y - b.y) < 8) return { x: mx, y: my - 12 };
     return { x: mx + 10, y: my - 8 };
   },
+  ringProgress() {
+    const order = FLOW_RING_STAGES;
+    let filled = 0;
+    let active = -1;
+    for (let i = 0; i < order.length; i += 1) {
+      const state = this.nodes[order[i]]?.state;
+      if (state === "past" || state === "skip") filled = i + 1;
+      else if (state === "run" || state === "fail") {
+        active = i;
+        break;
+      }
+    }
+    if (this.finished) {
+      filled = order.length;
+      active = -1;
+    }
+    // На модели кольцо дополнительно дробит текущий сегмент по фазе.
+    let modelFrac = 0;
+    if (active >= 0 && (order[active] === "verdict" || order[active] === "verdict2")) {
+      const phase = this.nodes[order[active]]?.modelPhase || this.trace.modelPhase || "";
+      const idx = MODEL_PHASE_ORDER.indexOf(phase);
+      modelFrac = idx >= 0 ? (idx + 1) / MODEL_PHASE_ORDER.length : 0.25;
+    }
+    return { filled, active, total: order.length, modelFrac };
+  },
   paint() {
     const svg = $("#flow-svg");
     if (!svg) return;
@@ -949,14 +1020,20 @@ const pipeline = {
       const mark = edge.mark ? `<text class="${labelKlass}" x="${mid.x}" y="${mid.y}">${escapeHtml(edge.mark)}</text>` : "";
       return `<path class="flow-edge-hit" data-edge="${edge.id}" d="${d}" /><path class="${klass}" data-edge="${edge.id}" d="${d}" />${mark}`;
     }).join("");
+    const ring = this.ringProgress();
     const nodeMarks = FLOW_NODES.map((spec) => {
       const node = this.nodes[spec.id] || spec;
       const time = this.timeLabel(node);
+      const isActive = node.state === "run";
+      const ringSvg = isActive
+        ? ringArcPaths(spec.x, spec.y, 24, ring.total, ring.filled, ring.active)
+        : "";
       return `<g class="flow-node is-${node.state || "wait"}" data-node="${spec.id}">
+        ${ringSvg}
         <circle cx="${spec.x}" cy="${spec.y}" r="18"></circle>
-        <circle class="flow-node-hit" cx="${spec.x}" cy="${spec.y}" r="26" fill="transparent" stroke="none"></circle>
+        <circle class="flow-node-hit" cx="${spec.x}" cy="${spec.y}" r="28" fill="transparent" stroke="none"></circle>
         <text x="${spec.x}" y="${spec.y - 28}">${escapeHtml(spec.title)}</text>
-        <text class="flow-sub" x="${spec.x}" y="${spec.y + 34}">${escapeHtml(time)}</text>
+        <text class="flow-sub" x="${spec.x}" y="${spec.y + 36}">${escapeHtml(time)}</text>
       </g>`;
     }).join("");
     svg.innerHTML = edgeLines + nodeMarks;
@@ -1013,6 +1090,35 @@ function openNodeDialog(nodeId) {
   });
 }
 
+function draftPreviewTableHtml(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return "";
+  const body = list
+    .map((row, index) => {
+      const cells = [
+        index + 1,
+        row.article || "",
+        row.description || "",
+        row.pieces ?? "",
+        row.packages ?? "",
+        row.net ?? "",
+        row.gross ?? "",
+        row.amount ?? "",
+        row.hs || "",
+      ]
+        .map((cell) => `<td>${escapeHtml(cell == null || cell === "" ? "" : String(cell))}</td>`)
+        .join("");
+      return `<tr>${cells}</tr>`;
+    })
+    .join("");
+  return `<div class="check-card"><h4>Что прочитал код</h4>
+    <p class="check-why">Черновик до модели. Модель может поправить числа и строки по файлам.</p>
+    <div class="table-scroll"><table class="mini-table">
+      <thead><tr><th>№</th><th>Артикул</th><th>Описание</th><th>Шт</th><th>Места</th><th>Нетто</th><th>Брутто</th><th>Сумма</th><th>ТН ВЭД</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table></div></div>`;
+}
+
 function draftReadHtml() {
   const ws = state.workspace;
   const tr = pipeline.trace || {};
@@ -1028,6 +1134,7 @@ function draftReadHtml() {
     })
     .join("");
   const lots = Number.isFinite(tr.draftLots) ? tr.draftLots : null;
+  const preview = draftPreviewTableHtml(tr.draftPreview || []);
   const readDone = ["past", "run", "fail"].includes(pipeline.nodes.read?.state) || pipeline.finished;
   let head = "";
   if (lots != null) {
@@ -1050,26 +1157,21 @@ function draftReadHtml() {
         ${renderRecognizedTable(file.table, file)}</div>`
     )
     .join("");
-  if (tables || docsBlock || statusBlock) {
-    return `<div class="check-card"><h4>Черновик кода</h4>${head}</div>${docsBlock}${statusBlock}${tables}`;
+  if (preview || tables || docsBlock || statusBlock) {
+    return `<div class="check-card"><h4>Черновик кода</h4>${head}</div>${docsBlock}${preview}${statusBlock}${tables}`;
   }
   if (readDone) {
-    return `<div class="check-card"><h4>Черновик кода</h4>${head}<p class="hint">Подробная таблица появится после сборки - открой «Готово».</p></div>`;
+    return `<div class="check-card"><h4>Черновик кода</h4>${head}<p class="hint">Таблица черновика ещё не пришла. Подожди конец чтения или открой после сборки «Готово».</p></div>`;
   }
   return `<div class="check-card"><h4>Черновик кода</h4>${head}</div>`;
 }
 
 function renderDiskFiles() {
   const tr = pipeline.trace || {};
-  const paths = tr.diskFiles || [];
-  const names = tr.diskNames || paths.map((p) => String(p).split(/[/\\]/).pop());
-  const rows = names.map((name, index) => {
-    const path = paths[index] || "";
-    return `<li><strong>${escapeHtml(name)}</strong>${path ? `<br><span class="hint">${escapeHtml(path)}</span>` : ""}</li>`;
-  }).join("");
+  const count = tr.diskCount || (tr.diskNames || []).length || (tr.diskFiles || []).length;
   return `<div class="check-card"><h4>Файлы для модели</h4>
     <p class="check-why">Исходники на диске сервера. Модель читает их по абсолютному пути (без JPEG-кадров).</p>
-    <ul>${rows || "<li>пути ещё не пришли</li>"}</ul></div>`;
+    <p class="check-why"><strong>${count || 0} файлов</strong></p></div>`;
 }
 
 function edgeDialogHtml(edgeId) {
@@ -1300,8 +1402,11 @@ async function processShipment() {
           unreadable: extra?.unreadable,
           disk_files: extra?.disk_files,
           disk_names: extra?.disk_names,
+          disk_count: extra?.disk_count,
           draft_lots: extra?.draft_lots,
           draft_docs: extra?.draft_docs,
+          draft_preview: extra?.draft_preview,
+          model_phase: extra?.model_phase,
           message: extra?.message,
         });
       },
@@ -1403,8 +1508,11 @@ async function parseUploadStream(fd, hooks) {
             unreadable: event.unreadable,
             disk_files: event.disk_files,
             disk_names: event.disk_names,
+            disk_count: event.disk_count,
             draft_lots: event.draft_lots,
             draft_docs: event.draft_docs,
+            draft_preview: event.draft_preview,
+            model_phase: event.model_phase,
           });
         } else if (event.event === "file") {
           hooks.onFile(event.filename, event.status, event.message);
