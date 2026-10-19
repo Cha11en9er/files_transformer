@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -57,6 +56,11 @@ def model_spec(slot: int) -> str:
     if slot == 1:
         return (os.getenv("OPENCODE_MODEL_1") or os.getenv("OPENCODE_MODEL") or "").strip()
     return (os.getenv("OPENCODE_MODEL_2") or "").strip()
+
+
+def allow_skip_model() -> bool:
+    """По умолчанию модель всегда вызывается. ALLOW_SKIP_MODEL=1 — старый known-skip для отладки."""
+    return os.getenv("ALLOW_SKIP_MODEL", "").strip().lower() in {"1", "true", "yes"}
 
 
 def is_reference_name(filename: str, catalog_names: set[str] | None) -> bool:
@@ -125,8 +129,8 @@ def _add_ocr_hints(folder: Path, draft: dict[str, Any]) -> None:
             doc["ocr_text"] = text[:6000]
 
 
-def verdict_prompt(draft: dict[str, Any]) -> str:
-    return build_prompt(draft)
+def verdict_prompt(draft: dict[str, Any], file_paths: list[str] | list[Path] | None = None) -> str:
+    return build_prompt(draft, file_paths=file_paths)
 
 
 def _filled(value: Any) -> bool:
@@ -246,12 +250,6 @@ _MEASURE_FIELDS = (
     ("area", "area"),
 )
 _QUIET_ROLES = {"draft", "gtd_form", "customs_appendix", "duplicate"}
-_SHORT_RULES = """\
-Черновик кода уже прочитан. Фото нет: текстовый слой сходится, сканов без слоя нет.
-Число, которого нет в черновике, не выдумывай. Два разных числа одного поля не выбирай: оставь черновик и напиши reason.
-Лист из leftovers в лоты не добавляй. Если строка верна, action keep.
-Ответ — один JSON без пояснения вокруг: {"header": {}, "lots": [{"index": 0, "action": "keep", "fields": {}, "reason": ""}]}
-"""
 
 
 def _plain_number(value: Any) -> float | None:
@@ -269,10 +267,10 @@ def _numbers_close(left: float | None, right: float | None) -> bool:
 
 
 def assess_draft(draft: dict[str, Any]) -> dict[str, Any]:
-    """Три дороги. known — суммы сходятся, модель не зовём. similar — модель без фото. unknown — фото и полный промпт.
+    """Диагностика черновика: known / similar / unknown.
 
-    Лист со строками, которые не вошли в лоты, не пропадает: он остаётся в leftovers.
-    Два разных итога одного поля маршрут в known не пускают.
+    На проде модель зовётся всегда (см. allow_skip_model). Маршрут остаётся в UI
+    и решает, нужна ли вторая модель при дырах. Лист из leftovers не пропадает.
     """
     documents = list(draft.get("documents") or [])
     tables = draft.get("document_tables") or {}
@@ -387,11 +385,11 @@ def assess_draft(draft: dict[str, Any]) -> dict[str, Any]:
     if gaps:
         reasons.append("сумма строк не сходится с итогом листа")
     if path == "known":
-        reasons.append("суммы сходятся с итогом листов, модель не нужна")
+        reasons.append("суммы сходятся с итогом листов")
     elif path == "similar":
-        reasons.append("форма похожа на уже разобранную, модель без фото")
+        reasons.append("на части листов нет напечатанного итога")
     else:
-        reasons.append("незнакомая или спорная форма, смотрит модель")
+        reasons.append("незнакомая или спорная форма")
     return {
         "path": path,
         "reasons": reasons,
@@ -419,24 +417,9 @@ def vision_paths(reading: list[tuple[Path, str]], assessment: dict[str, Any]) ->
     return picked or [path for path, _display in reading]
 
 
-def short_prompt(draft: dict[str, Any]) -> str:
-    """Короткий запрос без фото. Те же поля, что у полного вердикта, без длинных правил."""
-    payload = {
-        "header": {
-            "seller": draft.get("seller") or "",
-            "buyer": draft.get("buyer") or "",
-            "contract": draft.get("contract") or "",
-            "invoice_no": draft.get("invoice_no") or "",
-            "currency": draft.get("currency_printed") or draft.get("currency") or "",
-            "invoice_date": draft.get("invoice_date") or "",
-            "delivery": draft.get("delivery") or "",
-        },
-        "flags": list(draft.get("flags") or []),
-        "lots": draft.get("lots") or [],
-        "sheet_checks": draft.get("sheet_checks") or [],
-        "leftovers": draft.get("leftovers") or [],
-    }
-    return _SHORT_RULES + "\nДАННЫЕ КОДА:\n" + json.dumps(payload, ensure_ascii=False) + "\n"
+def short_prompt(draft: dict[str, Any], file_paths: list[str] | list[Path] | None = None) -> str:
+    """Совместимость с тестами. Боевой путь всегда берёт verdict_prompt / build_prompt."""
+    return verdict_prompt(draft, file_paths=file_paths)
 
 
 def _as_number(value: Any) -> Any:
@@ -860,6 +843,7 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
             ("area", "area"),
             ("net", "net_weight"),
             ("net_primary", "net_primary"),
+            ("unit_net", "unit_net"),
             ("gross", "gross_weight"),
             ("volume", "volume"),
         ):

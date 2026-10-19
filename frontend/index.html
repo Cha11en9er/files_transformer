@@ -112,35 +112,45 @@
           <label>Manufacturer / Производитель <input name="manufacturer" /></label>
           <label>Delivery date / Срок поставки <input name="delivery_date" /></label>
           <label>Warehouse address / Адрес склада <input name="warehouse_address" /></label>
-          <button type="submit" class="btn primary compact-btn btn-save-header">Сохранить</button>
+          <div class="header-actions">
+            <button type="submit" class="btn primary compact-btn btn-save-header">Сохранить</button>
+            <button type="button" class="btn compact-btn btn-excel-view" id="btn-excel-view" aria-pressed="false">Посмотреть как в Excel</button>
+          </div>
         </form>
       </details>
 
-      <div class="table-toolbar">
-        <div class="role-tabs" id="role-tabs" role="tablist">
-          <button type="button" class="role-tab active" data-role="invoice">Инвойс</button>
-          <button type="button" class="role-tab" data-role="packing">Пакинг</button>
-          <button type="button" class="role-tab" data-role="specification">Спецификация</button>
+      <div id="work-table-panel" class="work-table-panel">
+        <div class="table-toolbar">
+          <div class="role-tabs" id="role-tabs" role="tablist">
+            <button type="button" class="role-tab active" data-role="invoice">Инвойс</button>
+            <button type="button" class="role-tab" data-role="packing">Пакинг</button>
+            <button type="button" class="role-tab" data-role="specification">Спецификация</button>
+          </div>
+          <p class="field-note table-role-note">Таблица показывает столбцы выбранного файла. Наведите на название, чтобы удалить столбец. Ошибки и предупреждения видны здесь.</p>
         </div>
-        <p class="field-note table-role-note">Таблица показывает столбцы выбранного файла. Наведите на название, чтобы удалить столбец.</p>
+        <div class="legend table-legend">
+          <span class="pill red">Расхождение</span>
+          <span class="pill yellow">Пропуск или нет соответствия</span>
+          <span class="pill orange">Низкая уверенность распознавания</span>
+          <span class="pill red">Скан не совпал с Excel</span>
+        </div>
+        <div class="table-wrap">
+          <table id="items-table">
+            <thead></thead>
+            <tbody></tbody>
+            <tfoot></tfoot>
+          </table>
+        </div>
+        <footer class="table-foot" id="table-foot" aria-label="Подсказка по работе с таблицей">
+          <p class="table-foot-main">Нажмите «Изменить» или ячейку строки, чтобы править позицию. Исходные файлы не меняются. Реквизиты документа - в блоке выше.</p>
+          <p class="table-foot-export">Проверьте таблицу и реквизиты, затем сформируйте Excel. Первый профиль даёт три книги, второй - одну. PDF сервис не формирует.</p>
+        </footer>
       </div>
-      <div class="legend table-legend">
-        <span class="pill red">Расхождение</span>
-        <span class="pill yellow">Пропуск или нет соответствия</span>
-        <span class="pill orange">Низкая уверенность распознавания</span>
-      <span class="pill red">Скан не совпал с Excel</span>
+
+      <div id="excel-view-panel" class="excel-view-panel hidden" hidden>
+        <p id="export-preview-meta" class="hint excel-view-meta">Так будут выглядеть скачиваемые книги и листы.</p>
+        <div id="export-preview" class="export-preview" aria-live="polite"></div>
       </div>
-      <div class="table-wrap">
-        <table id="items-table">
-          <thead></thead>
-          <tbody></tbody>
-          <tfoot></tfoot>
-        </table>
-      </div>
-      <footer class="table-foot" id="table-foot" aria-label="Подсказка по работе с таблицей">
-        <p class="table-foot-main">Нажмите «Изменить» или ячейку строки, чтобы править позицию. Исходные файлы не меняются. Реквизиты документа - в блоке выше.</p>
-        <p class="table-foot-export">Проверьте таблицу и реквизиты, затем сформируйте Excel. Первый профиль даёт три книги, второй - одну. PDF сервис не формирует.</p>
-      </footer>
 
     </section>
   </div>

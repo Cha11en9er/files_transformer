@@ -128,8 +128,7 @@ def is_bare_total(line, previous):
         total = sum(item.amount or 0 for item in previous if not item.freight)
         if total > 0 and abs(total - line.amount) <= max(0.02, abs(total) * 0.002):
             return True
-    if line.price is not None:
-        return False
+    # Сумма штук/мест/веса важнее случайной цены из формулы в строке итога.
     for name in ("pieces", "packages", "gross", "net", "volume", "area"):
         value = getattr(line, name)
         if value is None:
@@ -303,7 +302,22 @@ def is_roll_serial(header, value):
 
 def _absent_token(text):
     token = " ".join(str(text or "").casefold().split()).strip(" .")
-    return token in {"отсутствует", "отсутств", "absent", "n/a", "n/m", "нет", "no", "none"}
+    return token in {"отсутствует", "отсутств", "absent", "n/a", "n/m", "нет", "no", "none", "0"}
+
+
+def _marking_note(text):
+    """«Маркировка согласно ярлыка…» / «указана на грузовых местах» — заметка, не артикул."""
+    low = " ".join(str(text or "").casefold().split())
+    if not low:
+        return False
+    return bool(
+        re.search(
+            r"указан[аоые]\s+на|согласно\s+ярлык|according\s+to\s+(?:the\s+)?(?:label|marking|marks)|"
+            r"on\s+(?:the\s+)?(?:cargo|package|shipping|gross)\s+places|инд-?ых\s+упаков|"
+            r"маркировка\s+согласно|marking\s+as\s+per",
+            low,
+        )
+    )
 
 
 def is_registry_line(line):
@@ -361,6 +375,9 @@ def assign_cell(line, name, value, header_is_package=False):
             return
         if name == "brand" and text in {"-", "—", "–", "/"}:
             return
+        # Заметка «маркировка согласно ярлыка» в колонке артикула — не код товара.
+        if name in {"vendor", "model"} and _marking_note(text):
+            return
         # В колонку единицы иногда уезжает название товара. Единица — короткое слово.
         if name == "unit" and (len(text) > 24 or len(text.split()) > 4):
             return
@@ -371,8 +388,7 @@ def assign_cell(line, name, value, header_is_package=False):
         # «1» рядом с set/pcs — делитель цены, не единица. Единица — слово в соседней клетке.
         if name == "unit" and re.fullmatch(r"\d+[.,]?\d*", text):
             return
-        if name == "brand" and re.fullmatch(r"\d{1,3}", text):
-            return
+        # Числовой код Т.М (87) — марка. Голый 0 уже отсечён в _absent_token.
         if text and not getattr(line, name):
             setattr(line, name, text)
         return

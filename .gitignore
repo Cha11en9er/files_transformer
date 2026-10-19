@@ -7,6 +7,10 @@
 backend/uploads/
 backend/exports/
 backend/data/vision_cache/
+backend/data/model_inputs/*
+!backend/data/model_inputs/.gitkeep
+data/model_inputs/
+!data/model_inputs/.gitkeep
 uploads/
 exports/
 documents/

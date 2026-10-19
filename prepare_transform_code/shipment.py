@@ -13,6 +13,25 @@ _INVOICE_NO = re.compile(
     r"(?:INV(?:OICE)?\s*\.?\s*(?:NO|NR|NUMBER)\.?(?:\s+AND\s+DATE)?|(?:NO|NR)\.?\s*INVOICE|(?<![A-Z])INVOICE\s*:)\s*:?\s*([A-Z0-9][A-Z0-9./\-]{2,})",
     re.I,
 )
+# «INVOICE NO. TERMS OF SALE CURRENCY» — это шапка колонок, не номер.
+_INVOICE_NO_SKIP = {
+    "terms",
+    "sale",
+    "sales",
+    "date",
+    "currency",
+    "currensy",
+    "of",
+    "and",
+    "the",
+    "no",
+    "nr",
+    "number",
+    "packing",
+    "list",
+    "commercial",
+    "invoice",
+}
 _CONTRACT = re.compile(
     r"(?:CONTRACT|CONTRAT)\s*(?:NO|NR|NUMBER|#|№|N[°º])?\.?\s*:?\s*([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9./\-]{2,})",
     re.I,
@@ -158,14 +177,16 @@ def analyze(folder):
             pinned_currency = from_column[0]
     if len(all_currencies) > 1 and not pinned_currency:
         notes.append("Валюта не привязана к колонке цены, в документах несколько кодов: " + ", ".join(all_currencies))
-    invoice_nos = _labeled_numbers(plain, _INVOICE_LABEL)
-    invoice_no = _first(_INVOICE_NO, text)
+    invoice_nos = [item for item in _labeled_numbers(plain, _INVOICE_LABEL) if _ok_invoice_no(item)]
+    invoice_no = _invoice_no_from_text(text)
     if invoice_no and invoice_no not in invoice_nos:
         invoice_nos.insert(0, invoice_no)
     elif invoice_no is None and invoice_nos:
         invoice_no = invoice_nos[0]
     if invoice_no is None:
         invoice_no = _first(_NO_BEFORE_TITLE, text)
+        if invoice_no and not _ok_invoice_no(invoice_no):
+            invoice_no = None
         if invoice_no and invoice_no not in invoice_nos:
             invoice_nos.insert(0, invoice_no)
     if invoice_no is None:
@@ -175,7 +196,7 @@ def analyze(folder):
             if not _is_role(doc, "invoice"):
                 continue
             found = _first(_DOC_NUM, doc.get("raw_text") or doc.get("text") or "")
-            if found:
+            if found and _ok_invoice_no(found):
                 invoice_no = found
                 if invoice_no not in invoice_nos:
                     invoice_nos.insert(0, invoice_no)
@@ -617,6 +638,15 @@ def _order_no(text):
     return None
 
 
+def _normalize_short_date(day, month, year):
+    year = int(year)
+    if year < 100:
+        year += 2000 if year < 70 else 1900
+    if not (1 <= int(month) <= 12 and 1 <= int(day) <= 31):
+        return ""
+    return f"{int(day):02d}.{int(month):02d}.{year}"
+
+
 def _labeled_date(text):
     match = re.search(
         r"(?m)^\s*DATE\s*:\s*(\d{2}[./]\d{2}[./]\d{4}|[A-Za-z]{3,9}\.?\s*\d{1,2},\s*\d{4})",
@@ -632,6 +662,14 @@ def _labeled_date(text):
     )
     if match:
         return match.group(1)
+    # «1310267841 ОТ 13.10.26 CPT …» — дата инвойса на строке значения, не подпись DATE.
+    match = re.search(
+        r"(?m)^\d{6,12}\s+(?:ОТ|от|dd|dated)\s+(\d{1,2})[./](\d{1,2})[./](\d{2,4})\b",
+        text or "",
+        re.I,
+    )
+    if match:
+        return _normalize_short_date(match.group(1), match.group(2), match.group(3))
     return _title_date(text)
 
 
@@ -814,18 +852,58 @@ def _contract_date(text):
     return ""
 
 
+def _ok_invoice_no(value):
+    token = str(value or "").strip()
+    if not token:
+        return False
+    head = re.split(r"[\s/]", token, maxsplit=1)[0].casefold()
+    if head in _INVOICE_NO_SKIP or token.casefold() in _INVOICE_NO_SKIP:
+        return False
+    return True
+
+
+def _invoice_no_from_text(text):
+    """Номер инвойса. Слово TERMS из шапки «INVOICE NO. TERMS OF SALE» номером не является."""
+    for match in _INVOICE_NO.finditer(text or ""):
+        candidate = match.group(1)
+        if _ok_invoice_no(candidate):
+            return candidate
+    # Строка значения под склеенной шапкой: 1310267841 ОТ 13.10.26 CPT USSURIYSK
+    match = re.search(
+        r"(?m)^(\d{6,12})\s+(?:ОТ|от|dd|dated)\s+\d{1,2}[./]\d{1,2}[./]\d{2,4}\b",
+        text or "",
+        re.I,
+    )
+    if match:
+        return match.group(1)
+    return None
+
+
+def _looks_like_delivery(value):
+    """Значение базиса начинается с Incoterm. «Address: …» после Delivery basis — не базис."""
+    return bool(
+        re.match(
+            r"(?i)^(?:EX[\s\-]*WORKS?|EXW|FOB|FCA|CIF|CFR|CPT|CIP|DAP|DDP|DPU)\b",
+            str(value or "").strip(),
+        )
+    )
+
+
 def _delivery(text):
     found = []
     for label in (
         r"terms of delivery(?:\s*/[^:\n]{0,40})?\s*:\s*([^\n]+)",
         r"delivery terms\s*:\s*([^\n]+)",
         r"inco\s*terms\s*:?\s*([^\n]+)",
+        # Двоеточие обязательно: иначе «The delivery basis» без значения хватает Address справа.
+        r"(?:the\s+)?delivery\s+basis(?:\s*/[^:\n]{0,40})?\s*:\s*([^\n]+)",
+        r"базис\s+поставки\s*:\s*([^\n]+)",
     ):
         for match in re.finditer(label, text or "", re.I):
             value = " ".join(match.group(1).split())
-            value = re.split(r"(?i)\b(?:shipment|payment|manufacturer|origin)\b", value)[0].strip(" .:")
+            value = re.split(r"(?i)\b(?:shipment|payment|manufacturer|origin|address|адрес)\b", value)[0].strip(" .:")
             value = _trim_delivery_company(value)
-            if value and not _same_term(value, found):
+            if value and _looks_like_delivery(value) and not _same_term(value, found):
                 found.append(value)
     for match in re.finditer(
         r"(?m)^\s*((?:EX[\s\-]*WORKS?|EXW|FOB|FCA|CIF|CFR|CPT|CIP|DAP|DDP|DPU)\b[^\n]{0,40})",
@@ -834,8 +912,21 @@ def _delivery(text):
     ):
         value = " ".join(match.group(1).split())
         value = _trim_delivery_company(value)
-        if value and not _same_term(value, found):
+        if value and _looks_like_delivery(value) and not _same_term(value, found):
             found.append(value)
+    # Базис в середине строки только после номера и даты: «1310267841 ОТ 13.10.26 CPT USSURIYSK».
+    # Голый поиск CPT/FOB по всему тексту ловит чужие колонки и даёт delivery_conflict.
+    if not found:
+        for match in re.finditer(
+            r"(?i)\d{6,12}\s+(?:ОТ|от|dd|dated)\s+\d{1,2}[./]\d{1,2}[./]\d{2,4}\s+"
+            r"((?:EX[\s\-]*WORKS?|EXW|FOB|FCA|CIF|CFR|CPT|CIP|DAP|DDP|DPU)\b"
+            r"(?:\s+[A-Za-z][A-Za-z\-.]{1,24}){0,2})",
+            text or "",
+        ):
+            value = " ".join(match.group(1).split())
+            value = _trim_delivery_company(value)
+            if value and _looks_like_delivery(value) and not _same_term(value, found):
+                found.append(value)
     if not found:
         return "", False
     if len(found) == 1:
@@ -844,12 +935,23 @@ def _delivery(text):
 
 
 def _trim_delivery_company(value):
-    """Название фирмы в конце строки базиса — не условие поставки."""
-    return re.sub(
+    """Название фирмы и соседние колонки в конце строки базиса — не условие поставки."""
+    text = re.sub(
         r"\s+[A-Z][A-Z0-9 .'/,&-]{6,}(?:LTD|LLC|INC|GMBH)\.?\s*$",
         "",
         str(value or ""),
     ).strip(" ,/")
+    # Склеенный текстовый слой: «CPT USSURIYSK USD CONTRACT» — после места валюта и шапка.
+    text = re.split(
+        r"(?i)\s+(?:USD|EUR|CNY|GBP|RUB|PLN|CURRENCY|CURRENSY|CONTRACT|CONTRAT|PAYMENT|"
+        r"BANK|COMPANY|DIRECTOR|INVOICE|INV\.?\s*NO|SELLER|BUYER|DATE|SWIFT|ADDRESS|АДРЕС|"
+        r"THE\s+SELLER|THE\s+BUYER)\b",
+        text,
+        maxsplit=1,
+    )[0].strip(" ,/")
+    # Хвост «The» от следующей подписи The Seller / The delivery.
+    text = re.sub(r"(?i)\s+The\s*$", "", text).strip(" ,/")
+    return text
 
 
 def _term_code(value):
@@ -932,9 +1034,18 @@ def _address_blocks(text):
     assigned = {"seller": "", "buyer": "", "consignee": ""}
     fallback = []
     index = 0
+    after_bank = False
     while index < len(lines):
         line = lines[index]
+        if re.search(r"(?i)\b(?:bank\s+name|bank\s*:|банк\s*:|swift\s*:)", line):
+            after_bank = True
+        if _party_side(line) or _dual_party_labels(line) or _BENEFICIARY_ADDRESS.match(line):
+            after_bank = False
         values = _line_addresses(line)
+        # Address сразу после Bank name — реквизиты банка, не почтовый адрес стороны.
+        if after_bank and values and not pending:
+            index += 1
+            continue
         dual = _dual_party_labels(line)
         side = _party_side(line)
         if dual and not values:
@@ -1138,6 +1249,15 @@ def _party_head(value):
     )
     if match and match.start() >= 3:
         text = text[: match.start()].strip(" ,.;")
+    # Имя и адрес склеились в одну строку: обрезать после LTD/LLC, если дальше улица/район.
+    cut = re.search(
+        r"(?i)\b((?:CO\.,?\s*)?LTD|LIMITED|LLC|INC|GMBH|ООО|АО)\b\.?"
+        r"(?=\s+(?:\d|No\.?\s*\d|DONG|VILLAGE|ROAD|STREET|ST\.|DISTRICT|DIST\.|CITY|TOWN|PROVINCE|"
+        r"просп|ул\.|д\.|стр\.|г\.))",
+        text,
+    )
+    if cut:
+        text = text[: cut.end()].strip(" ,.;")
     if _bad_party_name(text):
         return ""
     return text

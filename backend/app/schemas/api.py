@@ -134,6 +134,7 @@ class ModelReviewOut(BaseModel):
     totals_mismatch: bool = False
     excel_attached: bool = False
     excel_files: list[str] = Field(default_factory=list)
+    disk_files: list[str] = Field(default_factory=list)
     items: list[ScanItemOut] = Field(default_factory=list)
     context: dict[str, Any] = Field(default_factory=dict)
 
