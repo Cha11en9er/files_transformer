@@ -26,7 +26,7 @@ if str(_ROOT) not in sys.path:
 from prepare_transform_code.numbers import parse_number
 from prepare_transform_code.rolls import fold_rolls  # noqa: F401  (маршрут берёт её отсюда)
 from prepare_transform_code.shipment import analyze
-from prepare_transform_code.verdict import build_prompt
+from prepare_transform_code.verdict import build_prompt, is_fast_verdict
 
 # Поля, которые модель часто присылает строкой с запятой («6,17»). Без разбора float() падает на сборке.
 _NUMERIC_LOT = {
@@ -51,11 +51,25 @@ THIN_COLUMN_LIMIT = 4
 _EXCEL = {".xlsx", ".xls", ".xlsm"}
 
 
-def model_spec(slot: int) -> str:
-    """1 — OPENCODE_MODEL_1, иначе прежний OPENCODE_MODEL. 2 — только OPENCODE_MODEL_2."""
-    if slot == 1:
-        return (os.getenv("OPENCODE_MODEL_1") or os.getenv("OPENCODE_MODEL") or "").strip()
-    return (os.getenv("OPENCODE_MODEL_2") or "").strip()
+def model_spec(slot: int, *, fast: bool = False) -> str:
+    """1 — обычная / быстрая. 2 — только OPENCODE_MODEL_2.
+
+    fast=True (known Excel): OPENCODE_MODEL_FAST, иначе OPENCODE_MODEL без :high/:xhigh,
+    чтобы простая поставка не ждала grok:high десятки минут.
+    """
+    if slot == 2:
+        return (os.getenv("OPENCODE_MODEL_2") or "").strip()
+    if fast:
+        quick = (os.getenv("OPENCODE_MODEL_FAST") or "").strip()
+        if quick:
+            return quick
+        base = (os.getenv("OPENCODE_MODEL") or os.getenv("OPENCODE_MODEL_1") or "").strip()
+        if base:
+            head, sep, tail = base.rpartition(":")
+            if sep and tail.lower() in {"low", "medium", "high", "xhigh"}:
+                return head
+            return base
+    return (os.getenv("OPENCODE_MODEL_1") or os.getenv("OPENCODE_MODEL") or "").strip()
 
 
 def allow_skip_model() -> bool:

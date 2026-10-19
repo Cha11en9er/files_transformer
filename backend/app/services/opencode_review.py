@@ -1316,6 +1316,11 @@ VERDICT_SYSTEM = (
     "Число, которого нет в черновике и в файлах, не выдумывай. Не делай keep всем строкам без сверки с файлом."
 )
 
+VERDICT_SYSTEM_FAST = (
+    "Ответ — один JSON. Суммы уже сошлись. Максимум 3 вызова read. "
+    "Если шапка и выборочные строки совпали с черновиком — keep всем. Без длинных reason."
+)
+
 
 _EFFORT = {"low", "medium", "high", "xhigh"}
 
@@ -1343,6 +1348,7 @@ def review_with_opencode(
     disk_paths: list[Path] | None = None,
     user_prompt: str | None = None,
     model_override: str | None = None,
+    fast: bool = False,
 ) -> dict[str, Any]:
     cfg = settings()
     model_name = (model_override or cfg["model"]).strip()
@@ -1388,7 +1394,10 @@ def review_with_opencode(
     before_billing = fetch_openrouter_billing() if provider_id == "openrouter" else _empty_billing()
 
     prompt = user_prompt if user_prompt is not None else build_user_prompt(snapshot)
-    system_prompt = VERDICT_SYSTEM if user_prompt is not None else SYSTEM_PROMPT
+    if user_prompt is not None:
+        system_prompt = VERDICT_SYSTEM_FAST if fast else VERDICT_SYSTEM
+    else:
+        system_prompt = SYSTEM_PROMPT
     parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     for path in attach_files:
         parts.append(_binary_file_part(path))

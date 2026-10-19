@@ -284,97 +284,131 @@ def _excel_only_draft(result) -> bool:
     return True
 
 
+# Известная Excel-форма: короткий текст, без трактата. Скорость важнее полноты правил.
+FAST_RULES = """\
+Ты сверяешь черновик кода с Excel-файлами поставки. Ответ — один JSON без текста вокруг:
+{"header":{"seller":"","buyer":"","contract":"","contract_date":"","invoice_no":"","invoice_date":"","currency":"","delivery":"","seller_address":"","buyer_address":"","consignee":"","consignee_address":"","notes":""},"lots":[{"index":0,"action":"keep","fields":{},"reason":""}],"flags":[]}
+action: keep | fix | drop | split | add. В fields только ключи из columns. Число, которого нет в файлах и черновике, не выдумывай.
+Суммы строк уже сошлись с TOTAL листов. Открой read не больше трёх раз: шапка + 2-3 строки + TOTAL. Если совпало — keep на все строки, в header только явные дыры из файла. Не читай каждую клетку и не пиши длинный reason.
+"""
+
+
+_FAST_LOT_KEYS = (
+    "vendor",
+    "model",
+    "description",
+    "pieces",
+    "packages",
+    "net",
+    "gross",
+    "amount",
+    "price",
+    "hs",
+    "hs_alt",
+    "unit",
+    "color",
+    "brand",
+    "width",
+    "area",
+    "volume",
+)
+
+
 def _slim_lot(lot: dict) -> dict:
-    skip = {
-        "index",
-        "action",
-        "reason",
-        "freight",
-        "unit_conflict",
-        "packages_conflict",
-        "conflicts",
-        "weight_suspect",
-        "span_continued",
-        "packages_continued",
-        "amount_continued",
-        "extra",
-        "raw",
-        "qty_text",
-    }
     out = {}
-    for key, value in (lot or {}).items():
-        if key in skip or value in (None, "", [], {}, set()):
+    for key in _FAST_LOT_KEYS:
+        value = (lot or {}).get(key)
+        if value in (None, "", [], {}, set()):
             continue
-        if isinstance(value, str) and key == "description" and len(value) > 240:
-            out[key] = value[:240]
+        if isinstance(value, str) and key == "description" and len(value) > 160:
+            out[key] = value[:160]
         else:
             out[key] = value
     return out
 
 
+def _slim_doc(doc: dict) -> dict:
+    return {
+        "name": doc.get("name") or "",
+        "role": doc.get("role") or "",
+        "line_count": doc.get("line_count") or 0,
+        "readable": bool(doc.get("readable", True)),
+    }
+
+
+def is_fast_verdict(result, route=None) -> bool:
+    """Known + только Excel → короткий промпт и быстрая модель."""
+    return route == "known" and _excel_only_draft(result)
+
+
 def build_prompt(result, file_paths=None, *, mode=None, route=None):
     """Правила плюс то, что код уже собрал. Словарь результата не меняется.
 
-    route=known и только Excel → компактные правила и быстрый режим сверки,
+    route=known и только Excel → FAST_RULES и ужатый JSON,
     чтобы простая поставка не крутилась десятки минут на полном трактате.
     """
     chosen = (mode or "").strip().lower() or prompt_mode()
-    fast = route == "known" and _excel_only_draft(result)
+    fast = is_fast_verdict(result, route)
     if fast:
-        chosen = "compact"
-    rules = FULL_RULES if chosen == "full" else RULES
+        rules = FAST_RULES
+    else:
+        rules = FULL_RULES if chosen == "full" else RULES
     lots = result.get("lots") or []
     if fast:
         lots = [_slim_lot(lot) for lot in lots if not lot.get("freight")]
-    payload = {
-        "documents": result.get("documents") or [],
-        "columns": list(result.get("columns") or []),
-        "header": {
-            "seller": result.get("seller") or "",
-            "buyer": result.get("buyer") or "",
-            "contract": result.get("contract") or "",
-            "invoice_no": result.get("invoice_no") or "",
-            "invoice_nos": list(result.get("invoice_nos") or []),
-            "proforma_no": result.get("proforma_no") or "",
-            "proforma_nos": list(result.get("proforma_nos") or []),
-            "order_no": result.get("order_no") or "",
-            "order_nos": list(result.get("order_nos") or []),
-            "currency": result.get("currency_printed") or result.get("currency") or "",
-            "currencies": list(result.get("currencies") or []),
-            "invoice_date": result.get("invoice_date") or "",
-            "contract_date": result.get("contract_date") or "",
-            "delivery": result.get("delivery") or "",
-            "container": result.get("container") or "",
-            "director": result.get("director") or "",
-            "seller_address": result.get("seller_address") or "",
-            "buyer_address": result.get("buyer_address") or "",
-            "consignee": result.get("consignee") or "",
-            "consignee_address": result.get("consignee_address") or "",
-        },
-        "flags": list(result.get("flags") or []),
-        "freights": list(result.get("freights") or []),
-        "lots": lots,
+    docs = result.get("documents") or []
+    if fast:
+        docs = [_slim_doc(doc) for doc in docs]
+    header = {
+        "seller": result.get("seller") or "",
+        "buyer": result.get("buyer") or "",
+        "contract": result.get("contract") or "",
+        "invoice_no": result.get("invoice_no") or "",
+        "currency": result.get("currency_printed") or result.get("currency") or "",
+        "invoice_date": result.get("invoice_date") or "",
+        "contract_date": result.get("contract_date") or "",
+        "delivery": result.get("delivery") or "",
+        "seller_address": result.get("seller_address") or "",
+        "buyer_address": result.get("buyer_address") or "",
     }
     if not fast:
-        if result.get("sheet_checks"):
-            payload["sheet_checks"] = result.get("sheet_checks")
+        header.update(
+            {
+                "invoice_nos": list(result.get("invoice_nos") or []),
+                "proforma_no": result.get("proforma_no") or "",
+                "proforma_nos": list(result.get("proforma_nos") or []),
+                "order_no": result.get("order_no") or "",
+                "order_nos": list(result.get("order_nos") or []),
+                "currencies": list(result.get("currencies") or []),
+                "container": result.get("container") or "",
+                "director": result.get("director") or "",
+                "consignee": result.get("consignee") or "",
+                "consignee_address": result.get("consignee_address") or "",
+            }
+        )
+    payload = {
+        "documents": docs,
+        "columns": list(result.get("columns") or []),
+        "header": header,
+        "flags": list(result.get("flags") or []),
+        "lots": lots,
+    }
+    if result.get("sheet_checks"):
+        payload["sheet_checks"] = result.get("sheet_checks")
+    if not fast:
+        if result.get("freights"):
+            payload["freights"] = list(result.get("freights") or [])
         if result.get("leftovers"):
             payload["leftovers"] = result.get("leftovers")
-    data = json.dumps(payload, ensure_ascii=False, indent=2)
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":") if fast else None, indent=None if fast else 2)
     paths = [str(p) for p in (file_paths or []) if p]
     files_block = ""
     if paths:
-        files_block = (
-            "\nФАЙЛЫ НА ДИСКЕ (открой инструментом read; PDF/сканы могут быть ещё во вложениях):\n"
-            + "\n".join(paths)
-            + "\n"
-        )
+        label = "ФАЙЛЫ" if fast else "ФАЙЛЫ НА ДИСКЕ (открой инструментом read; PDF/сканы могут быть ещё во вложениях)"
+        files_block = "\n" + label + ":\n" + "\n".join(paths) + "\n"
     if fast:
         priority = (
-            "\nПРИОРИТЕТ (быстрый проход): суммы черновика уже сошлись с итогами листов. "
-            "Открой файлы, сверь шапку и числа на 2-3 строках плюс TOTAL. "
-            "Если совпало — keep по всем строкам; в header поправь только явные дыры из файла. "
-            "Не перечитывай каждую клетку по кругу и не раздувай ответ.\n"
+            "\nСуммы уже сошлись (sheet_checks). Максимум 3 read. Совпало → keep всем. JSON сразу.\n"
         )
     else:
         priority = (
