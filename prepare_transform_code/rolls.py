@@ -9,7 +9,7 @@ import re
 
 from prepare_transform_code.numbers import parse_number
 
-_SUM_FIELDS = ("pieces", "packages", "amount", "net", "net_primary", "gross", "volume", "area", "gross_with_pallet")
+_SUM_FIELDS = ("pieces", "packages", "amount", "discount", "net", "net_primary", "gross", "volume", "area", "gross_with_pallet")
 _METERS = re.compile(r"^(?:m|mt|mtr|mtrs|meters?|metres?|м|метр\w*)\.?$", re.I)
 _PRICE_TOLERANCE = 0.02
 
@@ -35,11 +35,26 @@ def _roll_like(lot):
 
 
 def _design(lot):
-    """Имя дизайна: артикул, а без него начало описания до разделителя перевода."""
+    """Имя дизайна: артикул, а без него начало описания до разделителя перевода.
+
+    Texas 785 и Texas 920 — разные дизайны, даже если описание одно семейство.
+    """
+    colour = _colour_token(lot)
+    if colour:
+        return colour
     text = str(lot.get("vendor") or "").strip()
     if not text:
         text = str(lot.get("description") or "").split("//")[0]
     return " ".join(text.split()).casefold()
+
+
+def _colour_token(lot):
+    """Имя с хвостовой цифрой (Lambre 01, Texas 785) отличает цвет от семьи."""
+    for key in ("vendor", "model"):
+        text = str(lot.get(key) or "").strip()
+        if re.search(r"[A-Za-zА-Яа-яЁё].+\s+\d+\s*$", text):
+            return " ".join(text.split()).casefold()
+    return ""
 
 
 def _digits(value):

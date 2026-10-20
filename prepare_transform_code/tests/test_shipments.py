@@ -2740,6 +2740,116 @@ class ReaderLayoutTest(unittest.TestCase):
         return Path(self._folder)
 
 
+class CustomerPravkaTest(unittest.TestCase):
+    def test_dot_weight_next_to_meters_is_decimal(self):
+        from prepare_transform_code.numbers import _DOT_IS_DECIMAL, dot_is_decimal, parse_number
+
+        pack = "NET WEIGHT GROSS WEIGTH\nFULDA 224.10 6 131.800 136.300\nTOTAL 745.900"
+        self.assertTrue(dot_is_decimal(pack))
+        self.assertFalse(dot_is_decimal("UNIT PICE 44.55\n3.900\n5.952,40"))
+        token = _DOT_IS_DECIMAL.set(True)
+        try:
+            self.assertAlmostEqual(parse_number("131.800"), 131.8)
+            self.assertAlmostEqual(parse_number("136.300"), 136.3)
+        finally:
+            _DOT_IS_DECIMAL.reset(token)
+
+    def test_contrat_no_and_date_is_the_contract(self):
+        from prepare_transform_code.shipment import _CONTRACT, _contract_token
+
+        text = "Contrat No AND Date :  SM- KETS1   DATE. 24 January  2019"
+        found = _CONTRACT.search(text)
+        self.assertIsNotNone(found)
+        self.assertNotEqual(found.group(1).lower(), "and")
+        self.assertEqual(_contract_token(text), "sm-kets1")
+
+    def test_desing_and_discount_headers(self):
+        self.assertEqual(column_of("DESING"), "model")
+        self.assertEqual(column_of("Discount ¥/ Скидка, ¥"), "discount")
+        self.assertIsNone(column_of("Total price with discount, ¥/ Цена со скидкой, ¥"))
+
+    def test_design_and_neighbour_colour_become_one_article(self):
+        from openpyxl import Workbook
+
+        from prepare_transform_code.exceldoc import read_excel
+
+        book = Workbook()
+        sheet = book.active
+        sheet.title = "invoice"
+        sheet.append(["COMMERCIAL INVOICE"])
+        sheet.append(
+            ["Customs Code", "DESING", None, "Quantity ( rolls)", "METERS", "UNIT PRICE", "AMOUNT"]
+        )
+        sheet.append([5903202000, "MAXWELL", 997, 13, 455, 44.55, 20270.25])
+        sheet.append([5903202000, "MAXWELL", 236, 32, 1111, 44.55, 49495.05])
+        path = Path(self._dir()) / "anli.xls"
+        # xlsx is enough for the same reader path
+        path = Path(self._dir()) / "anli.xlsx"
+        book.save(path)
+        lines = read_excel(path)[0]["lines"]
+        self.assertEqual([line.vendor for line in lines], ["MAXWELL 997", "MAXWELL 236"])
+        self.assertEqual([line.model for line in lines], ["MAXWELL 997", "MAXWELL 236"])
+        self.assertEqual(lines[0].packages, 13)
+        self.assertAlmostEqual(lines[0].pieces, 455)
+
+    def test_article_noise_and_quality_name(self):
+        from prepare_transform_code.lines import Line, is_noise_lot, pull_article
+
+        quality = Line(description="FULDA COM (FULDA) QUALITY UPHOLSTERY FABRIC")
+        pull_article(quality)
+        self.assertEqual(quality.vendor, "FULDA COM (FULDA)")
+        coded = Line(vendor="ZKELLY02610 ART", description="KELLY COL COBALT")
+        pull_article(coded)
+        self.assertEqual(coded.vendor, "ZKELLY02610")
+        cut = Line(description="VELL. KAORI 34 €19,00")
+        pull_article(cut)
+        self.assertEqual(cut.vendor, "VELL. KAORI 34")
+        width = Line(vendor="54", description="VELL. KAORI 34 Tariff CodeComposition 54VI")
+        pull_article(width)
+        self.assertEqual(width.vendor, "VELL. KAORI 34")
+        self.assertTrue(is_noise_lot(Line(vendor="Riepilogo per HS-CODE :", amount=1778)))
+        self.assertTrue(is_noise_lot(Line(description="N.I. ART. 8 LETT. A")))
+
+    def test_colour_numbers_are_not_folded_into_one_design(self):
+        from prepare_transform_code.rolls import fold_rolls
+
+        lots = [
+            _roll("", 1441.0, None, None, model="Texas 785", packages=1, price=14.3),
+            _roll("", 2044.0, None, None, model="Texas 920", packages=1, price=14.3),
+        ]
+        lots[0]["description"] = "SOFA FABRIC Texas"
+        lots[1]["description"] = "SOFA FABRIC Texas"
+        out, notes = fold_rolls(lots)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(notes, [])
+
+    def test_discount_stays_empty_when_the_column_is_absent(self):
+        from prepare_transform_code.join import build_lots
+        from prepare_transform_code.lines import Line
+
+        lots, _ = build_lots(
+            [Line(vendor="A", pieces=10, price=2, amount=20)],
+            [],
+        )
+        self.assertIsNone(lots[0].get("discount"))
+
+    def test_hangzhou_family_still_keeps_colour_rows(self):
+        folder = Path(__file__).resolve().parents[2] / "documents" / "4_pravka" / "для тест" / "18233" / "_input"
+        if not folder.is_dir():
+            self.skipTest("нет тестовой 18233")
+        result = analyze(folder)
+        goods = [lot for lot in result["lots"] if not lot["freight"]]
+        self.assertEqual(len(goods), 13)
+        self.assertTrue(any((lot.get("vendor") or lot.get("model")) == "Noble 110" for lot in goods))
+
+    def _dir(self):
+        import tempfile
+
+        if not hasattr(self, "_folder"):
+            self._folder = tempfile.mkdtemp()
+        return self._folder
+
+
 def _only(folder, names):
     import shutil
     import tempfile

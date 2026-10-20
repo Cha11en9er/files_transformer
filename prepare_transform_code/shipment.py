@@ -33,10 +33,11 @@ _INVOICE_NO_SKIP = {
     "invoice",
 }
 _CONTRACT = re.compile(
-    r"(?:CONTRACT|CONTRAT)\s*(?:NO|NR|NUMBER|#|№|N[°º])?\.?\s*:?\s*([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9./\-]{2,})",
+    r"(?:CONTRACT|CONTRAT)\s*(?:NO|NR|NUMBER|#|№|N[°º])?\.?\s*(?:AND\s+DATE)?\s*:?\s*"
+    r"([A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9./]*(?:-[ \t]*[A-Za-zА-Яа-яЁё0-9][A-Za-zА-Яа-яЁё0-9./]*)*)",
     re.I,
 )
-_CONTRACT_SKIP = {"your", "date", "the", "and", "for", "from", "page", "reference"}
+_CONTRACT_SKIP = {"your", "date", "the", "and", "for", "from", "page", "reference", "no"}
 _INVOICE_LABEL = re.compile(r"inv(?:oice)?\s*\.?\s*(?:no|nr|number|n[°º])", re.I)
 _NO_BEFORE_TITLE = re.compile(
     r"No\s*:\s*([A-Z]{2,}(?:\s*[-/]\s*[A-Z0-9]+)+(?:\s+REG)?).{0,160}INVOICE",
@@ -440,6 +441,21 @@ def _companions(documents, invoice, specification, description, base, spec_lines
             if still_fresh:
                 extra_base.extend(still_fresh)
                 base_vendors |= _vendor_set(still_fresh)
+            unnamed = [
+                line
+                for line in goods
+                if not _article_key(line)
+                and (line.description or "").strip()
+                and (line.pieces is not None or line.amount is not None)
+            ]
+            for line in unnamed:
+                if any(
+                    _same_qty_amount(item, line)
+                    and (item.description or "") == (line.description or "")
+                    for item in list(base) + extra_base
+                ):
+                    continue
+                extra_base.append(line)
             continue
         if not theirs or not base_vendors:
             continue
@@ -1401,8 +1417,16 @@ def _contract(text):
             continue
         if token.lower() in _CONTRACT_SKIP:
             continue
+        if re.fullmatch(r"\d{1,6}", token):
+            extra = re.match(
+                r"\s+([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё0-9./\-]*)",
+                folded[found.end() :],
+            )
+            word = extra.group(1) if extra else ""
+            if word and word.casefold() not in _CONTRACT_SKIP | {"dated", "dd", "от"}:
+                return f"{token} {word}"
         if any(ch.isdigit() for ch in token) or "-" in token:
-            return token
+            return re.sub(r"\s+", "", token)
     for found in re.finditer(
         r"контракт\w*\s*(?:№|N[oо])\.?\s*([A-Za-z0-9][A-Za-z0-9./\-]*)",
         folded,

@@ -21,8 +21,11 @@ from prepare_transform_code.lines import (
     capture_row_extra,
     attach_pallet,
     fold_parts,
+    glue_design_colour,
+    adopt_design_article,
     hs_text,
     is_bare_total,
+    is_noise_lot,
     is_pallet_only,
     is_registry_line,
     is_roll_serial,
@@ -265,6 +268,8 @@ def _lines(rows, continued_cells=None):
             assign_cell(line, field, row[col], header_is_package=False)
             if field in _SPAN_ONCE_FIELDS and (abs_r, col) in continued_cells:
                 line.span_continued.add(field)
+        glue_design_colour(line, row, mapping, header_cells)
+        adopt_design_article(line, mapping, header_cells)
         if line.pieces is None and isinstance(mapping.get("qty_alt"), int):
             alt = mapping["qty_alt"]
             if alt < len(row):
@@ -316,7 +321,7 @@ def _lines(rows, continued_cells=None):
         if is_pallet_only(line):
             attach_pallet(lines, line)
             continue
-        if is_registry_line(line):
+        if is_registry_line(line) or is_noise_lot(line):
             continue
         _bare_kg_weights(line, row, kg_cols)
         if _blank_charge(line):

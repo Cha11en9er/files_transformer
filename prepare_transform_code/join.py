@@ -611,7 +611,7 @@ def _take_fields(lot, spec, check=True):
         lot["hs_alt_shipper"] = bool(getattr(spec, "hs_alt_shipper", False))
     if not lot.get("unit") and spec.unit and not re.fullmatch(r"\d+[.,]?\d*", str(spec.unit).strip()):
         lot["unit"] = spec.unit
-    for name in ("price", "amount", "width"):
+    for name in ("price", "amount", "discount", "width"):
         if lot.get(name) is None and getattr(spec, name, None) is not None:
             lot[name] = getattr(spec, name)
     for name in ("packages", "net", "net_primary", "gross", "volume", "area"):
@@ -738,6 +738,9 @@ def _prefer_article(candidate, current):
         return True
     if left_digits > right_digits and re.search(r"[A-Za-z]\d|\d[A-Za-z]", left):
         return True
+    # ZKELLY02610 сильнее короткого KELLY из пакинга. Короткое имя длинный код не затирает.
+    if right_digits >= 2 and left_digits < right_digits:
+        return False
     return False
 
 

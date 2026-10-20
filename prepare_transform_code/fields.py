@@ -65,9 +65,11 @@ def column_of(header):
     raw = " ".join(str(header or "").lower().replace("\n", " ").split())
     text = collapse_letter_spacing(raw)
     text = _plain_header(text)
+    paren = " ".join(re.findall(r"\(([^)]*)\)", text))
     text = " ".join(re.sub(r"\([^)]*\)", " ", text).split())
     text = _glue_broken_label(text)
     text = text.replace("weigth", "weight").replace("widht", "width")
+    text = re.sub(r"\bpice\b", "price", text)
     for dash in ("‐", "‑", "–", "—", "−"):
         text = text.replace(dash, "-")
     if not text:
@@ -76,11 +78,16 @@ def column_of(header):
     if text.replace(" ", "") in {"g/m", "гр/м", "g/mtr"}:
         return "gsm"
     # METERS — количество. M2 и MT2 — площадь, их это не забирает.
-    if re.search(r"\bmeters?\b|\bmetres?\b", text) and not re.search(r"\bm2\b|\bmt2\b|кв", text):
+    if re.search(r"\bmeters?\b|\bmetres?\b|\bmetrs?\b", text) and not re.search(r"\bm2\b|\bmt2\b|кв", text):
         if not any(mark in text for mark in ("price", "цена", "weight", "вес", "width", "ширина")):
             return "qty"
     if re.search(r"\bwidth\b|\bширина\b", text) and not any(mark in text for mark in ("короб", "carton", "box", "report")):
         return "width"
+    # Скидка только своей колонкой. «Цена со скидкой» — уже другая сумма, amount ею не затираем.
+    if re.search(r"\bdiscount\b|скидк", text):
+        if any(mark in text for mark in ("with discount", "со скидк", "after discount", "цена со скид")):
+            return None
+        return "discount"
     # «N.W. / CTN» и «N.W./CTN» — одна подпись. Пробелы вокруг слэша не меняют поле.
     compact = re.sub(r"\s*/\s*", "/", text)
     exact = {
@@ -207,7 +214,7 @@ def column_of(header):
         ):
             continue
         # «Количество рулонов» содержит «количество», но это места. Метры остаются количеством.
-        if name == "qty" and re.search(r"roll|рулон", text) and not re.search(r"meter|metre|метр|m2|кв", text):
+        if name == "qty" and re.search(r"roll|рулон", f"{text} {paren}") and not re.search(r"meter|metre|метр|m2|кв", text):
             return "packages"
         # «Размер коробки» — габарит упаковки, не размер товара.
         if name == "size" and any(mark in text for mark in ("короб", "carton", "ctn", "box", "report")):
@@ -224,7 +231,8 @@ def column_of(header):
     # Pattern в пакинге тканей — имя варианта (Zoom 695), не узор как покрытие.
     if text == "pattern":
         return "vendor"
-    if text == "design":
+    # Опечатка DESING — та же колонка дизайна. Без отдельного артикула это артикул, поле model.
+    if text in {"design", "desing"}:
         return "model"
     if text in {"customer name", "customer"}:
         return "vendor"
@@ -825,6 +833,7 @@ LOT_FIELDS = (
     "pallet",
     "price",
     "amount",
+    "discount",
     "net",
     "net_primary",
     "gross",
