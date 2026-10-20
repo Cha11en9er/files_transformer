@@ -296,6 +296,38 @@ function fileCountLabel(n) {
   return `${n} файлов`;
 }
 
+function sheetCountLabel(n) {
+  const n10 = n % 10;
+  const n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return `${n} лист`;
+  if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return `${n} листа`;
+  return `${n} листов`;
+}
+
+function uniqueUploadNames(files) {
+  const names = [];
+  const seen = new Set();
+  for (const file of files || []) {
+    const raw = String(file.filename || "").trim();
+    if (!raw || raw === "сверка" || raw === "модель") continue;
+    const base = raw.split(" / ")[0].trim();
+    const key = base.toLowerCase();
+    if (!base || seen.has(key)) continue;
+    seen.add(key);
+    names.push(base);
+  }
+  return names;
+}
+
+function sourceCountText(files, fallback) {
+  const uploads = uniqueUploadNames(files);
+  const nUp = uploads.length || fallback || 0;
+  const nSheets = (files || []).filter((file) => String(file.filename || "").includes(" / ")).length;
+  let text = fileCountLabel(nUp);
+  if (nSheets > nUp) text += ` (${sheetCountLabel(nSheets)} одной книги)`;
+  return text;
+}
+
 function rowCountLabel(n) {
   const n10 = n % 10;
   const n100 = n % 100;
@@ -1469,7 +1501,7 @@ async function processShipment() {
       ? humanizeClientError(created.model_review.error || created.model_review.meaning || "")
       : "";
     $("#upload-status").textContent =
-      `Готово: ${created.item_count} позиций из ${created.files?.length || state.pendingFiles.length} файлов` +
+      `Готово: ${created.item_count} позиций из ${sourceCountText(created.files, state.pendingFiles.length)}` +
       (skipped ? `, пропущено: ${skipped}` : "") +
       `, замечаний: ${created.warning_count}.` +
       (modelErr ? ` Модель: ${modelErr}` : "") +
