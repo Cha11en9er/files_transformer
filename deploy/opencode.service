@@ -5,8 +5,8 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/files_transformer
-EnvironmentFile=-/opt/files_transformer/backend/.env
+WorkingDirectory=/opt/files_transformer_update
+EnvironmentFile=-/opt/files_transformer_update/backend/.env
 Environment=HOME=/root
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:/root/.opencode/bin:/root/.local/bin
 Environment=OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=128000
