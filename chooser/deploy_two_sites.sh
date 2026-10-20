@@ -39,6 +39,8 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=${DIR}/backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --timeout-keep-alive 75 --h11-max-incomplete-event-size 1048576
 Restart=always
 RestartSec=3
+TimeoutStopSec=15
+KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target

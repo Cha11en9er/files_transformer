@@ -14,6 +14,7 @@ from app.parsing.schemas import ParsedDocument, ParsedLine
 from app.schemas.api import ItemOut
 from app.services.opencode_review import (
     build_user_prompt,
+    clear_probe_caches,
     compact_parser_snapshot,
     extract_json_payload,
     fetch_openrouter_billing,
@@ -302,6 +303,7 @@ class _FakeClient:
 
 
 def test_probe_opencode_off(monkeypatch) -> None:
+    clear_probe_caches()
     monkeypatch.setenv("OPENCODE_ENABLED", "0")
     result = probe_opencode()
     assert result["status"] == "off"
@@ -309,16 +311,19 @@ def test_probe_opencode_off(monkeypatch) -> None:
 
 
 def test_probe_opencode_ok(monkeypatch) -> None:
+    clear_probe_caches()
     monkeypatch.setenv("OPENCODE_ENABLED", "1")
     monkeypatch.setenv("OPENCODE_SERVER_PASSWORD", "secret")
     fake = _FakeClient(_FakeReply(200, "ok"))
     with patch("app.services.opencode_review.httpx.Client", return_value=fake):
-        result = probe_opencode()
+        with patch("app.services.opencode_review.fetch_openrouter_billing", return_value={}):
+            result = probe_opencode()
     assert result["status"] == "ok"
     assert "жива" in result["title"].lower()
 
 
 def test_probe_opencode_auth(monkeypatch) -> None:
+    clear_probe_caches()
     monkeypatch.setenv("OPENCODE_ENABLED", "1")
     monkeypatch.setenv("OPENCODE_SERVER_PASSWORD", "wrong")
     fake = _FakeClient(_FakeReply(401, "Unauthorized"))
@@ -329,6 +334,7 @@ def test_probe_opencode_auth(monkeypatch) -> None:
 
 
 def test_probe_opencode_missing_password(monkeypatch) -> None:
+    clear_probe_caches()
     monkeypatch.setenv("OPENCODE_ENABLED", "1")
     monkeypatch.setenv("OPENCODE_SERVER_PASSWORD", "")
     fake = _FakeClient(_FakeReply(401, "Unauthorized"))
@@ -339,6 +345,7 @@ def test_probe_opencode_missing_password(monkeypatch) -> None:
 
 
 def test_probe_opencode_down(monkeypatch) -> None:
+    clear_probe_caches()
     monkeypatch.setenv("OPENCODE_ENABLED", "1")
     fake = _FakeClient(ConnectionError("Connection refused"))
     with patch("app.services.opencode_review.httpx.Client", return_value=fake):
@@ -444,6 +451,7 @@ class _HealthAndBillingClient:
 
 
 def test_probe_shows_openrouter_balance(monkeypatch) -> None:
+    clear_probe_caches()
     monkeypatch.setenv("OPENCODE_ENABLED", "1")
     monkeypatch.setenv("OPENCODE_SERVER_PASSWORD", "secret")
     monkeypatch.setenv("OPENCODE_MODEL", "openrouter/qwen/qwen3.8-max-0902")

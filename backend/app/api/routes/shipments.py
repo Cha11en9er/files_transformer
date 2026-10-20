@@ -20,6 +20,7 @@ from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.models.enums import (
     DocType,
@@ -1185,15 +1186,25 @@ async def create_shipment(
 
     want_stream = str(stream).strip().lower() in {"1", "true", "yes", "on"}
     if not want_stream:
-        done: dict[str, Any] | None = None
-        for event in _iter_create_events(
-            title=title, profile_type=profile_type, incoming=incoming, catalog_names=catalog_names
-        ):
-            if event.get("event") == "done":
-                done = event
-        if done is None:
+        # Never run _iter_create_events on the event loop: it joins model threads for minutes
+        # and freezes all HTTP (Recv-Q grows, /api/health times out).
+        def _collect_done() -> dict[str, Any] | None:
+            done: dict[str, Any] | None = None
+            for event in _iter_create_events(
+                title=title,
+                profile_type=profile_type,
+                incoming=incoming,
+                catalog_names=catalog_names,
+            ):
+                if event.get("event") == "done":
+                    done = event
+            if done is None:
+                return None
+            return {key: value for key, value in done.items() if key != "event"}
+
+        body = await run_in_threadpool(_collect_done)
+        if body is None:
             raise HTTPException(status_code=500, detail="Не удалось получить результат обработки")
-        body = {key: value for key, value in done.items() if key != "event"}
         return ShipmentCreateResponse.model_validate(body)
 
     def event_stream() -> Iterator[bytes]:
