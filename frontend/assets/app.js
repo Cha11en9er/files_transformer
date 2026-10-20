@@ -656,18 +656,18 @@ dropzoneWrap?.addEventListener("drop", async (e) => {
 });
 
 const FLOW_NODES = [
-  { id: "receive", title: "Приём", x: 70, y: 155 },
-  { id: "catalog", title: "Справочник", x: 55, y: 40 },
-  { id: "read", title: "Чтение", x: 170, y: 155 },
-  { id: "header", title: "Шапка", x: 300, y: 55 },
-  { id: "lines", title: "Строки", x: 420, y: 55 },
-  { id: "join", title: "Склейка", x: 540, y: 55 },
-  { id: "check", title: "Сверка", x: 420, y: 155 },
-  { id: "files", title: "Файлы", x: 660, y: 55 },
-  { id: "verdict", title: "Модель", x: 800, y: 155 },
-  { id: "verdict2", title: "Сильнее", x: 800, y: 55 },
-  { id: "assemble", title: "Сборка", x: 980, y: 155 },
-  { id: "done", title: "Готово", x: 1140, y: 155 },
+  { id: "receive", title: "Приём", x: 70, y: 158 },
+  { id: "catalog", title: "Справочник", x: 70, y: 42 },
+  { id: "read", title: "Чтение", x: 210, y: 158 },
+  { id: "header", title: "Шапка", x: 370, y: 48 },
+  { id: "lines", title: "Строки", x: 530, y: 48 },
+  { id: "join", title: "Склейка", x: 690, y: 48 },
+  { id: "check", title: "Сверка", x: 850, y: 158 },
+  { id: "files", title: "Файлы", x: 1010, y: 48 },
+  { id: "verdict2", title: "Сильнее", x: 1180, y: 48 },
+  { id: "verdict", title: "Модель", x: 1180, y: 158 },
+  { id: "assemble", title: "Сборка", x: 1340, y: 158 },
+  { id: "done", title: "Готово", x: 1500, y: 158 },
 ];
 
 const FLOW_EDGES = [
@@ -685,9 +685,9 @@ const FLOW_EDGES = [
     to: "assemble",
     title: "Без модели",
     mark: "без модели",
-    path: "M420,155 C580,210 820,210 980,155",
-    lx: 700,
-    ly: 205,
+    path: "M850,158 C1000,214 1200,214 1340,158",
+    lx: 1095,
+    ly: 208,
   },
   { id: "check-files", from: "check", to: "files", title: "Файлы на диске для модели", mark: "на диск" },
   { id: "check-verdict", from: "check", to: "verdict", title: "Почему вызвали модель", mark: "в модель" },
