@@ -554,8 +554,14 @@ def _hs_only(line, others, used):
 
 
 def _same_goods(probe, line):
-    """Та же строка в другом документе. Другое количество или другая сумма — другой лот."""
-    if not _vendors(probe) or not _vendors(line) or not _vendor_hit(list(_vendors(probe)), list(_vendors(line))):
+    """Та же строка в другом документе. Другое количество или другая сумма — другой лот.
+
+    Один ТН ВЭД на много лотов не значит «та же строка»: иначе первая сумка
+    забирает все остальные клетки спецификации с тем же кодом и штуками.
+    """
+    left = [code for code in _vendors(probe) if not code.startswith("hs:")]
+    right = [code for code in _vendors(line) if not code.startswith("hs:")]
+    if not left or not right or not _vendor_hit(left, right):
         return False
     if probe.pieces is not None and line.pieces is not None and abs(probe.pieces - line.pieces) > 0.05:
         return False

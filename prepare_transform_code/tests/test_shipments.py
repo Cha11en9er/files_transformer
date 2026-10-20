@@ -296,6 +296,32 @@ class PravkaHeaderWeightTest(unittest.TestCase):
         prev = [Line(source="excel", packages=10, net=100, pieces=50, amount=20) for _ in range(3)]
         total = Line(source="excel", packages=30, net=300, pieces=150, price=999)
         self.assertTrue(is_bare_total(total, prev))
+        leaked = Line(
+            source="pdf",
+            description="компонентов без маркировки",
+            packages=30,
+            pieces=150,
+        )
+        self.assertTrue(is_bare_total(leaked, prev))
+        twin = Line(source="pdf", description="same goods", packages=10, pieces=50)
+        self.assertFalse(is_bare_total(twin, prev[:1]))
+
+    def test_code_cell_splits_hs_and_short_article(self):
+        from prepare_transform_code.join import _same_goods
+        from prepare_transform_code.lines import Line, assign_cell
+
+        self.assertEqual(column_of("поставCкOи DТEовара"), "vendor")
+        cell = Line(source="pdf")
+        assign_cell(cell, "vendor", "9507100000 2150")
+        self.assertEqual(cell.hs, "9507100000")
+        self.assertEqual(cell.vendor, "2150")
+        pure = Line(source="pdf")
+        assign_cell(pure, "vendor", "7321190000")
+        self.assertEqual(pure.hs, "7321190000")
+        self.assertEqual(pure.vendor, "")
+        left = Line(source="pdf", hs="4202921900", pieces=33, amount=33)
+        right = Line(source="pdf", hs="4202921900", pieces=33, amount=33)
+        self.assertFalse(_same_goods(left, right))
 
     def test_empty_article_fabric_export_does_not_crash(self):
         import sys
