@@ -1372,14 +1372,14 @@ def collect_disk_attachments(paths: list[Path] | None) -> tuple[list[Path], list
 
 VERDICT_SYSTEM = (
     "Инструменты выключены: read, bash и прочие вызовы запрещены. "
-    "Текст файлов уже вставлен в сообщение пользователя блоками «--- имя ---». "
+    "Excel и PDF приложены к сообщению как файлы, не картинками. "
     "Ответ — один JSON без пояснения вокруг и без запроса инструментов. "
-    "Источник истины — этот текст, не черновик. "
-    "Число, которого нет в тексте и в черновике, не выдумывай."
+    "Источник истины — приложенные файлы, не черновик. "
+    "Число, которого нет в файлах и в черновике, не выдумывай."
 )
 
 VERDICT_SYSTEM_FAST = (
-    "Инструменты выключены. Текст файлов уже в сообщении. Ответ — один JSON. "
+    "Инструменты выключены. Excel и PDF приложены как файлы. Ответ — один JSON. "
     "Суммы уже сошлись: если шапка и выборочные строки совпали — keep всем. Без длинных reason."
 )
 
@@ -1510,18 +1510,19 @@ def review_with_opencode(
     prompt = user_prompt if user_prompt is not None else build_user_prompt(snapshot)
     tools = SESSION_TOOLS
     if user_prompt is not None:
-        # One shot: file text in the message, tools off. Otherwise OpenCode loops
-        # on read (OpenRouter shows ~22k in / ~200 out forever) and never returns JSON.
-        extracts = inline_source_text([*attach_files, *read_files])
+        # Файлы уходят частями сообщения, инструменты выключены.
+        # Иначе модель зовёт read, OpenRouter пишет ~200 токенов и сессия не кончается.
         prompt = (
-            "Текст файлов ниже. Инструменты недоступны, read не вызывай, сразу один JSON.\n"
-            + extracts
-            + "\n\n"
+            "К сообщению приложены исходные Excel и PDF как файлы, не картинками. "
+            "Инструменты выключены, read не вызывай. Сверь черновик с файлами и верни один JSON.\n\n"
             + prompt
         )
         system_prompt = VERDICT_SYSTEM_FAST if fast else VERDICT_SYSTEM
         tools = DISABLED_TOOLS
-        attach_files = []
+        for path in read_files:
+            if path.suffix.lower() in EXCEL_MIME or path.suffix.lower() == ".pdf":
+                if path.stat().st_size <= MAX_ATTACH_BYTES:
+                    attach_files.append(path)
     else:
         system_prompt = SYSTEM_PROMPT
     parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
