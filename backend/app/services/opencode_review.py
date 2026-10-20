@@ -530,9 +530,30 @@ def _usage_delta(before: dict[str, Any], after: dict[str, Any]) -> float | None:
     return round(max(0.0, float(end) - float(start)), 6)
 
 
-def _with_billing(payload: dict[str, Any]) -> dict[str, Any]:
+_PROBE_CACHE_TTL_S = 10.0
+_BILLING_CACHE_TTL_S = 120.0
+_probe_cache: dict[str, Any] = {"at": 0.0, "payload": None}
+_billing_cache: dict[str, Any] = {"at": 0.0, "payload": None}
+
+
+def _cached_billing() -> dict[str, Any]:
+    """OpenRouter billing at most once per 2 minutes — not on every UI health poll."""
     cfg = settings()
-    billing = fetch_openrouter_billing() if cfg["provider_id"] == "openrouter" else _empty_billing()
+    if cfg["provider_id"] != "openrouter":
+        return _empty_billing()
+    now = time_mod.monotonic()
+    cached = _billing_cache.get("payload")
+    if cached is not None and (now - float(_billing_cache.get("at") or 0)) < _BILLING_CACHE_TTL_S:
+        return dict(cached)
+    billing = fetch_openrouter_billing()
+    _billing_cache["at"] = now
+    _billing_cache["payload"] = billing
+    return dict(billing)
+
+
+def _with_billing(payload: dict[str, Any], *, fetch_money: bool = True) -> dict[str, Any]:
+    cfg = settings()
+    billing = _cached_billing() if fetch_money else _empty_billing()
     payload.update(billing)
     payload["model"] = cfg["model"]
     payload["model_label"] = _model_label(cfg["model"])
@@ -563,8 +584,8 @@ def _with_billing(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def probe_opencode() -> dict[str, Any]:
-    """Cheap liveness check for the header indicator. Never returns secrets."""
+def _probe_opencode_uncached() -> dict[str, Any]:
+    """One short OpenCode GET. No OpenRouter call here — money comes from cache."""
     cfg = settings()
     model = cfg["model"]
     if not cfg["enabled"]:
@@ -589,35 +610,67 @@ def probe_opencode() -> dict[str, Any]:
                     last_error = humanize_exception(exc)
                     continue
                 if reply.status_code in {200, 204, 404, 405}:
-                    return _with_billing({
-                        "status": "ok",
-                        "title": "Модель жива",
-                        "detail": f"{cfg['url']} · {model}",
-                        "model": model,
-                    })
+                    return _with_billing(
+                        {
+                            "status": "ok",
+                            "title": "Модель жива",
+                            "detail": f"{cfg['url']} · {model}",
+                            "model": model,
+                        },
+                        fetch_money=True,
+                    )
                 if reply.status_code in {401, 403}:
                     if not cfg["password"]:
-                        return _with_billing({
+                        return _with_billing(
+                            {
+                                "status": "auth",
+                                "title": "Нет пароля в .env",
+                                "detail": "OpenCode на 4096 уже работает, но ждёт OPENCODE_SERVER_PASSWORD из backend/.env.",
+                                "model": model,
+                            },
+                            fetch_money=False,
+                        )
+                    return _with_billing(
+                        {
                             "status": "auth",
-                            "title": "Нет пароля в .env",
-                            "detail": "OpenCode на 4096 уже работает, но ждёт OPENCODE_SERVER_PASSWORD из backend/.env.",
+                            "title": "Пароль не подошёл",
+                            "detail": "Пароль в backend/.env не совпадает с паролем службы opencode.",
                             "model": model,
-                        })
-                    return _with_billing({
-                        "status": "auth",
-                        "title": "Пароль не подошёл",
-                        "detail": "Пароль в backend/.env не совпадает с паролем службы opencode.",
-                        "model": model,
-                    })
+                        },
+                        fetch_money=False,
+                    )
                 last_error = humanize_message(f"{reply.status_code}: {reply.text[:200]}")
     except Exception as exc:
         last_error = humanize_exception(exc)
-    return _with_billing({
-        "status": "down",
-        "title": "Модель не отвечает",
-        "detail": last_error,
-        "model": model,
-    })
+    return _with_billing(
+        {
+            "status": "down",
+            "title": "Модель не отвечает",
+            "detail": last_error,
+            "model": model,
+        },
+        fetch_money=False,
+    )
+
+
+def clear_probe_caches() -> None:
+    """Tests and deploy hooks: drop probe/billing memory cache."""
+    _probe_cache["at"] = 0.0
+    _probe_cache["payload"] = None
+    _billing_cache["at"] = 0.0
+    _billing_cache["payload"] = None
+
+
+def probe_opencode() -> dict[str, Any]:
+    """Cheap liveness check for the header indicator. Cached 10s. Never returns secrets."""
+    now = time_mod.monotonic()
+    cached = _probe_cache.get("payload")
+    if cached is not None and (now - float(_probe_cache.get("at") or 0)) < _PROBE_CACHE_TTL_S:
+        return dict(cached)
+    payload = _probe_opencode_uncached()
+    _probe_cache["at"] = now
+    _probe_cache["payload"] = payload
+    return dict(payload)
 
 
 HELLO_PROMPT = (
