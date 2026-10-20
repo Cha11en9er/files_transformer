@@ -371,7 +371,12 @@ _load_dotenv()
 
 
 def settings() -> dict[str, Any]:
-    model = os.getenv("OPENCODE_MODEL", "opencode/qwen3.5-plus").strip()
+    # Чип health и дефолт: та же база, что у поставки (MODEL_1), не устаревший OPENCODE_MODEL.
+    model = (
+        os.getenv("OPENCODE_MODEL_1")
+        or os.getenv("OPENCODE_MODEL")
+        or "opencode/qwen3.5-plus"
+    ).strip()
     provider, _, model_id = model.partition("/")
     if not model_id:
         provider, model_id = "opencode", provider or "qwen3.5-plus"
