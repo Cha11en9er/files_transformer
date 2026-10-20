@@ -38,10 +38,10 @@ EXCEL_MIME = {
     ".xlsm": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".xls": "application/vnd.ms-excel",
 }
-# PDF и исходные сканы можно класть в parts. Excel — нет: провайдер отвечает
-# "must be a valid PDF" и роняет остальные вложения. Excel открывается через tool read.
+# В parts только растровые сканы. PDF в parts нельзя: qwen/openrouter отвечает
+# "this model does not support pdf input", и сессия уходит в долгий tool-loop.
+# PDF и Excel открываются через tool read по абсолютному пути из промпта.
 ATTACH_MIME = {
-    ".pdf": "application/pdf",
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -1283,7 +1283,7 @@ def _file_part(page: VisionPage) -> dict[str, Any]:
 
 
 def collect_disk_attachments(paths: list[Path] | None) -> tuple[list[Path], list[Path]]:
-    """Делит пути: что кладём в parts (PDF/сканы) и что только читают через tool (Excel и прочее)."""
+    """Делит пути: растры в parts, PDF/Excel и прочее только через tool read."""
     attach: list[Path] = []
     via_read: list[Path] = []
     seen: set[str] = set()
@@ -1302,7 +1302,10 @@ def collect_disk_attachments(paths: list[Path] | None) -> tuple[list[Path], list
             continue
         seen.add(key)
         suffix = path.suffix.lower()
-        if suffix in ATTACH_MIME and size <= MAX_ATTACH_BYTES:
+        # PDF никогда в parts: модель без pdf input роняет вложение и крутит сессию минутами.
+        if suffix == ".pdf" or suffix in EXCEL_MIME:
+            via_read.append(path.resolve())
+        elif suffix in ATTACH_MIME and size <= MAX_ATTACH_BYTES:
             attach.append(path.resolve())
         else:
             via_read.append(path.resolve())
