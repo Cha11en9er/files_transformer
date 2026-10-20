@@ -69,7 +69,7 @@ from app.services.prepare_site import (
     verdict_prompt,
 )
 from app.services.scan_reconcile import compute_excel_totals
-from app.services.export import build_export_preview, export_18233, export_beijing, write_recognition_book
+from app.services.export import build_export_preview, export_18233, export_beijing
 from app.services.export_18233_templates import export_18233_from_templates
 from app.services.export_style import resolve_shipment_title, safe_export_stem
 from app.services.materials_18233 import kit_sources, materials_available
@@ -1398,9 +1398,6 @@ def export_workspace(payload: ExportRequest) -> Response:
                     shipment_title=safe_title,
                     column_layout=layout,
                 )
-        check_path = write_recognition_book(out_dir / f"{safe_title} ПРОВЕРКА.xlsx", payload.recognition)
-        if check_path is not None:
-            paths.append(check_path)
         zip_buf = BytesIO()
         with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for path in paths:

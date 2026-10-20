@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=55" />
+  <link rel="stylesheet" href="/assets/styles.css?v=56" />
 </head>
 <body>
   <div class="app">
@@ -87,9 +87,9 @@
         </div>
         <div class="actions export-actions">
           <button type="button" class="btn primary" id="btn-export">Сформировать Excel</button>
-          <div id="export-result" class="status export-status" aria-live="polite"></div>
         </div>
       </div>
+      <div id="export-result" class="status export-status" aria-live="polite"></div>
 
       <div class="files-badges" id="files-badges"></div>
 
@@ -149,6 +149,7 @@
 
       <div id="excel-view-panel" class="excel-view-panel hidden" hidden>
         <p id="export-preview-meta" class="hint excel-view-meta">Так будут выглядеть скачиваемые книги и листы.</p>
+        <div id="export-preview-files" class="preview-tabs preview-file-tabs" role="tablist" hidden></div>
         <div id="export-preview" class="export-preview" aria-live="polite"></div>
       </div>
 
@@ -248,6 +249,6 @@
     </form>
   </dialog>
 
-  <script src="/assets/app.js?v=75"></script>
+  <script src="/assets/app.js?v=76"></script>
 </body>
 </html>

@@ -228,6 +228,12 @@ input, select, button, textarea {
   gap: 6px;
   margin: 0 0 8px;
 }
+.preview-file-tabs {
+  margin: 0;
+}
+.preview-file-tabs[hidden] {
+  display: none;
+}
 .preview-tab {
   border: 1px solid #c5d5dc;
   background: #f4f8fb;
@@ -1135,17 +1141,20 @@ button.badge {
 }
 
 .export-actions {
-  flex-direction: column;
-  align-items: flex-end;
-  max-width: min(420px, 100%);
+  flex-wrap: nowrap;
+  align-items: center;
+  flex-shrink: 0;
 }
 .export-status {
-  margin-top: 0;
-  width: 100%;
+  min-height: 1.4em;
+  margin: 0 0 12px;
   text-align: right;
   font-size: 13px;
   line-height: 1.4;
   color: var(--ink);
+}
+.export-status:empty {
+  display: none;
 }
 .export-status a {
   color: var(--accent);
@@ -1565,7 +1574,7 @@ pre {
   }
   .export-actions {
     align-items: stretch;
-    max-width: 100%;
+    width: 100%;
   }
   .export-status {
     text-align: left;
