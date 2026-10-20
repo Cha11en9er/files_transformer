@@ -21,6 +21,7 @@ from prepare_transform_code.lines import (
     attach_pallet,
     fold_parts,
     is_bare_total,
+    is_noise_lot,
     is_pallet_only,
     is_registry_line,
     is_roll_serial,
@@ -88,6 +89,7 @@ def read_pdf(path):
     # Стык страниц: хвост слитого блока на следующей странице добираем уже по всему списку строк.
     if readable:
         _carry_open_span_tails(found_lines)
+        found_lines = _enrich_from_text(found_lines, _text_goods(text))
     lines = fold_parts(_share_measures(found_lines)) if readable else []
     while lines and is_bare_total(lines[-1], lines[:-1]):
         lines.pop()
@@ -118,6 +120,175 @@ def read_pdf(path):
         "stated": {key: value for key, value in stated.items() if value is not None},
         "tables": [table for page in pages for table in page["tables"]],
     }
+
+
+_QUALITY_PACK = re.compile(
+    r"([A-Z][A-Z0-9 ./-]{1,40}?)\s*\(([A-Z0-9 ./-]{1,30})\)\s+QUALITY\s+UPHOLSTERY\s+FABRIC\s+"
+    r"(\d{1,5}[.,]\d{2,3})\s+(\d{1,4})\s+(\d{1,5}[.,]\d{2,3})\s+(\d{1,5}[.,]\d{2,3})",
+    re.I,
+)
+_QUALITY_INV = re.compile(
+    r"([A-Z][A-Z0-9 ./-]{1,40}?)\s*\(([A-Z0-9 ./-]{1,30})\)\s+QUALITY\s+UPHOLSTERY\s+FABRIC\s*"
+    r"(\d{1,5}[.,]\d{2,3})\s+(?:ROLLS\s+)?(\d+[.,]\d+)\s+((?:\d{1,3},)*\d+[.,]\d+)",
+    re.I,
+)
+_CUT_ROW = re.compile(
+    r"((?:VELL\.|TESS\.)\s+[A-Z][A-Z0-9 ./-]{1,40}?\s+\d{1,4}(?:/\d)?)\s+.*?(\d{1,4})\s*MT\b",
+    re.I,
+)
+_ALC_ROW = re.compile(
+    r"(\d{6,}[A-Z0-9]*)\s+ALCANTARA(?:\(\s*R\s*\))?\s+([A-Z0-9.]{2,}(?:\s+[A-Z0-9.]{1,12})?)\s+.{0,80}?(\d[\d,.]*)\s*M\b",
+    re.I,
+)
+_ALC_PALLET = re.compile(
+    r"Total Quantity:\s*([\d.,]+)\s*M\s+Total Rolls:\s*(\d+)\s+Weight:\s*([\d.,]+)\s*KG",
+    re.I,
+)
+
+
+def _text_goods(text):
+    """Строки, которые сетка PDF не собрала: ткань QUALITY, крой VELL/TESS, пакинг Alcantara."""
+    found = []
+    found.extend(_quality_fabric_lines(text))
+    found.extend(_cut_fabric_lines(text))
+    found.extend(_alcantara_lines(text))
+    return found
+
+
+def _quality_fabric_lines(text):
+    lines = []
+    seen = set()
+    for match in _QUALITY_PACK.finditer(text or ""):
+        vendor = f"{match.group(1).strip()} ({match.group(2).strip()})"
+        key = (vendor.casefold(), match.group(3))
+        if key in seen:
+            continue
+        seen.add(key)
+        line = Line(source="pdf", vendor=vendor, description="QUALITY UPHOLSTERY FABRIC")
+        line.pieces = parse_number(match.group(3))
+        line.packages = parse_number(match.group(4))
+        line.net = parse_number(match.group(5))
+        line.gross = parse_number(match.group(6))
+        line.unit = "meters"
+        line.package_type = "ROLLS"
+        lines.append(line)
+    for match in _QUALITY_INV.finditer(text or ""):
+        vendor = f"{match.group(1).strip()} ({match.group(2).strip()})"
+        key = (vendor.casefold(), "inv")
+        pieces = parse_number(match.group(3))
+        price = parse_number(match.group(4))
+        amount = parse_number(match.group(5))
+        existing = next((item for item in lines if item.vendor.casefold() == vendor.casefold()), None)
+        if existing:
+            if existing.price is None:
+                existing.price = price
+            if existing.amount is None:
+                existing.amount = amount
+            if existing.pieces is None:
+                existing.pieces = pieces
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        line = Line(source="pdf", vendor=vendor, description="QUALITY UPHOLSTERY FABRIC")
+        line.pieces = pieces
+        line.price = price
+        line.amount = amount
+        line.unit = "meters"
+        line.package_type = "ROLLS"
+        lines.append(line)
+    return lines
+
+
+def _cut_fabric_lines(text):
+    lines = []
+    seen = set()
+    for match in _CUT_ROW.finditer(text or ""):
+        vendor = " ".join(match.group(1).split())
+        if vendor.casefold() in seen:
+            continue
+        seen.add(vendor.casefold())
+        line = Line(source="pdf", vendor=vendor, description=vendor)
+        line.pieces = parse_number(match.group(2))
+        line.unit = "meters"
+        lines.append(line)
+    return lines
+
+
+def _alcantara_lines(text):
+    """Код и метры с пакинга. Вес паллеты на несколько артикулов не делим: садится, только если артикул один."""
+    blob = text or ""
+    rows = []
+    for match in _ALC_ROW.finditer(blob):
+        vendor = match.group(1).strip()
+        desc = f"ALCANTARA {match.group(2).strip()}"
+        line = Line(source="pdf", vendor=vendor, description=desc)
+        line.pieces = parse_number(match.group(3))
+        line.unit = "meters"
+        rows.append(line)
+    pallets = list(_ALC_PALLET.finditer(blob))
+    if len(pallets) == 1 and len(rows) == 1:
+        rows[0].packages = parse_number(pallets[0].group(2))
+        rows[0].net = parse_number(pallets[0].group(3))
+    return rows
+
+
+def _enrich_from_text(found, extra):
+    """Текстовый слой чинит пустой артикул. Новые лоты — только если сетка почти без имён."""
+    extra_named = [line for line in extra if (line.vendor or "").strip()]
+    if not extra_named:
+        return found
+    found_named = sum(1 for line in found if (line.vendor or "").strip())
+    table_ok = bool(found) and found_named >= max(1, (len(found) + 1) // 2)
+    cut_extra = [
+        item
+        for item in extra_named
+        if re.match(r"(?:VELL\.|TESS\.)", item.vendor or "", re.I)
+    ]
+    found_is_cut_noise = (not found) or all(
+        (line.vendor or "").casefold().startswith("composition")
+        or (line.description or "").casefold().startswith("n.i. art")
+        or re.fullmatch(r"\d+[.,]\d+", str(line.vendor or "").strip())
+        for line in found
+    )
+    if cut_extra and found_is_cut_noise:
+        return cut_extra
+    if not table_ok and found_named < max(1, len(extra_named) // 2):
+        return extra_named
+    unused = list(extra_named)
+    for line in found:
+        if (line.vendor or "").strip():
+            continue
+        match = next(
+            (
+                item
+                for item in unused
+                if item.pieces is not None
+                and line.pieces is not None
+                and abs(item.pieces - line.pieces) < 0.05
+            ),
+            None,
+        )
+        if match is None:
+            continue
+        line.vendor = match.vendor
+        if match.description and not line.description:
+            line.description = match.description
+        if line.net is None:
+            line.net = match.net
+        if line.gross is None:
+            line.gross = match.gross
+        unused.remove(match)
+    if table_ok:
+        return found
+    have = {(str(item.vendor or "").casefold(), item.pieces) for item in found}
+    for item in extra_named:
+        key = (item.vendor.casefold(), item.pieces)
+        if key in have:
+            continue
+        found.append(item)
+        have.add(key)
+    return found
 
 
 def _readable(text):
@@ -326,7 +497,7 @@ def _table_lines(table, pdf_table, words, table_box, inherited):
         )
         if is_bare_total(line, lines):
             break
-        if is_registry_line(line):
+        if is_registry_line(line) or is_noise_lot(line):
             continue
         if is_pallet_only(line):
             attach_pallet(lines, line)

@@ -15,6 +15,16 @@ _ARTICLE = re.compile(
     r"^([A-Z]{1,4}\s+\d{2,}[A-Z0-9]*(?:-[A-Z0-9]+)*)\s+-\s+",
     re.I,
 )
+# FULDA COM (FULDA) QUALITY UPHOLSTERY FABRIC — артикул до QUALITY.
+_QUALITY_ARTICLE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9 ./-]{0,40}?)\s*\(([A-Za-z0-9 ./-]{1,30})\)\s+QUALITY\b",
+    re.I,
+)
+# VELL. KAORI 34 / TESS. BALMORAL GRS 08/1 — артикул итальянского кроя.
+_CUT_ARTICLE = re.compile(
+    r"^((?:VELL\.|TESS\.)\s+[A-Z][A-Z0-9 ./-]{1,40}?\s+\d{1,4}(?:/\d)?)\b",
+    re.I,
+)
 
 # Слово вида места в колонке единицы: это не единица количества.
 _PACKAGE_KIND = {
@@ -35,6 +45,7 @@ class Line:
     packages: float | None = None
     price: float | None = None
     amount: float | None = None
+    discount: float | None = None
     gross: float | None = None
     net: float | None = None
     net_primary: float | None = None
@@ -200,18 +211,48 @@ def settle_pallets(lines):
 
 
 def pull_article(line):
-    """Артикул, приклеенный к началу описания через « - », если своей колонки нет."""
+    """Артикул из описания, если своей колонки нет или в клетке остался хвост."""
     _glue_split_article(line)
     _pull_packages(line)
     _pull_hs(line)
+    _clean_article_noise(line)
     if line.vendor:
         return
-    match = _ARTICLE.match(str(line.description or "").strip())
+    blob = str(line.description or line.model or "").strip()
+    quality = _QUALITY_ARTICLE.match(blob)
+    if quality:
+        line.vendor = f"{quality.group(1).strip()} ({quality.group(2).strip()})"
+        return
+    cut = _CUT_ARTICLE.match(blob)
+    if cut:
+        line.vendor = " ".join(cut.group(1).split())
+        return
+    match = _ARTICLE.match(blob)
     if not match:
         return
     code = match.group(1).strip()
     if any(ch.isdigit() for ch in code):
         line.vendor = code
+
+
+def _clean_article_noise(line):
+    """Хвост ART у кода, итог HS и ширина 54 вместо имени ткани — не артикул."""
+    vendor = " ".join(str(line.vendor or "").split())
+    if not vendor:
+        return
+    low = vendor.casefold()
+    if low.startswith("riepilogo") or "hs-code" in low or "hs code" in low:
+        line.vendor = ""
+        return
+    trimmed = re.sub(r"\s+ART\.?\s*$", "", vendor, flags=re.I).strip()
+    if trimmed:
+        vendor = trimmed
+    if re.fullmatch(r"\d{1,3}", vendor):
+        blob = f"{line.description} {line.model}"
+        if re.search(r"(?:VELL\.|TESS\.|KAORI|BALMORAL|QUALITY\s+UPHOLSTERY|COMPOSITION)", blob, re.I):
+            line.vendor = ""
+            return
+    line.vendor = vendor
 
 
 _PACKED = re.compile(r"упаковк\w*\s*:\s*(\d+)", re.I)
@@ -326,6 +367,60 @@ def is_registry_line(line):
     return "inscrita" in blob or "registro mercantil" in blob or "commercial register" in blob
 
 
+def is_noise_lot(line):
+    """Итог HS, VAT-код и строка состава без товара — не лот."""
+    blob = f"{line.vendor} {line.model} {line.description}".casefold()
+    if "riepilogo" in blob or "hs-code" in blob:
+        return True
+    if "n.i. art" in blob or re.search(r"\blett\.?\s*a\b", blob):
+        return True
+    if blob.strip().startswith("tariff code") or blob.strip() in {"composition", "tariff"}:
+        return True
+    return False
+
+
+def glue_design_colour(line, row, mapping, header_cells):
+    """DESING и соседняя клетка без шапки (997) — один артикул MAXWELL 997."""
+    model_col = mapping.get("model") if isinstance(mapping.get("model"), int) else None
+    vendor_col = mapping.get("vendor") if isinstance(mapping.get("vendor"), int) else None
+    anchor = model_col if model_col is not None else vendor_col
+    if anchor is None:
+        return
+    nxt = anchor + 1
+    used = {col for col in mapping.values() if isinstance(col, int)}
+    if nxt in used or nxt >= len(row) or row[nxt] in (None, ""):
+        return
+    header = header_cells[nxt] if nxt < len(header_cells) else ""
+    if str(header or "").strip():
+        return
+    extra = _cell_text(row[nxt])
+    if not extra or len(extra) > 12:
+        return
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,12}", extra):
+        return
+    base = (line.vendor or line.model or "").strip()
+    if not base or extra.casefold() in base.casefold():
+        return
+    glued = f"{base} {extra}"
+    if line.model:
+        line.model = glued
+    line.vendor = glued
+
+
+def adopt_design_article(line, mapping, header_cells):
+    """DESIGN без своей колонки артикула — это артикул, не только модель."""
+    if line.vendor or not line.model:
+        return
+    col = mapping.get("model")
+    if not isinstance(col, int):
+        return
+    header = header_cells[col] if col < len(header_cells) else ""
+    token = " ".join(str(header or "").lower().replace("\n", " ").split())
+    token = token.replace("desing", "design")
+    if token in {"design", "pattern"} or token.startswith("design"):
+        line.vendor = line.model
+
+
 def apply_mfr_brand_cell(line, header, value):
     """MANUFACTURER / BRAND: до слэша завод строки, после слэша знак. Список заводов не класть."""
     if not is_mfr_brand_header(header):
@@ -408,7 +503,7 @@ def assign_cell(line, name, value, header_is_package=False):
     if name == "packages":
         fill_qty(line, value, header_is_package=True)
         return
-    if name in {"price", "amount", "gross", "net", "net_primary", "volume", "area", "width", "gsm", "gross_with_pallet", "unit_net"}:
+    if name in {"price", "amount", "discount", "gross", "net", "net_primary", "volume", "area", "width", "gsm", "gross_with_pallet", "unit_net"}:
         if name == "volume" and isinstance(value, str) and re.search(r"\d\s*[*x×]\s*\d", value):
             return
         number = parse_number(value)

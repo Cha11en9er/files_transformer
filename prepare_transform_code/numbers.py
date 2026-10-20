@@ -34,8 +34,20 @@ def parse_number(value):
 
 
 def dot_is_decimal(text):
-    """В тексте есть 1,688.90 или 2,638.800: одинокое 82.300 - это 82.3, не 82300."""
-    return bool(re.search(r"\d{1,3}(?:,\d{3})+\.\d+", text or ""))
+    """Точка — дробь: 1,688.90 / 2,638.800, или 131.800 кг рядом с 224.10 на том же листе.
+
+    Европейское 1.972,20 на листе это правило выключает: 3.900 там по-прежнему тысячи.
+    """
+    blob = text or ""
+    if re.search(r"\d{1,3}(?:,\d{3})+\.\d+", blob):
+        return True
+    if re.search(r"\d{1,3}(?:\.\d{3})+,\d+", blob):
+        return False
+    if not re.search(r"(?<![\d,])\d+\.\d{1,2}(?!\d)", blob):
+        return False
+    if not re.search(r"(?<![\d,])\d+\.\d{3}(?!\d)", blob):
+        return False
+    return bool(re.search(r"\b(?:kg|kgs|кг|weight|weigth|nett?o?|gross|нетто|брут)\b", blob, re.I))
 
 
 def comma_is_decimal(text):
