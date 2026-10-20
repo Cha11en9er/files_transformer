@@ -244,6 +244,11 @@ def column_of(header):
         return "amount"
     # Колонка CODE / KOD — артикул. HS CODE и таможенный код сюда не входят.
     # Длинная клетка с цифрами — описание, куда код вписан, а не шапка артикула.
+    # OCR иногда вшивает латиницу CODE в русскую шапку («поставCкOи DТEовара»).
+    latin = "".join(ch for ch in str(header or "") if ch.isascii() and ch.isalpha())
+    if latin.upper() == "CODE":
+        if not any(mark in text for mark in ("hs", "нs", "customs", "custom", "tariff", "product", "тн", "товар", "таможен", "barcode", "баркод")):
+            return "vendor"
     if re.search(r"(?<![a-zа-яё])(code|kod|код)(?![a-zа-яё])", text):
         # Заводской код рядом с quality code. Артикулом его не делаем.
         if any(mark in text for mark in ("design code", "mill code")):

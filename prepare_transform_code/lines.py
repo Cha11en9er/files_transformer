@@ -131,9 +131,33 @@ def is_bare_total(line, previous):
     """Строка без названия, чьё число равно сумме строк выше. Это итог, даже без слова TOTAL."""
     if (line.vendor and not _total_words_only(line.vendor)) or (line.model and not _total_words_only(line.model)):
         return False
-    if line.description and not _total_words_only(line.description) and not _leaked_total(line):
-        return False
     if not previous:
+        return False
+    # Места и штуки сразу равны сумме нескольких строк выше — итог, даже если в
+    # описание протёк хвост. Одну строку с теми же 15 местами / 15 штуками не трогаем.
+    if len(previous) >= 2 and line.packages is not None and line.pieces is not None:
+        pack_vals = [
+            item.packages or 0
+            for item in previous
+            if not item.freight and "packages" not in (getattr(item, "span_continued", None) or set())
+        ]
+        piece_vals = [
+            item.pieces or 0
+            for item in previous
+            if not item.freight and "pieces" not in (getattr(item, "span_continued", None) or set())
+        ]
+        pack_total = sum(pack_vals)
+        piece_total = sum(piece_vals)
+        if (
+            pack_total > 0
+            and piece_total > 0
+            and pack_total > max(pack_vals)
+            and piece_total > max(piece_vals)
+            and abs(pack_total - line.packages) <= max(0.02, abs(pack_total) * 0.002)
+            and abs(piece_total - line.pieces) <= max(0.02, abs(piece_total) * 0.002)
+        ):
+            return True
+    if line.description and not _total_words_only(line.description) and not _leaked_total(line):
         return False
     if line.amount is not None:
         total = sum(item.amount or 0 for item in previous if not item.freight)
@@ -458,10 +482,20 @@ def assign_cell(line, name, value, header_is_package=False):
         return
     if name in {"model", "vendor", "unit", "origin", "brand", "producer", "finish", "pallet", "package_type", "note", "size", "order_ref"}:
         text = _cell_text(value)
-        # Колонка CODE с числом из 8–10 цифр — это ТН ВЭД, не артикул.
-        if name == "vendor" and text and not line.hs and re.fullmatch(r"\d{8,10}", text):
-            line.hs = text
-            return
+        # Колонка CODE: «9507100000 2150» — ТН ВЭД и короткий артикул в одной клетке.
+        if name == "vendor" and text:
+            split_hs = re.fullmatch(r"(\d{8,10})\s+(\S{1,32})", text)
+            if split_hs:
+                if not line.hs:
+                    line.hs = split_hs.group(1)
+                art = split_hs.group(2)
+                if art and not _absent_token(art) and not line.vendor:
+                    line.vendor = art
+                return
+            # Колонка CODE с числом из 8–10 цифр — это ТН ВЭД, не артикул.
+            if not line.hs and re.fullmatch(r"\d{8,10}", text):
+                line.hs = text
+                return
         if name == "producer" and is_factory_list(text):
             return
         if name == "producer":
@@ -489,11 +523,21 @@ def assign_cell(line, name, value, header_is_package=False):
         return
     if name == "hs":
         text = hs_text(value)
+        # «9507100000 2150» в колонке Код — ТН ВЭД и короткий артикул.
+        split_hs = re.fullmatch(r"(\d{8,10})\s+(\S{1,32})", text or "")
+        if split_hs:
+            text = split_hs.group(1)
+            art = split_hs.group(2)
+            if art and not _absent_token(art) and not line.vendor:
+                line.vendor = art
         if text and not line.hs:
             line.hs = text
         return
     if name == "hs_alt":
         text = hs_text(value)
+        split_hs = re.fullmatch(r"(\d{8,10})\s+(\S{1,32})", text or "")
+        if split_hs:
+            text = split_hs.group(1)
         if text and not line.hs_alt:
             line.hs_alt = text
         return
