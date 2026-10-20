@@ -268,6 +268,19 @@ def test_route_end_to_end_create_and_export():
             "profile_type": "18233",
             "header_fields": body.get("header_fields") or {},
             "items": body["items"],
+            "recognition": {
+                "route": "unknown",
+                "reasons": ["тест"],
+                "checks": [
+                    {
+                        "name": "inv.xlsx / Sheet",
+                        "role": "invoice",
+                        "sums": {"pieces": 1},
+                        "printed": {"pieces": 1},
+                        "gaps": [],
+                    }
+                ],
+            },
         },
     )
     assert export.status_code == 200, export.text
@@ -278,6 +291,7 @@ def test_route_end_to_end_create_and_export():
 
     with zipfile.ZipFile(BytesIO(export.content)) as zf:
         names = [n.lower() for n in zf.namelist()]
+    assert all("провер" not in n for n in names)
     assert len(names) == 3
     assert any("инвойс" in n or "invoice" in n for n in names)
     assert any("пакинг" in n or "pack" in n for n in names)

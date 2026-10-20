@@ -52,6 +52,8 @@ const state = {
   pendingAdd: null,
   excelView: false,
   excelPreviewCache: null,
+  excelPreviewFile: 0,
+  excelPreviewSheet: 0,
 };
 const extraFiles = new WeakSet();
 
@@ -440,10 +442,17 @@ function hideOldWorkspace() {
   state.roleColumnsKey = "";
   state.excelView = false;
   state.excelPreviewCache = null;
+  state.excelPreviewFile = 0;
+  state.excelPreviewSheet = 0;
   $("#workspace")?.classList.add("hidden");
   setExcelView(false, { refresh: false });
   const preview = $("#export-preview");
   if (preview) preview.innerHTML = "";
+  const fileTabs = $("#export-preview-files");
+  if (fileTabs) {
+    fileTabs.innerHTML = "";
+    fileTabs.hidden = true;
+  }
   const tbody = $("#items-table tbody");
   if (tbody) tbody.innerHTML = "";
   const thead = $("#items-table thead");
@@ -2455,59 +2464,77 @@ function addItemFromScan(hit) {
   renderWorkspace();
 }
 
+function previewFileLabel(file, index) {
+  const name = String(file?.filename || `Файл ${index + 1}`);
+  const low = name.toLowerCase();
+  if (low.includes("инвойс") || low.includes("invoice")) return "Инвойс";
+  if (low.includes("пакинг") || low.includes("packing")) return "Пакинг";
+  if (low.includes("спецификац") || low.includes("specification")) return "Спецификация";
+  if (low.includes("описан") || low.includes("description")) return "Описание";
+  const stem = name.replace(/\.xlsx$/i, "");
+  return stem || `Файл ${index + 1}`;
+}
+
 function renderExportPreview(data) {
   const host = $("#export-preview");
   const meta = $("#export-preview-meta");
+  const fileTabs = $("#export-preview-files");
   if (!host) return;
   host.innerHTML = "";
   state.excelPreviewCache = data || null;
   const files = data?.files || [];
+  if (state.excelPreviewFile >= files.length) state.excelPreviewFile = 0;
+  const file = files[state.excelPreviewFile];
+  const sheets = file?.sheets || [];
+  if (state.excelPreviewSheet >= sheets.length) state.excelPreviewSheet = 0;
   if (meta) {
     meta.textContent = files.length
-      ? `Так уйдут в ZIP ${files.length} файл(ов) профиля ${data?.profile_type || ""}. Столбцы и листы как при «Сформировать Excel».`
+      ? `Так уйдут в ZIP ${files.length} файл(ов) профиля ${data?.profile_type || ""}. Один файл на экране, соседний открывается кнопкой.`
       : "Нет файлов для выгрузки.";
   }
-  files.forEach((file, fileIndex) => {
-    const card = document.createElement("article");
-    card.className = "preview-file";
-    const sheets = file.sheets || [];
-    const tabs =
-      sheets.length > 1
-        ? `<div class="preview-tabs" role="tablist">${sheets
-            .map(
-              (sheet, sheetIndex) =>
-                `<button type="button" class="preview-tab${sheetIndex === 0 ? " active" : ""}" data-preview-file="${fileIndex}" data-preview-sheet="${sheetIndex}">${escapeHtml(sheet.title || `Лист ${sheetIndex + 1}`)}</button>`
-            )
-            .join("")}</div>`
-        : "";
-    const tables = sheets
-      .map((sheet, sheetIndex) => {
-        const headers = (sheet.headers || []).map((h) => `<th>${escapeHtml(h)}</th>`).join("");
-        const rows = sheet.rows || [];
-        const body = rows
-          .slice(0, 120)
-          .map((row) => {
-            const cells = (row || [])
-              .map((cell) => {
-                const text = cell == null || cell === "" ? "" : String(cell);
-                return longCell(text);
-              })
-              .join("");
-            return `<tr>${cells}</tr>`;
-          })
-          .join("");
-        const more =
-          rows.length > 120 ? `<p class="hint">Показаны первые 120 из ${rows.length} строк</p>` : "";
-        const hidden = sheetIndex === 0 ? "" : " hidden";
-        return `<div class="preview-sheet${hidden}" data-preview-file="${fileIndex}" data-preview-sheet="${sheetIndex}">
-          <h4>${escapeHtml(sheet.title || "")} · ${rows.length} строк</h4>
-          <div class="table-wrap"><table class="preview-table"><thead><tr>${headers}</tr></thead><tbody>${body || `<tr><td colspan="${Math.max((sheet.headers || []).length, 1)}">Пусто</td></tr>`}</tbody></table></div>${more}
-        </div>`;
-      })
+  if (fileTabs) {
+    fileTabs.hidden = files.length <= 1;
+    fileTabs.innerHTML = files
+      .map(
+        (item, index) =>
+          `<button type="button" class="preview-tab${index === state.excelPreviewFile ? " active" : ""}" data-preview-file="${index}">${escapeHtml(previewFileLabel(item, index))}</button>`
+      )
       .join("");
-    card.innerHTML = `<h3>${escapeHtml(file.filename || "")}</h3>${tabs}${tables}`;
-    host.appendChild(card);
-  });
+  }
+  if (!file) return;
+  const card = document.createElement("article");
+  card.className = "preview-file";
+  const sheetTabs =
+    sheets.length > 1
+      ? `<div class="preview-tabs" role="tablist">${sheets
+          .map(
+            (sheet, sheetIndex) =>
+              `<button type="button" class="preview-tab${sheetIndex === state.excelPreviewSheet ? " active" : ""}" data-preview-sheet="${sheetIndex}">${escapeHtml(sheet.title || `Лист ${sheetIndex + 1}`)}</button>`
+          )
+          .join("")}</div>`
+      : "";
+  const sheet = sheets[state.excelPreviewSheet] || sheets[0] || { headers: [], rows: [], title: "" };
+  const headers = (sheet.headers || []).map((h) => `<th>${escapeHtml(h)}</th>`).join("");
+  const rows = sheet.rows || [];
+  const body = rows
+    .slice(0, 120)
+    .map((row) => {
+      const cells = (row || [])
+        .map((cell) => {
+          const text = cell == null || cell === "" ? "" : String(cell);
+          return longCell(text);
+        })
+        .join("");
+      return `<tr>${cells}</tr>`;
+    })
+    .join("");
+  const more = rows.length > 120 ? `<p class="hint">Показаны первые 120 из ${rows.length} строк</p>` : "";
+  card.innerHTML = `<h3>${escapeHtml(file.filename || "")}</h3>${sheetTabs}
+    <div class="preview-sheet">
+      <h4>${escapeHtml(sheet.title || "")} · ${rows.length} строк</h4>
+      <div class="table-wrap"><table class="preview-table"><thead><tr>${headers}</tr></thead><tbody>${body || `<tr><td colspan="${Math.max((sheet.headers || []).length, 1)}">Пусто</td></tr>`}</tbody></table></div>${more}
+    </div>`;
+  host.appendChild(card);
 }
 
 async function refreshExportPreview() {
@@ -3340,21 +3367,23 @@ $("#btn-excel-view")?.addEventListener("click", () => {
   setExcelView(!state.excelView);
 });
 
-$("#export-preview")?.addEventListener("click", (e) => {
-  const tab = e.target.closest(".preview-tab");
+$("#export-preview-files")?.addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-preview-file]");
   if (!tab) return;
-  const fileIndex = tab.dataset.previewFile;
-  const sheetIndex = tab.dataset.previewSheet;
-  const card = tab.closest(".preview-file");
-  if (!card) return;
-  card.querySelectorAll(".preview-tab").forEach((node) => {
-    node.classList.toggle("active", node === tab);
-  });
-  card.querySelectorAll(".preview-sheet").forEach((sheet) => {
-    const match =
-      sheet.dataset.previewFile === fileIndex && sheet.dataset.previewSheet === sheetIndex;
-    sheet.classList.toggle("hidden", !match);
-  });
+  const next = Number(tab.dataset.previewFile);
+  if (!Number.isFinite(next) || next === state.excelPreviewFile) return;
+  state.excelPreviewFile = next;
+  state.excelPreviewSheet = 0;
+  renderExportPreview(state.excelPreviewCache);
+});
+
+$("#export-preview")?.addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-preview-sheet]");
+  if (!tab) return;
+  const next = Number(tab.dataset.previewSheet);
+  if (!Number.isFinite(next) || next === state.excelPreviewSheet) return;
+  state.excelPreviewSheet = next;
+  renderExportPreview(state.excelPreviewCache);
 });
 
 $("#btn-export").addEventListener("click", async () => {
