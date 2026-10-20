@@ -1371,16 +1371,69 @@ def collect_disk_attachments(paths: list[Path] | None) -> tuple[list[Path], list
 
 
 VERDICT_SYSTEM = (
-    "Следуй правилам в сообщении пользователя. Ответ — один JSON без пояснения вокруг. "
-    "Источник истины — файлы поставки, не черновик кода. Открой пути инструментом read. "
-    "Бланки разные: названия, места полей, склейки, переносы страниц — решай по файлу, без жёсткой привязки к шаблону. "
-    "Число, которого нет в черновике и в файлах, не выдумывай. Не делай keep всем строкам без сверки с файлом."
+    "Инструменты выключены: read, bash и прочие вызовы запрещены. "
+    "Текст файлов уже вставлен в сообщение пользователя блоками «--- имя ---». "
+    "Ответ — один JSON без пояснения вокруг и без запроса инструментов. "
+    "Источник истины — этот текст, не черновик. "
+    "Число, которого нет в тексте и в черновике, не выдумывай."
 )
 
 VERDICT_SYSTEM_FAST = (
-    "Ответ — один JSON. Суммы уже сошлись. Максимум 3 вызова read. "
-    "Если шапка и выборочные строки совпали с черновиком — keep всем. Без длинных reason."
+    "Инструменты выключены. Текст файлов уже в сообщении. Ответ — один JSON. "
+    "Суммы уже сошлись: если шапка и выборочные строки совпали — keep всем. Без длинных reason."
 )
+
+_EXTRACT_PER_FILE = 14000
+_EXTRACT_TOTAL = 70000
+
+
+def inline_source_text(paths: list[Path]) -> str:
+    """Plain text of shipment files so the model does not need the read tool."""
+    chunks: list[str] = []
+    used = 0
+    for path in paths:
+        if used >= _EXTRACT_TOTAL:
+            chunks.append("\n…дальше файлы обрезаны по лимиту…")
+            break
+        text = _extract_file_text(path)[:_EXTRACT_PER_FILE]
+        piece = f"\n--- {path.name} ---\n{text}\n"
+        chunks.append(piece)
+        used += len(piece)
+    return "".join(chunks) if chunks else "(текста файлов нет)"
+
+
+def _extract_file_text(path: Path) -> str:
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".pdf":
+            import pdfplumber
+
+            parts: list[str] = []
+            with pdfplumber.open(path) as pdf:
+                for index, page in enumerate(pdf.pages[:8], start=1):
+                    parts.append(f"[page {index}]\n{page.extract_text() or ''}")
+            return "\n".join(parts).strip() or "(пустой текстовый слой)"
+        if suffix in {".xlsx", ".xlsm", ".xls"}:
+            import openpyxl
+
+            book = openpyxl.load_workbook(path, data_only=True, read_only=True)
+            lines: list[str] = []
+            try:
+                for sheet in book.worksheets[:4]:
+                    lines.append(f"[sheet {sheet.title}]")
+                    for index, row in enumerate(sheet.iter_rows(values_only=True)):
+                        if index >= 80:
+                            lines.append("…")
+                            break
+                        cells = ["" if cell is None else str(cell) for cell in row[:18]]
+                        if any(cell.strip() for cell in cells):
+                            lines.append(" | ".join(cells))
+            finally:
+                book.close()
+            return "\n".join(lines).strip() or "(пустая книга)"
+    except Exception as exc:
+        return f"(не прочитан: {exc})"
+    return "(двоичный файл без текстового слоя)"
 
 
 _EFFORT = {"low", "medium", "high", "xhigh"}
@@ -1455,8 +1508,20 @@ def review_with_opencode(
     before_billing = fetch_openrouter_billing() if provider_id == "openrouter" else _empty_billing()
 
     prompt = user_prompt if user_prompt is not None else build_user_prompt(snapshot)
+    tools = SESSION_TOOLS
     if user_prompt is not None:
+        # One shot: file text in the message, tools off. Otherwise OpenCode loops
+        # on read (OpenRouter shows ~22k in / ~200 out forever) and never returns JSON.
+        extracts = inline_source_text([*attach_files, *read_files])
+        prompt = (
+            "Текст файлов ниже. Инструменты недоступны, read не вызывай, сразу один JSON.\n"
+            + extracts
+            + "\n\n"
+            + prompt
+        )
         system_prompt = VERDICT_SYSTEM_FAST if fast else VERDICT_SYSTEM
+        tools = DISABLED_TOOLS
+        attach_files = []
     else:
         system_prompt = SYSTEM_PROMPT
     parts: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
@@ -1488,7 +1553,7 @@ def review_with_opencode(
             message: dict[str, Any] = {
                 "system": system_prompt,
                 "model": {"providerID": provider_id, "modelID": model_id},
-                "tools": SESSION_TOOLS,
+                "tools": tools,
                 "parts": parts,
             }
             if variant:
