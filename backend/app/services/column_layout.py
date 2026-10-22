@@ -198,6 +198,49 @@ def _row_item(row: list[Any], items: list[dict[str, Any]]) -> dict[str, Any] | N
     return None
 
 
+def _is_total_row(row: list[Any]) -> bool:
+    if not row:
+        return False
+    text = str(row[0] or "").strip().upper().replace(":", "")
+    if text in {"TOTAL", "ИТОГО", "ИТОГ", "SUM"}:
+        return True
+    if len(row) > 1 and str(row[1] or "").strip().upper().startswith("TOTAL"):
+        return True
+    return False
+
+
+def prune_empty_columns(
+    headers: list[str],
+    keys: list[str],
+    rows: list[list[Any]],
+    *,
+    keep_keys: set[str] | None = None,
+) -> tuple[list[str], list[str], list[list[Any]]]:
+    """Убрать столбцы, где во всех товарных строках пусто. Итог и шапка не считаются заполнением."""
+    always = keep_keys or {"no", "article"}
+    body = [row for row in rows if not _is_total_row(row)]
+    if not body or not keys:
+        return headers, keys, rows
+    keep_idx: list[int] = []
+    for index, key in enumerate(keys):
+        if key in always or str(key).startswith("extra:"):
+            keep_idx.append(index)
+            continue
+        filled = False
+        for row in body:
+            if index < len(row) and row[index] not in (None, ""):
+                filled = True
+                break
+        if filled:
+            keep_idx.append(index)
+    if len(keep_idx) == len(keys):
+        return headers, keys, rows
+    next_headers = [headers[i] for i in keep_idx if i < len(headers)]
+    next_keys = [keys[i] for i in keep_idx]
+    next_rows = [[row[i] if i < len(row) else None for i in keep_idx] for row in rows]
+    return next_headers, next_keys, next_rows
+
+
 def apply_sheet_layout(
     headers: list[str],
     keys: list[str],
@@ -205,6 +248,8 @@ def apply_sheet_layout(
     items: list[dict[str, Any]],
     column_layout: dict[str, Any] | None,
     role: str,
+    *,
+    prune_empty: bool = True,
 ) -> tuple[list[str], list[str], list[list[Any]]]:
     """Drop hidden role columns and append operator-added columns at the end."""
     layout = layout_for(column_layout, role)
@@ -221,6 +266,8 @@ def apply_sheet_layout(
         for row in next_rows:
             item = _row_item(row, items)
             row.append(extra_value(item, role, column_id))
+    if prune_empty:
+        next_headers, next_keys, next_rows = prune_empty_columns(next_headers, next_keys, next_rows)
     return next_headers, next_keys, next_rows
 
 
@@ -341,19 +388,59 @@ FABRIC_SPEC_KEYS = [
 ]
 
 
-def site_columns(profile: str, fabric: bool) -> dict[str, list[dict[str, str]]]:
+def site_columns(profile: str, fabric: bool, tsd: bool = False) -> dict[str, list[dict[str, str]]]:
     """Columns the operator table shows for each role. Extra ones are appended in the browser."""
     beijing = str(profile or "").upper() in {"BEIJING", "PROFILETYPE.BEIJING"}
-    if beijing:
+    # ТСД: Bestway / шары / гайки / светильники — CODE, страна, QTY, pcs.
+    if tsd:
         return {
             "invoice": [
                 _col("article", bilingual("MODEL / SERIES / ART.", "Модель, серия, арт."), "text"),
                 _col("description", bilingual("Description", "Описание"), "text"),
                 _col("hs_code", bilingual("Customs code", "Таможенный код"), "code"),
                 _col("country", bilingual("Country of origin", "Страна происхождения"), "text"),
-                _col("color", bilingual("Color", "Цвет"), "text"),
                 _col("qty", bilingual("QTY", "Кол-во"), "num"),
                 _col("unit", bilingual("pcs, pcg, set", "шт, уп, компл"), "text"),
+                _col("packages", bilingual("PACKAGE", "Места"), "num"),
+                _col("price", bilingual("Price", "Цена"), "money"),
+                _col("amount", bilingual("Amount", "Сумма"), "money"),
+                _col("brand", bilingual("Brand", "Торговая марка"), "text"),
+                _col("size", bilingual("Size", "Размер"), "text"),
+            ],
+            "packing": [
+                _col("article", bilingual("MODEL / SERIES / ART.", "Модель, серия, арт."), "text"),
+                _col("description", bilingual("Description", "Описание"), "text"),
+                _col("country", bilingual("Country of origin", "Страна происхождения"), "text"),
+                _col("qty", bilingual("QTY", "Кол-во"), "num"),
+                _col("packages", bilingual("PACKAGE", "Места"), "num"),
+                _col("net_weight", bilingual("Net Wt.", "Нетто"), "num"),
+                _col("gross_weight", bilingual("Gross Wt.", "Брутто"), "num"),
+            ],
+            "specification": [
+                _col("article", bilingual("MODEL / SERIES / ART.", "Модель, серия, арт."), "text"),
+                _col("description", bilingual("Description", "Наименование"), "text"),
+                _col("qty", bilingual("QTY", "Кол-во"), "num"),
+                _col("unit", bilingual("pcs, pcg, set", "шт, уп, компл"), "text"),
+                _col("net_weight", bilingual("Net weight", "Нетто"), "num"),
+                _col("gross_weight", bilingual("Gross weight", "Брутто"), "num"),
+                _col("price", bilingual("Price", "Цена"), "money"),
+                _col("amount", bilingual("Amount", "Сумма"), "money"),
+                _col("hs_code", bilingual("Customs code", "Таможенный код"), "code"),
+                _col("manufacturer", bilingual("Manufacturer", "Производитель"), "text"),
+                _col("country", bilingual("Country of origin", "Страна происхождения"), "text"),
+                _col("size", bilingual("Size", "Размер"), "text"),
+            ],
+        }
+    # Beijing Goldluck: цвет, объём, коробки — не ТСД.
+    if beijing:
+        return {
+            "invoice": [
+                _col("article", bilingual("Art No.", "Артикул"), "text"),
+                _col("description", bilingual("Description", "Наименование"), "text"),
+                _col("hs_code", bilingual("Customs code", "Таможенный код"), "code"),
+                _col("color", bilingual("Color", "Цвет"), "text"),
+                _col("qty", bilingual("Quantity", "Количество"), "num"),
+                _col("unit", bilingual("Unit", "Ед. изм."), "text"),
                 _col("packages", bilingual("Packages", "Места"), "num"),
                 _col("price", bilingual("Price", "Цена"), "money"),
                 _col("amount", bilingual("Amount", "Сумма"), "money"),
@@ -362,26 +449,25 @@ def site_columns(profile: str, fabric: bool) -> dict[str, list[dict[str, str]]]:
                 _col("hs_alt", bilingual("Customs code 2", "Второй код"), "code"),
             ],
             "packing": [
-                _col("article", bilingual("MODEL / SERIES / ART.", "Модель, серия, арт."), "text"),
-                _col("description", bilingual("Description", "Описание"), "text"),
-                _col("country", bilingual("Country of origin", "Страна происхождения"), "text"),
+                _col("article", bilingual("Art No.", "Артикул"), "text"),
+                _col("description", bilingual("Description", "Наименование"), "text"),
                 _col("color", bilingual("Color", "Цвет"), "text"),
-                _col("qty", bilingual("QTY", "Кол-во"), "num"),
-                _col("unit", bilingual("pcs, pcg, set", "шт, уп, компл"), "text"),
+                _col("qty", bilingual("Quantity", "Количество"), "num"),
+                _col("unit", bilingual("Unit", "Ед. изм."), "text"),
                 _col("measurement", bilingual("Measurement", "Габарит"), "text"),
                 _col("gross_weight", bilingual("Gross Wt.", "Брутто"), "num"),
                 _col("net_weight", bilingual("Net Wt.", "Нетто"), "num"),
-                _col("packages", bilingual("PACKAGE", "Места"), "num"),
+                _col("packages", bilingual("Cartons", "Коробки"), "num"),
                 _col("volume", bilingual("Volume", "Объём"), "num"),
                 _col("pcs_per_carton", bilingual("Unit per carton", "Шт. в коробке"), "num"),
             ],
             "specification": [
-                _col("article", bilingual("MODEL / SERIES / ART.", "Модель, серия, арт."), "text"),
+                _col("article", bilingual("Art.", "Артикул"), "text"),
                 _col("description", bilingual("Description", "Наименование"), "text"),
                 _col("packages", bilingual("Packages", "Места"), "num"),
                 _col("package_type", bilingual("Package", "Вид упаковки"), "text"),
-                _col("qty", bilingual("QTY", "Кол-во"), "num"),
-                _col("unit", bilingual("pcs, pcg, set", "шт, уп, компл"), "text"),
+                _col("qty", bilingual("Quantity", "Количество"), "num"),
+                _col("unit", bilingual("Unit", "Ед. изм."), "text"),
                 _col("net_weight", bilingual("Net weight", "Нетто"), "num"),
                 _col("gross_weight", bilingual("Gross weight", "Брутто"), "num"),
                 _col("price", bilingual("Price", "Цена"), "money"),
@@ -389,7 +475,7 @@ def site_columns(profile: str, fabric: bool) -> dict[str, list[dict[str, str]]]:
                 _col("hs_code", bilingual("Customs code", "Таможенный код"), "code"),
                 _col("brand", bilingual("Brand", "Торговая марка"), "text"),
                 _col("manufacturer", bilingual("Manufacturer", "Производитель"), "text"),
-                _col("country", bilingual("Country of origin", "Страна происхождения"), "text"),
+                _col("country", bilingual("Country", "Страна"), "text"),
                 _col("color", bilingual("Color", "Цвет"), "text"),
                 _col("size", bilingual("Size", "Размер"), "text"),
             ],

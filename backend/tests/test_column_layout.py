@@ -42,10 +42,22 @@ class BilingualTest(unittest.TestCase):
         self.assertIn("/", site["invoice"][0]["title"])
         self.assertIn("Дизайн", site["invoice"][0]["title"])
         beijing = site_columns("BEIJING", False)
-        self.assertIn("Модель", beijing["invoice"][0]["title"])
-        self.assertTrue(any(col["key"] == "country" for col in beijing["invoice"]))
-        self.assertTrue(any("шт, уп, компл" in col["title"] for col in beijing["invoice"]))
+        self.assertIn("Артикул", beijing["invoice"][0]["title"])
+        tsd = site_columns("18233", False, tsd=True)
+        self.assertIn("Модель", tsd["invoice"][0]["title"])
+        self.assertTrue(any(col["key"] == "country" for col in tsd["invoice"]))
+        self.assertTrue(any("шт, уп, компл" in col["title"] for col in tsd["invoice"]))
         self.assertTrue(any("Таможенный" in col["title"] for col in site_columns("18233", False)["invoice"]))
+
+    def test_prune_drops_vacant_fabric_columns(self):
+        from app.services.column_layout import prune_empty_columns
+
+        headers = ["No", "Art", "Width", "Meters", "Amount"]
+        keys = ["no", "article", "width", "qty", "amount"]
+        rows = [[1, "A", None, None, 10], ["TOTAL", None, None, None, 10]]
+        next_h, next_k, next_r = prune_empty_columns(headers, keys, rows)
+        self.assertEqual(next_k, ["no", "article", "amount"])
+        self.assertEqual(next_r[0], [1, "A", 10])
 
 
 class AttachColumnTest(unittest.TestCase):

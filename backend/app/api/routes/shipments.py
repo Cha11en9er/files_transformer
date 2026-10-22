@@ -1346,10 +1346,14 @@ def _column_layout(payload: ExportRequest) -> dict[str, Any]:
 
 
 @router.get("/columns")
-def role_table_columns(profile_type: str = "18233", fabric: bool = False) -> dict[str, Any]:
+def role_table_columns(
+    profile_type: str = "18233",
+    fabric: bool = False,
+    tsd: bool = False,
+) -> dict[str, Any]:
     from app.services.column_layout import site_columns
 
-    return {"roles": site_columns(profile_type, fabric), "fabric": fabric}
+    return {"roles": site_columns(profile_type, fabric, tsd=tsd), "fabric": fabric, "tsd": tsd}
 
 
 @router.post("/columns/attach")
