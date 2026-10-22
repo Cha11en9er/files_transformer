@@ -99,7 +99,8 @@ def _qty(item: dict[str, Any]) -> Any:
 def _unit(item: dict[str, Any]) -> str:
     commercial = item.get("commercial_data") or {}
     packing = item.get("packing_data") or {}
-    return str(commercial.get("unit") or packing.get("unit") or "ШТ")
+    # Единицу не выдумывать: пустая клетка лучше ложного «ШТ».
+    return str(commercial.get("unit") or packing.get("unit") or "")
 
 
 def _packages(item: dict[str, Any]) -> Any:
@@ -372,7 +373,7 @@ def _write_spec_letterhead(ws, header: dict[str, Any], cols: int) -> None:
 def invoice_headers(ccy: str) -> list[str]:
     return [
         bilingual("No.", "№"),
-        "CODE / Код ТН ВЭД",
+        "Customs code / Таможенный код",
         "DESCRIPTION / Описание",
         "COUNTRY OF ORIGIN / Страна происхождения",
         "MODEL / SERIES / ART. / Модель, серия, арт.",
@@ -389,7 +390,7 @@ def invoice_headers(ccy: str) -> list[str]:
 def packing_headers() -> list[str]:
     return [
         bilingual("No.", "№"),
-        "CODE / Код ТН ВЭД",
+        "Customs code / Таможенный код",
         "DESCRIPTION / Описание",
         "MANUFACTURER / Производитель",
         "MODEL / SERIES / ART. / Модель, серия, арт.",

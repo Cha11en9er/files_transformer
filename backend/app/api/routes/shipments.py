@@ -70,7 +70,6 @@ from app.services.prepare_site import (
 )
 from app.services.scan_reconcile import compute_excel_totals
 from app.services.export import build_export_preview, export_18233, export_beijing
-from app.services.export_18233_templates import export_18233_from_templates
 from app.services.export_style import resolve_shipment_title, safe_export_stem
 from app.services.materials_18233 import kit_sources, materials_available
 from app.services.profile_18233 import parse_bundle, reconcile_18233
@@ -1373,31 +1372,15 @@ def export_workspace(payload: ExportRequest) -> Response:
         if payload.profile_type == ProfileType.BEIJING:
             paths = [export_beijing(items, out_dir / f"{safe_title} для ЭД.xlsx", header, column_layout=layout)]
         else:
-            if materials_available():
-                try:
-                    paths = export_18233_from_templates(
-                        items,
-                        out_dir,
-                        header=header,
-                        shipment_title=safe_title,
-                        column_layout=layout,
-                    )
-                except Exception:
-                    paths = export_18233(
-                        items,
-                        out_dir,
-                        header=header,
-                        shipment_title=safe_title,
-                        column_layout=layout,
-                    )
-            else:
-                paths = export_18233(
-                    items,
-                    out_dir,
-                    header=header,
-                    shipment_title=safe_title,
-                    column_layout=layout,
-                )
+            # Код пишет те же столбцы, что превью. Эталон-шаблоны оставляем запасным путём:
+            # в них нет части колонок (цвет, единица, объём), из-за этого zip расходился с UI.
+            paths = export_18233(
+                items,
+                out_dir,
+                header=header,
+                shipment_title=safe_title,
+                column_layout=layout,
+            )
         zip_buf = BytesIO()
         with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for path in paths:
