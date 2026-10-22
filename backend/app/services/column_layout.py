@@ -278,9 +278,31 @@ BEIJING_SPEC_KEYS = [
 ]
 BEIJING_DESC_KEYS = ["article", "description", "manufacturer", "country", "brand", "size"]
 
-ELEMENT_INVOICE_KEYS = ["no", "article", "hs_code", "packages", "qty", "unit", "price", "amount"]
+ELEMENT_INVOICE_KEYS = [
+    "no",
+    "article",
+    "hs_code",
+    "packages",
+    "qty",
+    "unit",
+    "price",
+    "amount",
+    "color",
+    "brand",
+    "size",
+]
 FABRIC_INVOICE_KEYS = ["no", "article", "hs_code", "packages", "width", "area", "qty", "unit", "price", "amount"]
-ELEMENT_PACKING_KEYS = ["no", "article", "packages", "qty", "unit", "net_weight", "gross_weight"]
+ELEMENT_PACKING_KEYS = [
+    "no",
+    "article",
+    "packages",
+    "qty",
+    "unit",
+    "net_weight",
+    "gross_weight",
+    "volume",
+    "package_type",
+]
 FABRIC_PACKING_KEYS = ["no", "article", "gsm", "packages", "qty", "net_weight", "gross_weight", "area"]
 ELEMENT_SPEC_KEYS = [
     "no",
@@ -325,12 +347,13 @@ def site_columns(profile: str, fabric: bool) -> dict[str, list[dict[str, str]]]:
     if beijing:
         return {
             "invoice": [
-                _col("article", bilingual("Art No.", "Артикул"), "text"),
-                _col("description", bilingual("Description", "Наименование"), "text"),
-                _col("hs_code", bilingual("Customs Code", "Таможенный код"), "code"),
+                _col("article", bilingual("MODEL / SERIES / ART.", "Модель, серия, арт."), "text"),
+                _col("description", bilingual("Description", "Описание"), "text"),
+                _col("hs_code", bilingual("Customs code", "Таможенный код"), "code"),
+                _col("country", bilingual("Country of origin", "Страна происхождения"), "text"),
                 _col("color", bilingual("Color", "Цвет"), "text"),
-                _col("qty", bilingual("Quantity", "Количество"), "num"),
-                _col("unit", bilingual("Unit", "Ед. изм."), "text"),
+                _col("qty", bilingual("QTY", "Кол-во"), "num"),
+                _col("unit", bilingual("pcs, pcg, set", "шт, уп, компл"), "text"),
                 _col("packages", bilingual("Packages", "Места"), "num"),
                 _col("price", bilingual("Price", "Цена"), "money"),
                 _col("amount", bilingual("Amount", "Сумма"), "money"),
@@ -339,25 +362,26 @@ def site_columns(profile: str, fabric: bool) -> dict[str, list[dict[str, str]]]:
                 _col("hs_alt", bilingual("Customs code 2", "Второй код"), "code"),
             ],
             "packing": [
-                _col("article", bilingual("Art No.", "Артикул"), "text"),
-                _col("description", bilingual("Description", "Наименование"), "text"),
+                _col("article", bilingual("MODEL / SERIES / ART.", "Модель, серия, арт."), "text"),
+                _col("description", bilingual("Description", "Описание"), "text"),
+                _col("country", bilingual("Country of origin", "Страна происхождения"), "text"),
                 _col("color", bilingual("Color", "Цвет"), "text"),
-                _col("qty", bilingual("Quantity", "Количество"), "num"),
-                _col("unit", bilingual("Unit", "Ед. изм."), "text"),
+                _col("qty", bilingual("QTY", "Кол-во"), "num"),
+                _col("unit", bilingual("pcs, pcg, set", "шт, уп, компл"), "text"),
                 _col("measurement", bilingual("Measurement", "Габарит"), "text"),
                 _col("gross_weight", bilingual("Gross Wt.", "Брутто"), "num"),
                 _col("net_weight", bilingual("Net Wt.", "Нетто"), "num"),
-                _col("packages", bilingual("Cartons", "Коробки"), "num"),
+                _col("packages", bilingual("PACKAGE", "Места"), "num"),
                 _col("volume", bilingual("Volume", "Объём"), "num"),
                 _col("pcs_per_carton", bilingual("Unit per carton", "Шт. в коробке"), "num"),
             ],
             "specification": [
-                _col("article", bilingual("Art.", "Артикул"), "text"),
+                _col("article", bilingual("MODEL / SERIES / ART.", "Модель, серия, арт."), "text"),
                 _col("description", bilingual("Description", "Наименование"), "text"),
                 _col("packages", bilingual("Packages", "Места"), "num"),
                 _col("package_type", bilingual("Package", "Вид упаковки"), "text"),
-                _col("qty", bilingual("Quantity", "Количество"), "num"),
-                _col("unit", bilingual("Unit", "Ед. изм."), "text"),
+                _col("qty", bilingual("QTY", "Кол-во"), "num"),
+                _col("unit", bilingual("pcs, pcg, set", "шт, уп, компл"), "text"),
                 _col("net_weight", bilingual("Net weight", "Нетто"), "num"),
                 _col("gross_weight", bilingual("Gross weight", "Брутто"), "num"),
                 _col("price", bilingual("Price", "Цена"), "money"),
@@ -365,7 +389,7 @@ def site_columns(profile: str, fabric: bool) -> dict[str, list[dict[str, str]]]:
                 _col("hs_code", bilingual("Customs code", "Таможенный код"), "code"),
                 _col("brand", bilingual("Brand", "Торговая марка"), "text"),
                 _col("manufacturer", bilingual("Manufacturer", "Производитель"), "text"),
-                _col("country", bilingual("Country", "Страна"), "text"),
+                _col("country", bilingual("Country of origin", "Страна происхождения"), "text"),
                 _col("color", bilingual("Color", "Цвет"), "text"),
                 _col("size", bilingual("Size", "Размер"), "text"),
             ],
@@ -374,12 +398,12 @@ def site_columns(profile: str, fabric: bool) -> dict[str, list[dict[str, str]]]:
         return {
             "invoice": [
                 _col("article", bilingual("Design", "Дизайн"), "text"),
-                _col("hs_code", bilingual("H.S. Code", "Код ТН ВЭД"), "code"),
+                _col("hs_code", bilingual("Customs code", "Таможенный код"), "code"),
                 _col("packages", bilingual("Rolls", "Рулоны"), "num"),
                 _col("width", bilingual("Width", "Ширина"), "num"),
                 _col("area", bilingual("Total m²", "Кол-во кв.м"), "num"),
                 _col("qty", bilingual("Meters", "Метры"), "num"),
-                _col("unit", bilingual("Unit", "Ед. изм."), "text"),
+                _col("unit", bilingual("Unit MT/Piece", "Ед. изм."), "text"),
                 _col("price", bilingual("Unit Price", "Цена"), "money"),
                 _col("amount", bilingual("Amount", "Сумма"), "money"),
             ],
@@ -396,8 +420,8 @@ def site_columns(profile: str, fabric: bool) -> dict[str, list[dict[str, str]]]:
                 _col("article", bilingual("Art.", "Артикул"), "text"),
                 _col("description", bilingual("Product name", "Наименование товара"), "text"),
                 _col("packages", bilingual("Q-Ty Rolls", "Кол-во рулонов"), "num"),
-                _col("hs_code", bilingual("HS code", "Код гармонизированной системы"), "code"),
-                _col("hs_alt", bilingual("Customs code", "Таможенный код"), "code"),
+                _col("hs_code", bilingual("Customs code", "Таможенный код"), "code"),
+                _col("hs_alt", bilingual("Customs code 2", "Второй таможенный код"), "code"),
                 _col("qty", bilingual("Q-ty meters", "Кол-во погонных метров"), "num"),
                 _col("width", bilingual("Width, m", "Ширина, м"), "num"),
                 _col("area", bilingual("Q-ty m2", "Кол-во кв.м"), "num"),
@@ -410,9 +434,9 @@ def site_columns(profile: str, fabric: bool) -> dict[str, list[dict[str, str]]]:
     return {
         "invoice": [
             _col("article", bilingual("Design", "Дизайн"), "text"),
-            _col("hs_code", bilingual("H.S. Code", "Код ТН ВЭД"), "code"),
+            _col("hs_code", bilingual("Customs code", "Таможенный код"), "code"),
             _col("packages", bilingual("Packages", "Места"), "num"),
-            _col("qty", bilingual("Quantity", "Количество"), "num"),
+            _col("qty", bilingual("Quantity (units)", "Кол-во единиц"), "num"),
             _col("unit", bilingual("Unit", "Ед. изм."), "text"),
             _col("price", bilingual("Unit Price", "Цена"), "money"),
             _col("amount", bilingual("Amount", "Сумма"), "money"),
@@ -423,7 +447,7 @@ def site_columns(profile: str, fabric: bool) -> dict[str, list[dict[str, str]]]:
         "packing": [
             _col("article", bilingual("Design", "Дизайн"), "text"),
             _col("packages", bilingual("Packages", "Места"), "num"),
-            _col("qty", bilingual("Quantity", "Количество"), "num"),
+            _col("qty", bilingual("Quantity (units)", "Кол-во единиц"), "num"),
             _col("unit", bilingual("Unit", "Ед. изм."), "text"),
             _col("net_weight", bilingual("Net weight", "Нетто"), "num"),
             _col("gross_weight", bilingual("Gross weight", "Брутто"), "num"),
@@ -434,8 +458,8 @@ def site_columns(profile: str, fabric: bool) -> dict[str, list[dict[str, str]]]:
             _col("article", bilingual("Art.", "Артикул"), "text"),
             _col("description", bilingual("Product name", "Наименование товара"), "text"),
             _col("packages", bilingual("Q-Ty packages", "Кол-во упаковок"), "num"),
-            _col("hs_code", bilingual("HS code", "Код гармонизированной системы"), "code"),
-            _col("hs_alt", bilingual("Customs code", "Таможенный код"), "code"),
+            _col("hs_code", bilingual("Customs code", "Таможенный код"), "code"),
+            _col("hs_alt", bilingual("Customs code 2", "Второй таможенный код"), "code"),
             _col("qty", bilingual("Q-ty units", "Кол-во единиц"), "num"),
             _col("unit", bilingual("Unit", "Ед. изм."), "text"),
             _col("area", bilingual("Q-ty m2", "Кол-во кв.м"), "num"),

@@ -42,7 +42,10 @@ class BilingualTest(unittest.TestCase):
         self.assertIn("/", site["invoice"][0]["title"])
         self.assertIn("Дизайн", site["invoice"][0]["title"])
         beijing = site_columns("BEIJING", False)
-        self.assertIn("Артикул", beijing["invoice"][0]["title"])
+        self.assertIn("Модель", beijing["invoice"][0]["title"])
+        self.assertTrue(any(col["key"] == "country" for col in beijing["invoice"]))
+        self.assertTrue(any("шт, уп, компл" in col["title"] for col in beijing["invoice"]))
+        self.assertTrue(any("Таможенный" in col["title"] for col in site_columns("18233", False)["invoice"]))
 
 
 class AttachColumnTest(unittest.TestCase):

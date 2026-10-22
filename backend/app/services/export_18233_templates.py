@@ -54,7 +54,7 @@ def fabric_invoice_headers(ccy: str = "CNY") -> list[str]:
     return [
         bilingual("No.", "№"),
         bilingual("Design", "Дизайн"),
-        bilingual("H.S. Code", "Код ТН ВЭД"),
+        bilingual("Customs code", "Таможенный код"),
         bilingual("Rolls", "Рулоны"),
         bilingual("Width, m", "Ширина, м"),
         bilingual("Total m²", "Кол-во кв.м"),
@@ -70,12 +70,15 @@ def element_invoice_headers(ccy: str = "CNY") -> list[str]:
     return [
         bilingual("No.", "№"),
         bilingual("Design", "Дизайн"),
-        bilingual("H.S. Code", "Код ТН ВЭД"),
+        bilingual("Customs code", "Таможенный код"),
         bilingual("Packages", "Места"),
-        bilingual("Quantity", "Количество"),
-        bilingual("Unit M/Pc", "Ед. изм."),
+        bilingual("Quantity (units)", "Кол-во единиц"),
+        bilingual("Unit", "Ед. изм."),
         price,
         amount,
+        bilingual("Color", "Цвет"),
+        bilingual("Brand", "Торговая марка"),
+        bilingual("Size", "Размер"),
     ]
 
 
@@ -96,21 +99,24 @@ ELEMENT_PACKING_HEADERS = [
     bilingual("No.", "№"),
     bilingual("Design", "Дизайн"),
     bilingual("Packages", "Места"),
-    bilingual("Quantity", "Количество"),
+    bilingual("Quantity (units)", "Кол-во единиц"),
     bilingual("Unit", "Ед. изм."),
     bilingual("Net weight, kg", "Вес нетто, кг"),
     bilingual("Gross weight, kg", "Вес брутто, кг"),
+    bilingual("Volume", "Объём"),
+    bilingual("Package", "Вид упаковки"),
 ]
 def fabric_spec_headers(ccy: str = "CNY") -> list[str]:
     word = export_currency_word_ru(ccy)
     # Packages/rolls after description - easier to check art + name, then places.
+    # Один таможенный код: отдельный столбец HS / гармонизированной системы не дублируем.
     return [
         "№",
         "Art./Артикул",
         "Product name / Наименование товара",
         "Q-Ty Rolls / Кол-во рулонов",
-        "HS code / Код гармонизированной системы",
         "Customs code / Таможенный код",
+        "Customs code 2 / Второй таможенный код",
         "Q-ty meters / Кол-во погонных метров",
         "Widht, m / Ширина, м",
         "Q-ty m2 / Кол-во кв.м",
@@ -128,8 +134,8 @@ def element_spec_headers(ccy: str = "CNY") -> list[str]:
         "Art./Артикул",
         "Product name / Наименование товара",
         "Q-Ty PACKAGES / Кол-во упаковок",
-        "HS code / Код гармонизированной системы",
         "Customs code / Таможенный код",
+        "Customs code 2 / Второй таможенный код",
         "Q-ty UNITS / Кол-во единиц",
         "Unit/Единица измерения",
         "Q-ty m2 / Кол-во кв.м",
@@ -374,12 +380,14 @@ def _collect_packing_groups(products: list[dict[str, Any]], fabric: bool) -> lis
                 "gm": packing.get("gm"),
                 "rolls": packing.get("rolls") or packing.get("boxes"),
                 "rolls_continued": packing.get("rolls_continued"),
-                "meters": packing.get("meters") if packing.get("meters") is not None else commercial.get("qty"),
-                "qty": commercial.get("qty") if commercial.get("qty") is not None else packing.get("meters"),
+                "meters": packing.get("meters") if packing.get("meters") is not None else (commercial.get("qty") if fabric else None),
+                "qty": commercial.get("qty") if commercial.get("qty") is not None else (packing.get("meters") if fabric else None),
                 "unit": commercial.get("unit") or packing.get("unit"),
                 "net_weight": packing.get("net_weight"),
                 "gross_weight": packing.get("gross_weight"),
                 "area": packing.get("area"),
+                "volume": packing.get("volume"),
+                "package_type": packing.get("package_type") or packing.get("package"),
             }
         )
     return groups
@@ -442,7 +450,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                         _as_float(width) if width is not None else None,
                         area,
                         meters,
-                        unit or "meters",
+                        unit or "",
                         None if is_family else item_price,
                         None if is_family else amount,
                     ]
@@ -458,6 +466,9 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                         unit or "",
                         _as_float(price),
                         amount,
+                        commercial.get("color") or "",
+                        customs.get("brand") or "",
+                        commercial.get("size") or "",
                     ]
                 )
             if not packing.get("rolls_continued"):
@@ -484,7 +495,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                     _as_float(width) if width is not None else None,
                     _r3(group_area),
                     _r2(group_meters),
-                    unit or "meters",
+                    unit or "",
                     _as_float(price),
                     group_amount,
                 ]
@@ -500,6 +511,9 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                     unit or "",
                     None,
                     group_amount,
+                    None,
+                    None,
+                    None,
                 ]
             )
     total_rolls = _count(
@@ -524,7 +538,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
     if fabric:
         rows.append([None, "TOTAL:", None, total_rolls, None, total_area, total_meters, None, None, total_amount])
     else:
-        rows.append([None, "TOTAL:", None, total_rolls, total_qty, None, None, total_amount])
+        rows.append([None, "TOTAL:", None, total_rolls, total_qty, None, None, total_amount, None, None, None])
     return rows
 
 
@@ -533,8 +547,9 @@ def packing_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
     sums = {"rolls": 0.0, "meters": 0.0, "qty": 0.0, "nw": 0.0, "gw": 0.0, "area": 0.0}
     for idx, pl in enumerate(_collect_packing_groups(products, fabric), start=1):
         rolls = _count(pl.get("rolls"))
-        meters = _r2(pl.get("meters") if pl.get("meters") is not None else pl.get("qty"))
-        qty = _count(pl.get("qty") if pl.get("qty") is not None else meters)
+        # Ткани: метры. Штучные: единицы товара. Места (rolls) сюда не подставлять.
+        meters = _r2(pl.get("meters"))
+        qty = _count(pl.get("qty")) if pl.get("qty") is not None else (_count(meters) if fabric else None)
         nw = _r2(pl.get("net_weight"))
         gw = _r2(pl.get("gross_weight"))
         area = _r3(pl.get("area"))
@@ -542,7 +557,19 @@ def packing_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
         if fabric:
             rows.append([int(idx), design, _as_float(pl.get("gm")), rolls, meters, nw, gw, area])
         else:
-            rows.append([int(idx), design, rolls, qty, pl.get("unit") or "", nw, gw])
+            rows.append(
+                [
+                    int(idx),
+                    design,
+                    rolls,
+                    qty,
+                    pl.get("unit") or "",
+                    nw,
+                    gw,
+                    _as_float(pl.get("volume")),
+                    pl.get("package_type") or "",
+                ]
+            )
         if not pl.get("rolls_continued"):
             sums["rolls"] += float(rolls or 0)
         sums["meters"] += float(meters or 0)
@@ -553,7 +580,9 @@ def packing_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
     if fabric:
         rows.append(["TOTAL", None, None, _count(sums["rolls"]), _r2(sums["meters"]), _r2(sums["nw"]), _r2(sums["gw"]), _r3(sums["area"])])
     else:
-        rows.append(["TOTAL", None, _count(sums["rolls"]), _count(sums["qty"]), None, _r2(sums["nw"]), _r2(sums["gw"])])
+        rows.append(
+            ["TOTAL", None, _count(sums["rolls"]), _count(sums["qty"]), None, _r2(sums["nw"]), _r2(sums["gw"]), None, None]
+        )
     return rows
 
 
@@ -573,8 +602,14 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
         gw = _r2(packing.get("gross_weight"))
         price = _as_float(commercial.get("price"))
         amount = _r2(commercial.get("amount"))
-        hs = customs.get("hs_code") or ""
-        tnved = customs.get("tnved_code") or hs
+        # Основной таможенный код и второй, только если цифры другие. Столбец HS не дублируем.
+        primary = str(customs.get("hs_code") or "").strip()
+        alt = str(customs.get("tnved_code") or "").strip()
+        if alt and primary and re.sub(r"\D", "", alt) == re.sub(r"\D", "", primary):
+            alt = ""
+        if not primary:
+            primary = alt
+            alt = ""
         if fabric:
             rows.append(
                 [
@@ -582,8 +617,8 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
                     article_with_color(item.get("article"), commercial.get("color")),
                     _product_description(item),
                     rolls,
-                    hs,
-                    tnved,
+                    primary,
+                    alt,
                     meters,
                     width,
                     area,
@@ -600,8 +635,8 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
                     article_with_color(item.get("article"), commercial.get("color")),
                     _product_description(item),
                     rolls,
-                    hs,
-                    tnved,
+                    primary,
+                    alt,
                     qty,
                     commercial.get("unit") or packing.get("unit") or "",
                     area,
@@ -1136,7 +1171,7 @@ def fill_invoice_template(
     field_order = (
         ["no", "design", "hs_code", "rolls", "width", "area", "meters", "unit", "price", "amount"]
         if fabric
-        else ["no", "design", "hs_code", "rolls", "qty", "unit", "price", "amount"]
+        else ["no", "design", "hs_code", "rolls", "qty", "unit", "price", "amount", "color", "brand", "size"]
     )
     for offset, row in enumerate(rows):
         values = {field: row[idx] for idx, field in enumerate(field_order) if idx < len(row)}
@@ -1175,7 +1210,7 @@ def fill_packing_template(
     field_order = (
         ["no", "design", "gm", "rolls", "meters", "net_weight", "gross_weight", "area"]
         if fabric
-        else ["no", "design", "rolls", "qty", "unit", "net_weight", "gross_weight"]
+        else ["no", "design", "rolls", "qty", "unit", "net_weight", "gross_weight", "volume", "package_type"]
     )
     for offset, row in enumerate(rows):
         values = {field: row[idx] for idx, field in enumerate(field_order) if idx < len(row)}
