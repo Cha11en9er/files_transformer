@@ -68,13 +68,24 @@ def _write_sheet(ws, headers: list[str], rows: list[list[Any]]) -> None:
 
 
 def _product_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    products = [
-        item
-        for item in items
-        if (item.get("source_traces") or {}).get("invoice")
-        or (item.get("source_traces") or {}).get("specification")
-        or item.get("article")
-    ]
+    """Строки товара для выгрузки. Пустой артикул не повод выкинуть лот с qty/кодом/описанием."""
+
+    def _is_goods(item: dict[str, Any]) -> bool:
+        traces = item.get("source_traces") or {}
+        if traces.get("invoice") or traces.get("specification") or traces.get("packing"):
+            return True
+        if item.get("article") or item.get("model"):
+            return True
+        commercial = item.get("commercial_data") or {}
+        packing = item.get("packing_data") or {}
+        customs = item.get("customs_data") or {}
+        if commercial.get("qty") not in (None, "") or packing.get("meters") not in (None, ""):
+            return True
+        if customs.get("hs_code") or customs.get("tnved_code") or customs.get("description") or customs.get("description_ru"):
+            return True
+        return False
+
+    products = [item for item in items if _is_goods(item)]
     if not products:
         products = list(items)
 
