@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT))
 from app.services.bilingual import already_bilingual, bilingual, bilingual_title, label
 from app.services.column_layout import apply_sheet_layout, attach_column, site_columns
 from app.services.export_beijing import invoice_headers
-from app.services.export_tsd import _DT_UNNAMED, dt_headers, invoice_headers as tsd_invoice_headers
+from app.services.export_tsd import dt_headers, dt_table, invoice_headers as tsd_invoice_headers
 
 
 class BilingualTest(unittest.TestCase):
@@ -35,8 +35,9 @@ class BilingualTest(unittest.TestCase):
         self.assertTrue(already_bilingual(label("invoice_no", colon=True)))
         blob = " ".join(dt_headers())
         self.assertIn("Код ТН ВЭД", blob)
-        self.assertIn("HS Code", blob)
-        self.assertEqual(dt_headers().count(_DT_UNNAMED), 3)
+        self.assertIn("цена со скидкой", blob)
+        self.assertNotIn("HS Code", blob)
+        self.assertTrue(all(title.strip() for title in dt_headers()))
         self.assertIn("/", tsd_invoice_headers("USD")[0])
         site = site_columns("18233", True)
         self.assertIn("/", site["invoice"][0]["title"])
@@ -58,6 +59,31 @@ class BilingualTest(unittest.TestCase):
         next_h, next_k, next_r = prune_empty_columns(headers, keys, rows)
         self.assertEqual(next_k, ["no", "article", "amount"])
         self.assertEqual(next_r[0], [1, "A", 10])
+
+    def test_dt_table_keeps_discount_and_drops_empty(self):
+        items = [
+            {
+                "article": "AE-1",
+                "commercial_data": {"qty": 10, "unit": "ШТ", "price": 1.2, "amount": 12},
+                "packing_data": {"boxes": 2, "net_weight": 5, "gross_weight": 6},
+                "customs_data": {"hs_code": "8539520009", "country": "CN", "description": "LED"},
+            },
+            {
+                "article": "AE-2",
+                "commercial_data": {"qty": 5, "unit": "ШТ", "price": 2, "amount": 10},
+                "packing_data": {"boxes": 1, "net_weight": 2, "gross_weight": 3},
+                "customs_data": {"hs_code": "8539520009", "country": "CN", "description": "LED"},
+            },
+        ]
+        headers, rows = dt_table(items, {"invoice_no": "OI-451", "currency": "USD"})
+        self.assertIn("Код ТН ВЭД", headers)
+        self.assertIn("цена со скидкой", headers)
+        self.assertNotIn("", headers)
+        # пустые ИТС / декларация не должны остаться
+        self.assertNotIn("ИТС по запросу", headers)
+        self.assertNotIn("Декларация соответствия", headers)
+        disc_idx = headers.index("цена со скидкой")
+        self.assertTrue(all(row[disc_idx] in (None, "") for row in rows[:-1]))
 
 
 class AttachColumnTest(unittest.TestCase):
