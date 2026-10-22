@@ -266,10 +266,15 @@ def _layout_kit(kit: str | None, items: list[dict[str, Any]], header: dict[str, 
 
 
 def is_fabric_layout(layout: str | None, items: list[dict[str, Any]] | None = None) -> bool:
+    """Тканевые столбцы только когда в лотах реально есть метры и ширина.
+
+    Иначе element/ТСД (гайки, светильники, Bestway): не подставлять рулоны/м²/цену за метр
+    только из-за номера комплекта 626-1 в инвойсе.
+    """
     shaped = _goods_use_fabric_columns(items)
     if shaped is not None:
         return shaped
-    return (layout or "626-1") != "18312"
+    return False
 
 
 def _ordered_products(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

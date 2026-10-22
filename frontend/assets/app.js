@@ -1874,6 +1874,35 @@ function isFabricItems(items) {
   return hits.length >= Math.max(1, rows.length * 0.4);
 }
 
+function isTsdItems(items) {
+  const rows = (items || []).filter((item) => item?.article && item.article !== "-");
+  if (rows.length < 2) return false;
+  const n = rows.length;
+  let hs = 0;
+  let mfr = 0;
+  let country = 0;
+  let color = 0;
+  let volume = 0;
+  let fabric = 0;
+  rows.forEach((item) => {
+    const customs = item.customs_data || {};
+    const commercial = item.commercial_data || {};
+    const packing = item.packing_data || {};
+    if (customs.tnved_code || customs.hs_code) hs += 1;
+    if (customs.manufacturer) mfr += 1;
+    if (customs.country) country += 1;
+    if (commercial.color) color += 1;
+    if (packing.volume != null && packing.volume !== "") volume += 1;
+    if ((packing.meters != null && packing.meters !== "") || (packing.width != null && packing.width !== "")) {
+      fabric += 1;
+    }
+  });
+  if (fabric >= Math.max(2, Math.floor(n * 0.3))) return false;
+  if (color > n * 0.25 || volume > n * 0.25) return false;
+  if (hs < n * 0.6) return false;
+  return mfr >= n * 0.4 || country >= n * 0.4;
+}
+
 function itemField(item, key) {
   const commercial = item?.commercial_data || {};
   const packing = item?.packing_data || {};
@@ -2004,11 +2033,12 @@ function cellClassFor(col, errs) {
 async function ensureRoleColumns() {
   const ws = state.workspace;
   if (!ws) return;
-  const fabric = isFabricItems(ws.items || []);
-  const key = `${ws.profile_type}:${fabric}`;
+  const tsd = isTsdItems(ws.items || []);
+  const fabric = !tsd && isFabricItems(ws.items || []);
+  const key = `${ws.profile_type}:${fabric}:${tsd}`;
   if (state.roleColumnsKey === key && state.roleColumns) return;
   const data = await api(
-    `/api/v1/shipments/columns?profile_type=${encodeURIComponent(ws.profile_type)}&fabric=${fabric ? "true" : "false"}`
+    `/api/v1/shipments/columns?profile_type=${encodeURIComponent(ws.profile_type)}&fabric=${fabric ? "true" : "false"}&tsd=${tsd ? "true" : "false"}`
   );
   state.roleColumns = data.roles;
   state.roleColumnsKey = key;

@@ -189,11 +189,17 @@ def build_export_preview(
             ],
         }
 
+    stem = safe_export_stem(shipment_title)
+    # Штучный ТСД (CODE/COUNTRY/QTY/pcs) даже в профиле 18233 — книга ТСД, не тканевые столбцы.
+    if is_tsd_layout(products):
+        return {
+            "profile_type": "18233",
+            "files": [tsd_preview(products, header, f"ТСД {stem}.xlsx", column_layout)],
+        }
     kit = _kit_label(products, header)
     layout = _layout_kit(kit, products, header)
     fabric = is_fabric_layout(layout, products)
     suffix = f" {kit}" if kit else ""
-    stem = safe_export_stem(shipment_title)
     inv_h, inv_r = _aligned_invoice_rows(products, fabric, header, column_layout)
     pl_h, pl_r = _aligned_packing_rows(products, fabric, header, column_layout)
     spec_h, spec_r = _aligned_spec_rows(products, fabric, header, column_layout)
@@ -424,11 +430,13 @@ def export_18233(
     output_dir.mkdir(parents=True, exist_ok=True)
     products = _product_items(items)
     header = prepare_export_header(products, header)
+    stem = safe_export_stem(shipment_title)
+    if is_tsd_layout(products):
+        return [export_tsd_book(products, output_dir / f"ТСД {stem}.xlsx", header, column_layout=column_layout)]
     kit = _kit_label(products, header)
     layout = _layout_kit(kit, products, header)
     fabric = is_fabric_layout(layout, products)
     suffix = f" {kit}" if kit else ""
-    stem = safe_export_stem(shipment_title)
     writers = {
         "invoice": lambda: _aligned_invoice_rows(products, fabric, header, column_layout),
         "packing": lambda: _aligned_packing_rows(products, fabric, header, column_layout),

@@ -40,14 +40,21 @@ NUM_FMT_INT = "0"
 
 
 def is_tsd_layout(items: list[dict[str, Any]]) -> bool:
+    """Штучный бланк ТСД: CODE + страна/шт, без метров ткани и без Goldluck-цвета/объёма.
+
+    Примеры: Bestway, шары, матрасы, гайки Necargo, светильники. Не Hangzhou-ткань
+    (метры+ширина) и не Beijing Goldluck (цвет+CBM на строке).
+    """
     products = [item for item in items if item.get("article")]
     if len(products) < 2:
         return False
     n = len(products)
     hs = 0
     mfr = 0
+    country = 0
     color = 0
     volume = 0
+    fabric = 0
     for item in products:
         customs = item.get("customs_data") or {}
         commercial = item.get("commercial_data") or {}
@@ -56,11 +63,22 @@ def is_tsd_layout(items: list[dict[str, Any]]) -> bool:
             hs += 1
         if customs.get("manufacturer"):
             mfr += 1
+        if customs.get("country"):
+            country += 1
         if commercial.get("color"):
             color += 1
         if packing.get("volume") not in (None, ""):
             volume += 1
-    return hs >= n * 0.6 and mfr >= n * 0.4 and color <= n * 0.25 and volume <= n * 0.25
+        if packing.get("meters") not in (None, "") or packing.get("width") not in (None, ""):
+            fabric += 1
+    if fabric >= max(2, int(n * 0.3)):
+        return False
+    if color > n * 0.25 or volume > n * 0.25:
+        return False
+    if hs < n * 0.6:
+        return False
+    # Завод на строке или страна на строке — достаточно, чтобы не уйти в тканевые столбцы.
+    return mfr >= n * 0.4 or country >= n * 0.4
 
 
 def _sum_present(body: list[list[Any]], index: int) -> float | None:
