@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from app.parsing.normalize import normalize_article
 from app.services.bilingual import bilingual, bilingual_title
+from app.services.export_style import is_total_label
 from app.services.field_map import parse_number
 
 
@@ -201,12 +202,7 @@ def _row_item(row: list[Any], items: list[dict[str, Any]]) -> dict[str, Any] | N
 def _is_total_row(row: list[Any]) -> bool:
     if not row:
         return False
-    text = str(row[0] or "").strip().upper().replace(":", "")
-    if text in {"TOTAL", "ИТОГО", "ИТОГ", "SUM"}:
-        return True
-    if len(row) > 1 and str(row[1] or "").strip().upper().startswith("TOTAL"):
-        return True
-    return False
+    return any(is_total_label(cell) for cell in row[:2])
 
 
 def prune_empty_columns(
@@ -337,8 +333,23 @@ ELEMENT_INVOICE_KEYS = [
     "color",
     "brand",
     "size",
+    "discount",
+    "price_discounted",
 ]
-FABRIC_INVOICE_KEYS = ["no", "article", "hs_code", "packages", "width", "area", "qty", "unit", "price", "amount"]
+FABRIC_INVOICE_KEYS = [
+    "no",
+    "article",
+    "hs_code",
+    "packages",
+    "width",
+    "area",
+    "qty",
+    "unit",
+    "price",
+    "amount",
+    "discount",
+    "price_discounted",
+]
 ELEMENT_PACKING_KEYS = [
     "no",
     "article",
@@ -370,6 +381,8 @@ ELEMENT_SPEC_KEYS = [
     "country",
     "color",
     "size",
+    "discount",
+    "price_discounted",
 ]
 FABRIC_SPEC_KEYS = [
     "no",
@@ -385,6 +398,8 @@ FABRIC_SPEC_KEYS = [
     "gross_weight",
     "price",
     "amount",
+    "discount",
+    "price_discounted",
 ]
 
 

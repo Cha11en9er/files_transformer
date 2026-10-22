@@ -117,6 +117,26 @@ def _take(line, others, used):
             return [chosen]
         group = _unique_subset(same, others, line.pieces, line.price)
         if group:
+            if len(group) > 1 and all(
+                others[index].price is None and not (others[index].model or "").strip()
+                for index in group
+            ):
+                # Рулоны одного артикула без своей цены остаются одним лотом.
+                head = others[group[0]]
+                head.pieces = sum(others[index].pieces or 0 for index in group)
+                packs = [others[index].packages for index in group if others[index].packages]
+                if packs:
+                    head.packages = sum(packs)
+                nets = [others[index].net for index in group if others[index].net is not None]
+                grosses = [others[index].gross for index in group if others[index].gross is not None]
+                if nets:
+                    head.net = sum(nets)
+                if grosses:
+                    head.gross = sum(grosses)
+                for index in group[1:]:
+                    used.add(index)
+                used.add(group[0])
+                return [group[0]]
             used.update(group)
             return group
     family = _family_group(line, others, used)

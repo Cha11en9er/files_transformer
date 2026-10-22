@@ -13,6 +13,7 @@ from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
 from app.services.bilingual import bilingual, bilingual_title, rewrite_sheet_labels
+from app.services.export_style import TOTAL_LABEL, is_total_label
 from app.parsing.header_extract import (
     currency_from_sources,
     export_currency_label,
@@ -62,6 +63,8 @@ def fabric_invoice_headers(ccy: str = "CNY") -> list[str]:
         bilingual("Unit MT/Piece", "Ед. изм."),
         price,
         amount,
+        bilingual("Discount", "Скидка"),
+        bilingual("Price with discount", "Цена со скидкой"),
     ]
 
 
@@ -79,6 +82,8 @@ def element_invoice_headers(ccy: str = "CNY") -> list[str]:
         bilingual("Color", "Цвет"),
         bilingual("Brand", "Торговая марка"),
         bilingual("Size", "Размер"),
+        bilingual("Discount", "Скидка"),
+        bilingual("Price with discount", "Цена со скидкой"),
     ]
 
 
@@ -124,6 +129,8 @@ def fabric_spec_headers(ccy: str = "CNY") -> list[str]:
         "G.W, kg / Вес Брутто, кг",
         f"Price per 1 meter / Цена за 1 пог.метр, {word}",
         f"Total price / Цена, {word}",
+        "Discount / Скидка",
+        "Price with discount / Цена со скидкой",
     ]
 
 
@@ -148,11 +155,45 @@ def element_spec_headers(ccy: str = "CNY") -> list[str]:
         "Country of origin / Страна происхождения",
         "Color / Цвет",
         "Size / Размер",
+        "Discount / Скидка",
+        "Price with discount / Цена со скидкой",
     ]
 
 
 FABRIC_SPEC_HEADERS = fabric_spec_headers("CNY")
 ELEMENT_SPEC_HEADERS = element_spec_headers("CNY")
+
+
+def _discount_cells(commercial: dict[str, Any] | None) -> list[Any]:
+    """Скидка и цена со скидкой. Пустые клетки, если на строке скидки нет."""
+    commercial = commercial or {}
+    discount = _as_float(commercial.get("discount"))
+    priced = _as_float(commercial.get("price_discounted"))
+    amount = _as_float(commercial.get("amount"))
+    if priced is None and discount is not None and amount is not None:
+        priced = round(amount - discount, 2)
+    return [discount, priced]
+
+
+def _discount_totals(products: list[dict[str, Any]]) -> list[Any]:
+    discount = 0.0
+    priced = 0.0
+    seen_discount = False
+    seen_priced = False
+    for item in products:
+        if item.get("amount_continued"):
+            continue
+        left, right = _discount_cells(item.get("commercial_data") or {})
+        if left is not None:
+            discount += float(left)
+            seen_discount = True
+        if right is not None:
+            priced += float(right)
+            seen_priced = True
+    return [
+        round(discount, 2) if seen_discount else None,
+        round(priced, 2) if seen_priced else None,
+    ]
 
 
 def _as_float(value: Any) -> float | None:
@@ -459,6 +500,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                         None if is_family else item_price,
                         None if is_family else amount,
                     ]
+                    + _discount_cells(commercial)
                 )
             else:
                 rows.append(
@@ -475,6 +517,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                         customs.get("brand") or "",
                         commercial.get("size") or "",
                     ]
+                    + _discount_cells(commercial)
                 )
             if not packing.get("rolls_continued"):
                 group_rolls += float(rolls or 0)
@@ -504,6 +547,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                     _as_float(price),
                     group_amount,
                 ]
+                + _discount_totals(group_items)
             )
         elif not fabric and prefix:
             rows.append(
@@ -520,6 +564,7 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
                     None,
                     None,
                 ]
+                + _discount_totals(group_items)
             )
     total_rolls = _count(
         sum(
@@ -541,9 +586,15 @@ def invoice_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
         )
     )
     if fabric:
-        rows.append([None, "TOTAL:", None, total_rolls, None, total_area, total_meters, None, None, total_amount])
+        rows.append(
+            [None, TOTAL_LABEL, None, total_rolls, None, total_area, total_meters, None, None, total_amount]
+            + _discount_totals(products)
+        )
     else:
-        rows.append([None, "TOTAL:", None, total_rolls, total_qty, None, None, total_amount, None, None, None])
+        rows.append(
+            [None, TOTAL_LABEL, None, total_rolls, total_qty, None, None, total_amount, None, None, None]
+            + _discount_totals(products)
+        )
     return rows
 
 
@@ -583,10 +634,10 @@ def packing_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[lis
         sums["gw"] += float(gw or 0)
         sums["area"] += float(area or 0)
     if fabric:
-        rows.append(["TOTAL", None, None, _count(sums["rolls"]), _r2(sums["meters"]), _r2(sums["nw"]), _r2(sums["gw"]), _r3(sums["area"])])
+        rows.append([TOTAL_LABEL, None, None, _count(sums["rolls"]), _r2(sums["meters"]), _r2(sums["nw"]), _r2(sums["gw"]), _r3(sums["area"])])
     else:
         rows.append(
-            ["TOTAL", None, _count(sums["rolls"]), _count(sums["qty"]), None, _r2(sums["nw"]), _r2(sums["gw"]), None, None]
+            [TOTAL_LABEL, None, _count(sums["rolls"]), _count(sums["qty"]), None, _r2(sums["nw"]), _r2(sums["gw"]), None, None]
         )
     return rows
 
@@ -632,6 +683,7 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
                     price,
                     amount,
                 ]
+                + _discount_cells(commercial)
             )
         else:
             rows.append(
@@ -655,6 +707,7 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
                     commercial.get("color") or "",
                     commercial.get("size") or "",
                 ]
+                + _discount_cells(commercial)
             )
         if not packing.get("rolls_continued"):
             sums["rolls"] += float(rolls or 0)
@@ -665,10 +718,11 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
         sums["gw"] += float(gw or 0)
         if not item.get("amount_continued"):
             sums["amount"] += float(amount or 0)
+    tail = _discount_totals(products)
     if fabric:
         rows.append(
             [
-                "Total/Итого:",
+                TOTAL_LABEL,
                 None,
                 None,
                 _count(sums["rolls"]),
@@ -682,11 +736,12 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
                 None,
                 _r2(sums["amount"]),
             ]
+            + tail
         )
     else:
         rows.append(
             [
-                "Total/Итого:",
+                TOTAL_LABEL,
                 None,
                 None,
                 _count(sums["rolls"]),
@@ -705,6 +760,7 @@ def spec_table_rows(products: list[dict[str, Any]], fabric: bool) -> list[list[A
                 None,
                 None,
             ]
+            + tail
         )
     return rows
 
@@ -1219,8 +1275,8 @@ def fill_packing_template(
     )
     for offset, row in enumerate(rows):
         values = {field: row[idx] for idx, field in enumerate(field_order) if idx < len(row)}
-        if str(row[0] or "").upper() == "TOTAL":
-            values["no"] = "TOTAL"
+        if is_total_label(row[0]):
+            values["no"] = TOTAL_LABEL
             values["design"] = None
         _write_mapped_row(ws, data_start + offset, colmap, values)
     _apply_letterhead(ws, header, kit, header_row)

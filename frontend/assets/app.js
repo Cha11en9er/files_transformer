@@ -1916,6 +1916,14 @@ function itemField(item, key) {
   if (key === "unit") return commercial.unit;
   if (key === "price") return commercial.price;
   if (key === "amount") return commercial.amount;
+  if (key === "discount") return commercial.discount;
+  if (key === "price_discounted") {
+    if (commercial.price_discounted != null && commercial.price_discounted !== "") return commercial.price_discounted;
+    const amount = Number(commercial.amount);
+    const discount = Number(commercial.discount);
+    if (Number.isFinite(amount) && Number.isFinite(discount)) return amount - discount;
+    return null;
+  }
   if (key === "color") return commercial.color;
   if (key === "size") return commercial.size;
   if (key === "brand") return customs.brand;
@@ -1989,6 +1997,15 @@ function visibleRoleColumns() {
   const layout = state.columnLayout[role] || { hidden: [], extra: [] };
   const hidden = new Set(layout.hidden || []);
   const cols = base.filter((col) => !hidden.has(col.key));
+  const items = state.workspace?.items || [];
+  const hasDiscount = items.some((item) => {
+    const commercial = item?.commercial_data || {};
+    return (commercial.discount != null && commercial.discount !== "") || (commercial.price_discounted != null && commercial.price_discounted !== "");
+  });
+  if (hasDiscount && (role === "invoice" || role === "specification") && !cols.some((col) => col.key === "discount")) {
+    cols.push({ key: "discount", title: "Discount / Скидка", kind: "money" });
+    cols.push({ key: "price_discounted", title: "Price with discount / Цена со скидкой", kind: "money" });
+  }
   (layout.extra || []).forEach((extra) => {
     cols.push({
       key: `extra:${extra.id}`,
@@ -2052,7 +2069,7 @@ function fillExcelTotals(items, review) {
   row.querySelectorAll("[data-total]").forEach((cell) => {
     const key = cell.getAttribute("data-total");
     if (!sumKeys.has(key)) {
-      cell.textContent = key === "article" ? "Итого" : "";
+      cell.textContent = key === "article" ? "TOTAL / ИТОГО" : "";
       return;
     }
     // Итог — сумма клеток таблицы, не TOTAL из файла. Слитое число мест в сумму один раз.
@@ -2826,7 +2843,7 @@ function paintItemsTable() {
     `<th></th>`,
     ...cols.map((col) => {
       const klass = col.kind === "num" ? "num" : col.kind === "money" ? "money" : "";
-      return `<th class="${klass}" data-total="${escapeHtml(col.key)}">${col.key === "article" ? "Итого" : ""}</th>`;
+      return `<th class="${klass}" data-total="${escapeHtml(col.key)}">${col.key === "article" ? "TOTAL / ИТОГО" : ""}</th>`;
     }),
     `<th></th>`,
   ];

@@ -356,7 +356,7 @@ def test_18312_element_is_18233_three_files_without_family_dupes(tmp_path):
     assert len(product_pack) == 21
     inv_rows = invoice_table_rows(rows, fabric=False)
     numbered = [r for r in inv_rows if isinstance(r[0], int)]
-    captions = [r for r in inv_rows if r[0] is None and str(r[1] or "").upper() != "TOTAL:"]
+    captions = [r for r in inv_rows if r[0] is None and not str(r[1] or "").upper().startswith("TOTAL")]
     assert len(numbered) == 21
     assert len(captions) == 21
     assert "Мебельный профиль" in str(captions[0][1])

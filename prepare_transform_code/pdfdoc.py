@@ -91,6 +91,9 @@ def read_pdf(path):
         _carry_open_span_tails(found_lines)
         found_lines = _enrich_from_text(found_lines, _text_goods(text))
     lines = fold_parts(_share_measures(found_lines)) if readable else []
+    if readable:
+        lines = _drop_shade_meters(lines, text)
+        _apply_header_measures(lines, text)
     while lines and is_bare_total(lines[-1], lines[:-1]):
         lines.pop()
     settle_pallets(lines)
@@ -136,14 +139,60 @@ _CUT_ROW = re.compile(
     r"((?:VELL\.|TESS\.)\s+[A-Z][A-Z0-9 ./-]{1,40}?\s+\d{1,4}(?:/\d)?)\s+.*?(\d{1,4})\s*MT\b",
     re.I,
 )
+_ALC_CODE = r"(?:\d{4,}[A-Z][A-Z0-9]*|\d{6,}[A-Z0-9]*)"
 _ALC_ROW = re.compile(
-    r"(\d{6,}[A-Z0-9]*)\s+ALCANTARA(?:\(\s*R\s*\))?\s+([A-Z0-9.]{2,}(?:\s+[A-Z0-9.]{1,12})?)\s+.{0,80}?(\d[\d,.]*)\s*M\b",
+    rf"({_ALC_CODE})\s+(ALCANTARA(?:\(\s*R\s*\))?|STD)\s+([A-Z0-9.-]{{2,}}(?:\s+[A-Z0-9.-]{{1,12}})?)\s+.{{0,80}}?(\d[\d,.]*)\s*M(?![A-Z]{{2}})",
     re.I,
 )
 _ALC_PALLET = re.compile(
     r"Total Quantity:\s*([\d.,]+)\s*M\s+Total Rolls:\s*(\d+)\s+Weight:\s*([\d.,]+)\s*KG",
     re.I,
 )
+_ALC_INV = re.compile(
+    rf"(?P<code>{_ALC_CODE})\s+(?P<kind>ALCANTARA\s*\(\s*R\s*\)|STD)\s+(?P<desc>\S+)\s+"
+    r"IT\s+A2\s+\d+\s+M\s+(?P<qty>\d+,\d+)\s+(?P<price>\d+,\d+)\s+"
+    r"(?P<amount>\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})",
+    re.I,
+)
+_ALC_DISCOUNT = re.compile(r"Trade Discount\s+-?\d+(?:[.,]\d+)?\s*%\s+-?([\d.,]+)", re.I)
+_SHADE_COLUMN = re.compile(r"A2\s+(\d+)\s+M\b", re.I)
+_HEADER_GROSS = re.compile(r"GROSS-WEIGHT:\s*([\d.,]+)", re.I)
+_HEADER_NET = re.compile(r"NET-WEIGHT:\s*([\d.,]+)", re.I)
+
+
+def _drop_shade_meters(lines, text):
+    """Число перед M (A2 68 M) — ширина графы, не вторая строка без цены."""
+    shades = {int(match.group(1)) for match in _SHADE_COLUMN.finditer(text or "")}
+    if not shades:
+        return lines
+    kept = []
+    for line in lines:
+        pieces = line.pieces
+        if (
+            line.price is None
+            and line.amount is None
+            and line.packages is None
+            and pieces is not None
+            and float(pieces).is_integer()
+            and int(pieces) in shades
+        ):
+            continue
+        kept.append(line)
+    return kept
+
+
+def _apply_header_measures(lines, text):
+    """Одна строка и вес в шапке инвойса — это вес этой строки."""
+    goods = [line for line in lines if not line.freight]
+    if len(goods) != 1:
+        return
+    line = goods[0]
+    gross = _HEADER_GROSS.search(text or "")
+    net = _HEADER_NET.search(text or "")
+    if line.gross is None and gross:
+        line.gross = parse_number(gross.group(1))
+    if line.net is None and net:
+        line.net = parse_number(net.group(1))
 
 
 def _text_goods(text):
@@ -151,6 +200,7 @@ def _text_goods(text):
     found = []
     found.extend(_quality_fabric_lines(text))
     found.extend(_cut_fabric_lines(text))
+    found.extend(_alcantara_invoice_lines(text))
     found.extend(_alcantara_lines(text))
     return found
 
@@ -215,21 +265,87 @@ def _cut_fabric_lines(text):
     return lines
 
 
+def _meter_qty(token):
+    """9,600 M и 50,000 M на пакинге Alcantara — 9.6 и 50, не тысячи."""
+    raw = str(token or "").replace(" ", "")
+    if re.fullmatch(r"\d+,\d{3}", raw):
+        return float(raw.replace(",", "."))
+    return parse_number(raw)
+
+
+def _alcantara_invoice_lines(text):
+    """После M стоят метры, цена и сумма. Число перед M (A2 68) количеством не является."""
+    blob = text or ""
+    if not _ALC_INV.search(blob):
+        return []
+    rows = []
+    matches = list(_ALC_INV.finditer(blob))
+    for index, match in enumerate(matches):
+        qty = parse_number(match.group("qty"))
+        price = parse_number(match.group("price"))
+        amount = parse_number(match.group("amount"))
+        if qty is None or amount is None or price is None:
+            continue
+        kind = "STD" if match.group("kind").upper().startswith("STD") else "ALCANTARA"
+        line = Line(
+            source="pdf",
+            vendor=match.group("code").strip(),
+            description=f"{kind} {match.group('desc').strip()}",
+        )
+        line.pieces = qty
+        line.price = price
+        line.amount = amount
+        line.unit = "meters"
+        nxt = matches[index + 1].start() if index + 1 < len(matches) else match.end() + 80
+        discount = _ALC_DISCOUNT.search(blob[match.end() : nxt])
+        if discount:
+            line.discount = parse_number(discount.group(1))
+        rows.append(line)
+    return rows
+
+
 def _alcantara_lines(text):
-    """Код и метры с пакинга. Вес паллеты на несколько артикулов не делим: садится, только если артикул один."""
+    """Код и метры с пакинга. Вес паллеты на несколько артикулов не делим.
+
+    Одна позиция на паллете получает рулоны и вес. Если рулонов столько же, сколько кодов,
+    у каждого кода один рулон, вес остаётся пустым.
+    """
     blob = text or ""
     rows = []
-    for match in _ALC_ROW.finditer(blob):
-        vendor = match.group(1).strip()
-        desc = f"ALCANTARA {match.group(2).strip()}"
-        line = Line(source="pdf", vendor=vendor, description=desc)
-        line.pieces = parse_number(match.group(3))
-        line.unit = "meters"
-        rows.append(line)
-    pallets = list(_ALC_PALLET.finditer(blob))
-    if len(pallets) == 1 and len(rows) == 1:
-        rows[0].packages = parse_number(pallets[0].group(2))
-        rows[0].net = parse_number(pallets[0].group(3))
+    bits = re.split(r"(Total Quantity:.*?KG)", blob, flags=re.I)
+    index = 0
+    while index < len(bits):
+        chunk = bits[index]
+        if index + 1 < len(bits) and bits[index + 1].upper().startswith("TOTAL QUANTITY"):
+            chunk = chunk + "\n" + bits[index + 1]
+            index += 2
+        else:
+            index += 1
+        block = []
+        for match in _ALC_ROW.finditer(chunk):
+            vendor = match.group(1).strip()
+            kind = "STD" if match.group(2).upper().startswith("STD") else "ALCANTARA"
+            desc = f"{kind} {match.group(3).strip()}"
+            line = Line(source="pdf", vendor=vendor, description=desc)
+            line.pieces = _meter_qty(match.group(4))
+            line.unit = "meters"
+            block.append(line)
+        if not block:
+            continue
+        pallet = _ALC_PALLET.search(chunk)
+        if pallet:
+            rolls = parse_number(pallet.group(2))
+            weight = parse_number(pallet.group(3))
+            # Каждая строка — рулон со своим Roll Nr. Вес паллеты берём, только если код на ней один.
+            for line in block:
+                line.packages = 1
+            vendors = {(line.vendor or "").casefold() for line in block}
+            if len(vendors) == 1 and weight is not None:
+                block[0].gross = weight
+            elif len(block) == 1:
+                block[0].packages = rolls
+                block[0].gross = weight
+        rows.extend(block)
     return rows
 
 
@@ -238,6 +354,35 @@ def _enrich_from_text(found, extra):
     extra_named = [line for line in extra if (line.vendor or "").strip()]
     if not extra_named:
         return found
+    priced = [
+        item
+        for item in extra_named
+        if item.price is not None
+        and item.amount is not None
+        and (
+            "ALCANTARA" in (item.description or "").upper()
+            or (item.description or "").upper().startswith("STD ")
+        )
+    ]
+    found_priced = [line for line in found if line.price is not None and line.amount is not None]
+    if (
+        len(priced) >= 3
+        and any(item.discount is not None for item in priced)
+        and len(priced) > len(found_priced)
+    ):
+        return priced
+    packed = [
+        item
+        for item in extra_named
+        if item.packages
+        and (
+            "ALCANTARA" in (item.description or "").upper()
+            or (item.description or "").upper().startswith("STD")
+        )
+    ]
+    found_packs = sum(1 for line in found if line.packages)
+    if len(packed) >= 2 and found_packs == 0:
+        return packed
     found_named = sum(1 for line in found if (line.vendor or "").strip())
     table_ok = bool(found) and found_named >= max(1, (len(found) + 1) // 2)
     cut_extra = [
@@ -253,6 +398,26 @@ def _enrich_from_text(found, extra):
     )
     if cut_extra and found_is_cut_noise:
         return cut_extra
+    for line in found:
+        twin = next(
+            (
+                item
+                for item in priced
+                if (item.vendor or "").casefold() == (line.vendor or "").casefold()
+                and item.pieces is not None
+                and line.pieces is not None
+                and abs(item.pieces - line.pieces) < 0.05
+            ),
+            None,
+        )
+        if twin is None:
+            continue
+        if line.price is None:
+            line.price = twin.price
+        if line.amount is None:
+            line.amount = twin.amount
+        if line.discount is None:
+            line.discount = twin.discount
     if not table_ok and found_named < max(1, len(extra_named) // 2):
         return extra_named
     unused = list(extra_named)
@@ -1258,6 +1423,8 @@ def _slash_field(label):
         return ""
     if "hs" in low or "customs" in low or "тамож" in low:
         return "hs"
+    if "weaver" in low or "mill code" in low or "factory code" in low:
+        return ""
     if low.endswith("code") or "color" in low or "colour" in low:
         return "finish"
     return column_of(label) or ""
