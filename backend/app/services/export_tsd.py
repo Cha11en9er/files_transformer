@@ -590,54 +590,60 @@ def description_rows(items: list[dict[str, Any]], header: dict[str, Any] | None)
     return rows
 
 
-# Лист ДЛЯ ДТ копирует бланк: три клетки шапки в нём нарочно без названия.
-# Их нельзя выкинуть, иначе съедет порядок ИТС и декларации. Имя им не даём.
-_DT_UNNAMED = ""
+# Лист ДЛЯ ДТ — шапка как в documents_final/Документы_OI-451.xlsx.
+# Безымянные клетки (Y1/Z1) не выводим. Пустые по значениям столбцы режем при записи.
+# Исключение: «цена со скидкой» остаётся даже пустой.
 _DT_COUNT = {"кол-во товара", "кол-во мест", "Кол-во упак"}
-_DT_MONEY = {"брутто", "нетто", "ст-ть товара"}
+_DT_MONEY = {"брутто", "нетто", "нетто без упаковки", "ст-ть товара", "цена за ед. товара", "цена со скидкой"}
+_DT_KEEP_ALWAYS = {"no", "price_discounted"}
+
+# Порядок и имена как на бланке OI-451 «ДЛЯ ДТ» (без пустых заголовков).
+_DT_COLUMN_SPECS: list[tuple[str, str]] = [
+    ("no", "№"),
+    ("hs_code", "Код ТН ВЭД"),
+    ("description", "Описание"),
+    ("group_description", "Описание в группе"),
+    ("manufacturer", "Изготовитель"),
+    ("trade_mark", "ТЗ"),
+    ("article", "артикул"),
+    ("brand", "марка"),
+    ("model", "модель"),
+    ("serial", "серийный номер"),
+    ("size", "размер"),
+    ("qty", "кол-во товара"),
+    ("unit", "Ед.изм."),
+    ("price", "цена за ед. товара"),
+    ("packages", "кол-во мест"),
+    ("extra_unit", "доп.единица"),
+    ("packing_presence", "Код наличия упаковки"),
+    ("packing_code", "Код упаковки"),
+    ("packing_count", "Кол-во упак"),
+    ("container", "контейнер"),
+    ("pallets", "поддоны кол-во"),
+    ("container_numbers", "номера контейнеры"),
+    ("fill_mark", "признак заполнения"),
+    ("country", "страна происхождения"),
+    ("gross", "брутто"),
+    ("net", "нетто"),
+    ("net_bare", "нетто без упаковки"),
+    ("amount", "ст-ть товара"),
+    ("invoice_no", "номер инвойса"),
+    ("invoice_date", "дата инвойса"),
+    ("invoice_currency", "Валюта инвойса"),
+    ("description_short", "Описание"),
+    ("its_request", "ИТС по запросу"),
+    ("its_price_net", "ИТС цена/нетто"),
+    ("declaration", "Декларация соответствия"),
+    ("price_discounted", "цена со скидкой"),
+]
 
 
 def dt_headers() -> list[str]:
-    return [
-        bilingual("No.", "№"),
-        bilingual("HS Code", "Код ТН ВЭД"),
-        bilingual("Description", "Описание"),
-        bilingual("Group description", "Описание в группе"),
-        bilingual("Manufacturer", "Изготовитель"),
-        bilingual("Trade mark", "ТЗ"),
-        bilingual("Article", "артикул"),
-        bilingual("Brand", "марка"),
-        bilingual("Model", "модель"),
-        bilingual("Serial No.", "серийный номер"),
-        bilingual("Size", "размер"),
-        bilingual("Quantity", "кол-во товара"),
-        bilingual("Unit", "Ед.изм."),
-        bilingual("Unit price", "цена за ед. товара"),
-        bilingual("Packages", "кол-во мест"),
-        bilingual("Extra unit", "доп.единица"),
-        bilingual("Packing presence code", "Код наличия упаковки"),
-        bilingual("Packing code", "Код упаковки"),
-        bilingual("Number of packages", "Кол-во упак"),
-        bilingual("Container", "контейнер"),
-        bilingual("Pallets", "поддоны кол-во"),
-        bilingual("Container numbers", "номера контейнеры"),
-        bilingual("Fill mark", "признак заполнения"),
-        bilingual("Country of origin", "страна происхождения"),
-        bilingual("Gross", "брутто"),
-        bilingual("Net", "нетто"),
-        bilingual("Net without packing", "нетто без упаковки"),
-        bilingual("Goods value", "ст-ть товара"),
-        bilingual("Invoice No.", "номер инвойса"),
-        bilingual("Invoice date", "дата инвойса"),
-        bilingual("Invoice currency", "Валюта инвойса"),
-        bilingual("Description", "Описание"),
-        _DT_UNNAMED,
-        bilingual("ITS on request", "ИТС по запросу"),
-        bilingual("ITS price/net", "ИТС цена/нетто"),
-        bilingual("Declaration of conformity", "Декларация соответствия"),
-        _DT_UNNAMED,
-        _DT_UNNAMED,
-    ]
+    return [title for _key, title in _DT_COLUMN_SPECS]
+
+
+def dt_keys() -> list[str]:
+    return [key for key, _title in _DT_COLUMN_SPECS]
 
 
 def _plain(value: Any) -> str:
@@ -666,75 +672,107 @@ def _dt_unit(item: dict[str, Any]) -> str:
     return _plain(commercial.get("unit") or packing.get("unit"))
 
 
+def _dt_price_discounted(item: dict[str, Any]) -> float | None:
+    """Цена/сумма со скидкой, если скидка напечатана. Иначе пусто — столбец всё равно оставляем."""
+    commercial = item.get("commercial_data") or {}
+    if commercial.get("price_discounted") not in (None, ""):
+        return _fnum(commercial.get("price_discounted"), 4)
+    discount = commercial.get("discount")
+    amount = commercial.get("amount")
+    if discount not in (None, "") and amount not in (None, ""):
+        try:
+            return _fnum(float(amount) - float(discount))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _dt_values(item: dict[str, Any], header: dict[str, Any] | None, index: int) -> dict[str, Any]:
     commercial = item.get("commercial_data") or {}
     packing = item.get("packing_data") or {}
     customs = item.get("customs_data") or {}
+    header = header or {}
     places = _count(_packages(item))
     pallets = packing.get("pallets")
+    net = _fnum(_net(item))
+    primary = _fnum(_net_primary(item))
+    desc = _desc(item) or None
+    short = _plain(customs.get("description_ru") or customs.get("description")) or None
+    if short and desc and short == desc:
+        short = None
     return {
-        "№": index,
-        "Код ТН ВЭД": _hs(item) or None,
-        "Описание": _desc(item) or None,
-        "Изготовитель": _dt_producer(item, header) or None,
-        "ТЗ": _plain(customs.get("brand")) or None,
-        "артикул": _dt_article(item) or None,
-        "марка": None,
-        "модель": _plain(commercial.get("model")) or None,
-        "размер": _plain(commercial.get("size")) or None,
-        "кол-во товара": _count(_qty(item)),
-        "Ед.изм.": _dt_unit(item) or None,
-        "цена за ед. товара": _fnum(_price(item), 4),
-        "кол-во мест": places,
-        "Код упаковки": _plain(packing.get("package_type")) or None,
-        "Кол-во упак": places,
-        "поддоны кол-во": _count(pallets) if pallets not in (None, "") else None,
-        "страна происхождения": _plain(customs.get("country")) or None,
-        "брутто": _fnum(_gross(item)),
-        "нетто": _fnum(_net(item)),
-        "ст-ть товара": _fnum(_amount(item)),
+        "no": index,
+        "hs_code": _hs(item) or None,
+        "description": desc,
+        "group_description": _plain(customs.get("group_description")) or None,
+        "manufacturer": _dt_producer(item, header) or None,
+        "trade_mark": _plain(customs.get("brand")) or None,
+        "article": _dt_article(item) or None,
+        # «марка» отдельным столбцом только если есть своё поле; ТЗ уже держит brand.
+        "brand": _plain(customs.get("mark") or customs.get("trade_mark_alt")) or None,
+        "model": _plain(commercial.get("model")) or None,
+        "serial": _plain(commercial.get("serial") or packing.get("serial")) or None,
+        "size": _plain(commercial.get("size")) or None,
+        "qty": _count(_qty(item)),
+        "unit": _dt_unit(item) or None,
+        "price": _fnum(_price(item), 4),
+        "packages": places,
+        "extra_unit": _plain(commercial.get("unit_alt") or packing.get("extra_unit")) or None,
+        "packing_presence": _plain(packing.get("packing_presence")) or None,
+        "packing_code": _plain(packing.get("package_type")) or None,
+        "packing_count": places,
+        "container": _plain(header.get("container") or packing.get("container")) or None,
+        "pallets": _count(pallets) if pallets not in (None, "") else None,
+        "container_numbers": _plain(header.get("container") or packing.get("container")) or None,
+        "fill_mark": None,
+        "country": _plain(customs.get("country") or header.get("country")) or None,
+        "gross": _fnum(_gross(item)),
+        "net": net,
+        "net_bare": primary if primary not in (None, net) else None,
+        "amount": _fnum(_amount(item)),
+        "invoice_no": _plain(header.get("invoice_no")) or None,
+        "invoice_date": _plain(header.get("invoice_date") or header.get("date")) or None,
+        "invoice_currency": _plain(header.get("currency")) or None,
+        "description_short": short,
+        "its_request": None,
+        "its_price_net": None,
+        "declaration": None,
+        "price_discounted": _dt_price_discounted(item),
     }
 
 
-def _dt_key(title: str) -> str:
-    text = str(title or "")
-    if " / " in text:
-        return text.split(" / ", 1)[-1]
-    return text
+def dt_table(items: list[dict[str, Any]], header: dict[str, Any] | None) -> tuple[list[str], list[list[Any]]]:
+    """Шапка и строки ДЛЯ ДТ: только именованные столбцы бланка, пустые по данным выкинуты."""
+    from app.services.column_layout import prune_empty_columns
 
-
-def dt_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> list[list[Any]]:
     headers = dt_headers()
-    # Два столбца «Описание»: первое имя — длинное, второе короткое в лот не кладётся.
-    seen_description = False
-    keys: list[str] = []
-    for title in headers:
-        key = _dt_key(title)
-        if key == "Описание" and seen_description:
-            keys.append("")
-            continue
-        if key == "Описание":
-            seen_description = True
-        keys.append(key)
+    keys = dt_keys()
     rows: list[list[Any]] = []
     for index, item in enumerate(items, start=1):
         values = _dt_values(item, header, index)
-        rows.append([values.get(key) if key else None for key in keys])
+        rows.append([values.get(key) for key in keys])
     if not rows:
-        return rows
+        return headers, rows
     body = rows[:]
     total: list[Any] = []
-    for pos, title in enumerate(headers):
-        key = _dt_key(title)
-        if key not in _DT_COUNT and key not in _DT_MONEY:
+    title_by_key = {key: title for key, title in _DT_COLUMN_SPECS}
+    for pos, key in enumerate(keys):
+        title = title_by_key.get(key, "")
+        if title not in _DT_COUNT and title not in _DT_MONEY:
             total.append(None)
             continue
         nums = [float(row[pos]) for row in body if isinstance(row[pos], (int, float))]
         if not nums:
             total.append(None)
             continue
-        total.append(_count(sum(nums)) if key in _DT_COUNT else _fnum(sum(nums)))
+        total.append(_count(sum(nums)) if title in _DT_COUNT else _fnum(sum(nums)))
     rows.append(total)
+    next_h, _keys, next_r = prune_empty_columns(headers, keys, rows, keep_keys=_DT_KEEP_ALWAYS)
+    return next_h, next_r
+
+
+def dt_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> list[list[Any]]:
+    _headers, rows = dt_table(items, header)
     return rows
 
 
@@ -823,15 +861,29 @@ def export_tsd_book(
     _append_table(ws_spec, spec_h, spec_r)
 
     ws_desc = wb.create_sheet("ОПИСАНИЕ")
-    _append_table(ws_desc, description_headers(), description_rows(items, header))
+    desc_h, desc_r = _description_table(items, header)
+    _append_table(ws_desc, desc_h, desc_r)
 
     ws_dt = wb.create_sheet("ДЛЯ ДТ")
-    _append_table(ws_dt, dt_headers(), dt_rows(items, header))
+    dt_h, dt_r = dt_table(items, header)
+    _append_table(ws_dt, dt_h, dt_r)
 
     unfreeze_workbook(wb)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
     return output_path
+
+
+def _description_table(
+    items: list[dict[str, Any]], header: dict[str, Any] | None
+) -> tuple[list[str], list[list[Any]]]:
+    from app.services.column_layout import prune_empty_columns
+
+    headers = description_headers()
+    keys = ["no", "hs_code", "manufacturer", "article", "description"]
+    rows = description_rows(items, header)
+    next_h, _keys, next_r = prune_empty_columns(headers, keys, rows, keep_keys={"no", "article"})
+    return next_h, next_r
 
 
 def tsd_preview(
@@ -841,13 +893,15 @@ def tsd_preview(
     column_layout: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     (inv_h, inv_r), (pl_h, pl_r), (spec_h, spec_r), header = _tsd_role_tables(items, header, column_layout)
+    desc_h, desc_r = _description_table(items, header)
+    dt_h, dt_r = dt_table(items, header)
     return {
         "filename": filename,
         "sheets": [
             {"title": "INV", "headers": inv_h, "rows": inv_r},
             {"title": "PAK", "headers": pl_h, "rows": pl_r},
             {"title": "Specification", "headers": spec_h, "rows": spec_r},
-            {"title": "ОПИСАНИЕ", "headers": description_headers(), "rows": description_rows(items, header)},
-            {"title": "ДЛЯ ДТ", "headers": dt_headers(), "rows": dt_rows(items, header)},
+            {"title": "ОПИСАНИЕ", "headers": desc_h, "rows": desc_r},
+            {"title": "ДЛЯ ДТ", "headers": dt_h, "rows": dt_r},
         ],
     }
