@@ -79,7 +79,7 @@ def test_18312_export_three_xlsx_same_articles(tmp_path: Path) -> None:
     assert type(product_inv[0][0]) is int
     assert type(spec_products[0][0]) is int
     assert any(str(row[1] or "").upper().startswith("TOTAL") for row in inv_rows)
-    assert str(pack_rows[-1][0] or "").upper() == "TOTAL"
+    assert str(pack_rows[-1][0] or "").upper().startswith("TOTAL")
     assert "О-30" in str(product_inv[0][1])
     assert product_inv[0][4] == 18000 or product_inv[0][4] == 18000.0
     pack_blob = " ".join(str(row[1] or "") for row in pack_rows)

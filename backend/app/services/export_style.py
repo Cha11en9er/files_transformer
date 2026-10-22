@@ -22,6 +22,16 @@ WRAP = Alignment(wrap_text=True, vertical="center")
 
 _GENERIC_TITLES = frozenset({"", "export", "комплект документов", "shipment"})
 
+# Одна подпись итога в инвойсе, пакинге, спецификации, на сайте и в Excel.
+TOTAL_LABEL = "TOTAL / ИТОГО"
+
+
+def is_total_label(value: object) -> bool:
+    text = " ".join(str(value or "").replace("\\", "/").split())
+    text = text.rstrip(":").strip().upper()
+    text = text.replace(" / ", "/").replace(" /", "/").replace("/ ", "/")
+    return text in {"TOTAL", "ИТОГО", "ИТОГ", "SUM", "TOTAL/ИТОГО"}
+
 
 def is_generic_shipment_title(title: str | None) -> bool:
     return (title or "").strip().casefold() in _GENERIC_TITLES
@@ -89,7 +99,7 @@ def style_split_letterhead(ws: Worksheet, row: int, cols: int, split_at: int = 6
 def _is_total_row(ws: Worksheet, row: int, cols: int) -> bool:
     for c in range(1, cols + 1):
         value = ws.cell(row, c).value
-        if isinstance(value, str) and value.strip().upper().startswith(("TOTAL", "ИТОГО")):
+        if is_total_label(value):
             return True
     return False
 

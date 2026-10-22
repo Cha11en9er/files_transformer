@@ -18,6 +18,7 @@ from app.parsing.header_extract import currency_from_sources, export_header_fiel
 from app.services.bilingual import bilingual, label
 from app.services.column_layout import apply_sheet_layout
 from app.services.export_style import (
+    TOTAL_LABEL,
     style_data_table,
     style_letterhead_row,
     style_split_letterhead,
@@ -464,7 +465,7 @@ def invoice_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
         body = rows[:]
         rows.append(
             [
-                "TOTAL :",
+                TOTAL_LABEL,
                 None,
                 None,
                 None,
@@ -505,7 +506,7 @@ def packing_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
         body = rows[:]
         rows.append(
             [
-                "TOTAL",
+                TOTAL_LABEL,
                 None,
                 None,
                 None,
@@ -547,7 +548,7 @@ def spec_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> lis
         body = rows[:]
         rows.append(
             [
-                "ИТОГО:",
+                TOTAL_LABEL,
                 None,
                 None,
                 None,

@@ -839,6 +839,10 @@ def lots_to_rows(lots: list[dict[str, Any]], flags: list[str]) -> list[dict[str,
             commercial["price"] = lot.get("price")
         if _filled(lot.get("amount")):
             commercial["amount"] = lot.get("amount")
+        if _filled(lot.get("discount")):
+            commercial["discount"] = lot.get("discount")
+        if _filled(lot.get("price_discounted")):
+            commercial["price_discounted"] = lot.get("price_discounted")
         if _filled(lot.get("finish")):
             commercial["color"] = lot.get("finish")
         if _filled(lot.get("size")):

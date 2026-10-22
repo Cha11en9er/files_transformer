@@ -11,6 +11,7 @@ from openpyxl.styles import Font
 
 from app.parsing.header_extract import currency_from_sources
 from app.services.bilingual import bilingual, label
+from app.services.export_style import TOTAL_LABEL
 from app.services.column_layout import (
     BEIJING_DESC_KEYS,
     BEIJING_INVOICE_KEYS,
@@ -238,7 +239,7 @@ def _invoice_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[t
             [
                 None,
                 None,
-                "TOTAL:",
+                TOTAL_LABEL,
                 None,
                 None,
                 _count(sum(float(r[5] or 0) for r in body)),
@@ -290,7 +291,7 @@ def _packing_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[t
         rows.append(
             [
                 None,
-                "TOTAL:",
+                TOTAL_LABEL,
                 None,
                 None,
                 _count(sum(float(r[4] or 0) for r in body)),
@@ -344,7 +345,7 @@ def _spec_table(items: list[dict[str, Any]]) -> tuple[list[list[Any]], list[tupl
         body = rows[:]
         rows.append(
             [
-                "Total/Итого:",
+                TOTAL_LABEL,
                 None,
                 None,
                 _count(sum(float(r[3] or 0) for r in body)),

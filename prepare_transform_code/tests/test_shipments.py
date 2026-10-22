@@ -2876,6 +2876,122 @@ class CustomerPravkaTest(unittest.TestCase):
         return self._folder
 
 
+class Pravka11RulesTest(unittest.TestCase):
+    def test_weavers_code_is_not_the_article(self):
+        from prepare_transform_code.lines import Line
+        from prepare_transform_code.pdfdoc import _apply_slash
+
+        line = Line()
+        _apply_slash(
+            line,
+            "Desing No / Design Name / Weavers Code / Item No / PO",
+            "D15-5745 / DYER 100 / PX01.KREM 186 / 0 / 21-8 new order",
+        )
+        self.assertEqual(line.vendor, "DYER 100")
+        self.assertEqual(line.model, "D15-5745")
+        self.assertEqual(line.finish, "")
+
+    def test_alcantara_invoice_reads_qty_price_and_discount(self):
+        from prepare_transform_code.pdfdoc import _alcantara_invoice_lines
+
+        text = (
+            "5015300300 ALCANTARA(R) MASTER IT A2 68 M 2,00 68,32 136,64 90 "
+            "Trade Discount -13.00 % -17,76 "
+            "5170Y11200 ALCANTARA(R) 1.2 IT A2 68 M 47,50 55,90 2.655,25 90 "
+            "Trade Discount -13.00 % -345,18"
+        )
+        rows = _alcantara_invoice_lines(text)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].vendor, "5015300300")
+        self.assertEqual(rows[0].pieces, 2)
+        self.assertEqual(rows[0].amount, 136.64)
+        self.assertEqual(rows[0].price, 68.32)
+        self.assertEqual(rows[0].discount, 17.76)
+        self.assertEqual(rows[1].pieces, 47.5)
+        self.assertEqual(rows[1].amount, 2655.25)
+        self.assertEqual(rows[1].price, 55.9)
+        self.assertEqual(rows[1].discount, 345.18)
+
+    def test_alcantara_pallet_weight_stays_on_one_code(self):
+        from prepare_transform_code.pdfdoc import _alcantara_lines
+
+        text = (
+            "PALLET N.1\n"
+            "5015126700 ALCANTARA(R) MASTER 0040267713 50 M\n"
+            "Total Quantity: 50,000 M Total Rolls: 1 Weight: 19 KG\n"
+            "PALLET N.2\n"
+            "5170Y10500 ALCANTARA(R) 1.2 0020253886 9,600 M\n"
+            "5170Y65100 ALCANTARA(R) 1.2 0010260828 2 M\n"
+            "Total Quantity: 11,600 M Total Rolls: 2 Weight: 13 KG\n"
+        )
+        rows = _alcantara_lines(text)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0].packages, 1)
+        self.assertEqual(rows[0].gross, 19)
+        self.assertEqual(rows[1].pieces, 9.6)
+        self.assertEqual(rows[1].packages, 1)
+        self.assertIsNone(rows[1].gross)
+        self.assertEqual(rows[2].packages, 1)
+        self.assertIsNone(rows[2].gross)
+
+    def test_std_row_and_shade_column_and_plain_rolls(self):
+        from prepare_transform_code.join import build_lots
+        from prepare_transform_code.lines import Line
+        from prepare_transform_code.pdfdoc import (
+            _alcantara_invoice_lines,
+            _alcantara_lines,
+            _drop_shade_meters,
+        )
+
+        text = (
+            "5010380100 STD H142-TH IT A2 70 M 6,00 73,22 439,32 90 "
+            "Trade Discount -13.00 % -57,11"
+        )
+        rows = _alcantara_invoice_lines(text)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].vendor, "5010380100")
+        self.assertEqual(rows[0].pieces, 6)
+        self.assertEqual(rows[0].price, 73.22)
+        self.assertEqual(rows[0].discount, 57.11)
+        packing = _alcantara_lines(
+            "5010380100 STD H142-TH 0070225067 3035802 6 M Y 3/4 "
+            "Total Quantity: 6,000 M Total Rolls: 1 Weight: 4 KG"
+        )
+        self.assertEqual(len(packing), 1)
+        self.assertEqual(packing[0].pieces, 6)
+        self.assertEqual(packing[0].packages, 1)
+        shade = _drop_shade_meters(
+            [
+                Line(vendor="5170Y21900", pieces=35, price=67.08, amount=2347.8),
+                Line(vendor="5170Y21900", pieces=68, description="ALCANTARA 1.2 IT"),
+            ],
+            "5170Y21900 ALCANTARA(R) 1.2 IT A2 68 M 35,00 67,08 2.347,80",
+        )
+        self.assertEqual(len(shade), 1)
+        self.assertEqual(shade[0].pieces, 35)
+        lots, _ = build_lots(
+            [Line(vendor="5170Y11200", pieces=47.5, price=55.9, amount=2655.25, unit="meters")],
+            [
+                Line(vendor="5170Y11200", pieces=12.9, packages=1, unit="meters"),
+                Line(vendor="5170Y11200", pieces=34.6, packages=1, unit="meters"),
+            ],
+        )
+        self.assertEqual(len(lots), 1)
+        self.assertEqual(lots[0]["pieces"], 47.5)
+        self.assertEqual(lots[0]["packages"], 2)
+
+    def test_bank_line_does_not_repeat(self):
+        from prepare_transform_code.shipment import _dedupe_repeated
+
+        raw = (
+            "JP MORGAN CHASE BANK / BBR Bank (JSC) Bank account in rubles: No.1 "
+            "/ account in rubles: No.1 / JP MORGAN CHASE BANK / BBR Bank (JSC)"
+        )
+        text = _dedupe_repeated([raw])
+        self.assertEqual(text.lower().count("jp morgan"), 1)
+        self.assertEqual(text.lower().count("bbr bank"), 1)
+
+
 def _only(folder, names):
     import shutil
     import tempfile

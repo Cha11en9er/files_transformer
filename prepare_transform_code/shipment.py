@@ -417,11 +417,28 @@ def _companions(documents, invoice, specification, description, base, spec_lines
         if not goods:
             continue
         theirs = _vendor_set(goods)
-        if _shares_contract(doc, invoice) or _shares_contract(doc, specification):
+        if (
+            _shares_contract(doc, invoice)
+            or _shares_contract(doc, specification)
+            or _same_customer(doc, invoice)
+        ):
             known = [line for line in goods if _article_key(line) and _article_key(line) in base_vendors]
             fresh = [line for line in goods if _article_key(line) and _article_key(line) not in base_vendors]
             if known:
-                spec_lines.extend(known)
+                for line in known:
+                    same_qty = [
+                        item
+                        for item in list(base) + extra_base
+                        if _article_key(item) == _article_key(line)
+                        and item.pieces is not None
+                        and line.pieces is not None
+                        and abs(float(item.pieces) - float(line.pieces)) < 0.05
+                    ]
+                    # Второй инвойс того же покупателя без номера контракта — ещё одна поставка строк.
+                    if same_qty or _shares_contract(doc, invoice) or _shares_contract(doc, specification):
+                        spec_lines.append(line)
+                    else:
+                        extra_base.append(line)
             still_fresh = []
             for line in fresh:
                 hits = [
@@ -507,6 +524,30 @@ def _shares_contract(doc, anchor):
         return False
     left = _contract_token(doc.get("text") or "")
     right = _contract_token(anchor.get("text") or "")
+    return bool(left) and left == right
+
+
+_CUSTOMER = re.compile(
+    r"Customer:\s*((?:[A-Z][A-Z0-9.&'-]*\s*){1,6}?(?:UAB|LLC|LTD|GMBH|SPA|SRL|ООО))",
+    re.I,
+)
+
+
+def _customer_token(text):
+    match = _CUSTOMER.search(text or "")
+    if not match:
+        return ""
+    return " ".join(match.group(1).split()).casefold()
+
+
+def _same_customer(doc, anchor):
+    """Нет номера контракта, но на обоих инвойсах один и тот же Customer. Это одна поставка."""
+    if anchor is None or doc is anchor:
+        return False
+    if doc.get("role") != "invoice" and "invoice" not in (doc.get("roles") or []):
+        return False
+    left = _customer_token(doc.get("text") or "")
+    right = _customer_token((anchor or {}).get("text") or "")
     return bool(left) and left == right
 
 
@@ -1007,11 +1048,25 @@ def _bank_line(text):
     found = []
     for match in re.finditer(r"(?:^|\n)\s*(?:bank|банк)\s*:?\s*([^\n]+)", text or "", re.I):
         value = " ".join(match.group(1).split())
-        if value and value not in found:
+        if value and value.casefold() not in {item.casefold() for item in found}:
             found.append(value)
-    if len(found) > 1:
-        return " / ".join(found)
-    return found[0] if found else ""
+    return _dedupe_repeated(found)
+
+
+def _dedupe_repeated(parts):
+    """Одинаковый банк, счёт или кусок реквизитов второй раз не клеится."""
+    kept = []
+    for part in parts:
+        for piece in re.split(r"\s*/\s*", str(part or "")):
+            piece = " ".join(piece.split()).strip(" .")
+            if not piece:
+                continue
+            low = piece.casefold()
+            if any(low == item.casefold() or low in item.casefold() for item in kept):
+                continue
+            kept = [item for item in kept if item.casefold() not in low]
+            kept.append(piece)
+    return " / ".join(kept)
 
 
 def _container(text):

@@ -142,5 +142,51 @@ class AttachColumnTest(unittest.TestCase):
         self.assertIsNone(next_r[1][-1])
 
 
+class TotalLabelTest(unittest.TestCase):
+    def test_three_roles_share_one_total_label(self):
+        from app.services.export_18233_templates import invoice_table_rows, packing_table_rows, spec_table_rows
+        from app.services.export_style import TOTAL_LABEL
+
+        item = {
+            "article": "DYER 100",
+            "commercial_data": {"qty": 10, "unit": "meters", "price": 3.5, "amount": 35, "discount": 5},
+            "packing_data": {"meters": 10, "rolls": 2, "width": 1.4, "area": 14, "net_weight": 4, "gross_weight": 5},
+            "customs_data": {"description": "fabric"},
+            "source_traces": {"invoice": {}},
+        }
+        inv = invoice_table_rows([item, item], fabric=False)
+        pak = packing_table_rows([item], fabric=False)
+        spec = spec_table_rows([item], fabric=False)
+        self.assertEqual(inv[-1][1], TOTAL_LABEL)
+        self.assertEqual(pak[-1][0], TOTAL_LABEL)
+        self.assertEqual(spec[-1][0], TOTAL_LABEL)
+        self.assertEqual(inv[0][-2], 5)
+        self.assertEqual(inv[0][-1], 30)
+
+    def test_empty_discount_column_is_pruned(self):
+        from app.services.column_layout import ELEMENT_INVOICE_KEYS, apply_sheet_layout
+        from app.services.export_18233_templates import element_invoice_headers, invoice_table_rows
+
+        item = {
+            "article": "BOLT",
+            "commercial_data": {"qty": 4, "unit": "pcs", "price": 2, "amount": 8},
+            "packing_data": {"rolls": 1},
+            "customs_data": {},
+            "source_traces": {"invoice": {}},
+        }
+        headers, keys, rows = apply_sheet_layout(
+            element_invoice_headers("USD"),
+            ELEMENT_INVOICE_KEYS,
+            invoice_table_rows([item], fabric=False),
+            [item],
+            None,
+            "invoice",
+        )
+        self.assertNotIn("discount", keys)
+        self.assertNotIn("price_discounted", keys)
+        self.assertEqual(len(headers), len(keys))
+        self.assertEqual(len(rows[0]), len(keys))
+
+
 if __name__ == "__main__":
     unittest.main()

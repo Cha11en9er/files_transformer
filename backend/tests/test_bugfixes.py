@@ -138,7 +138,7 @@ def test_6211_export_uses_etalon_columns_and_totals(tmp_path: Path) -> None:
     pl_designs = [str(pl_ws.cell(r, 2).value or "") for r in range(10, pl_ws.max_row + 1)]
     assert any("SOFA FABRIC" in d and "Sherlock" in d for d in pl_designs)
     assert not any("(15+30)" in d for d in pl_designs)
-    assert any(str(pl_ws.cell(r, 1).value or "").upper() == "TOTAL" for r in range(10, pl_ws.max_row + 1))
+    assert any(str(pl_ws.cell(r, 1).value or "").upper().startswith("TOTAL") for r in range(10, pl_ws.max_row + 1))
     pack_letter = " ".join(str(pl_ws.cell(r, 1).value or "") for r in range(1, 9))
     assert "PACKING LIST" in pack_letter.upper()
 
