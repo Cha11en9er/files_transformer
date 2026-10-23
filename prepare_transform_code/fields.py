@@ -7,7 +7,7 @@ from prepare_transform_code.numbers import collapse_letter_spacing
 
 # Более длинные фразы проверяются раньше коротких.
 COLUMNS = (
-    ("packages", ("q-ty packages", "q/ty cases", "qty cases", "qty of packages", "number of packages", "quantity of places", "quantity of place", "количество упаковок", "box qty", "koli adedi", "кол-во упаковок", "кол-во коробок", "кол-во мест", "количество мест", "количество коробок", "quantity/package", "груз.мест", "груз мест", "грузовых мест", "грузомест", "места", "ctns", "ctn", "коробка", "boxes", "box", "bundles", "bundle", "связок", "связки", "件数")),
+    ("packages", ("q-ty packages", "q/ty cases", "qty cases", "qty of packages", "number of packages", "quantity of places", "quantity of place", "количество упаковок", "box qty", "koli adedi", "кол-во упаковок", "кол-во коробок", "кол-во мест", "количество мест", "количество коробок", "quantity/package", "груз.мест", "груз мест", "грузовых мест", "грузомест", "места", "hides", "hide", "шкур", "ctns", "ctn", "коробка", "boxes", "box", "bundles", "bundle", "связок", "связки", "件数")),
     ("unit_net", ("вес ед", "нетт за", "n.w./ctn", "nw/ctn", "n.w./bundle", "nw/bundle", "unit n.w", "unit nw", "unit net", "1 груз", "1 мест", "за место", "на 1 место", "per place", "per package", "per carton")),
     ("gross_with_pallet", ("with pallet", "брутто с", "с весом паллет", "с паллет")),
     ("qty", ("q-ty items", "q/ty pairs", "quantity(mts)", "quantity (mts)", "qty(m)", "net meters", "net metres", "net meter", "net metre", "net mt", "goods pcs", "mal adedi", "кол-во пар", "кол-во штук", "кол-во шт", "количество", "штуки", "装箱数")),
@@ -77,6 +77,12 @@ def column_of(header):
     # G/M — граммы на метр ткани, не вес строки и не места.
     if text.replace(" ", "") in {"g/m", "гр/м", "g/mtr"}:
         return "gsm"
+    # Euro/m2, PRICE PER M2 — цена за квадрат, не колонка площади.
+    if re.search(
+        r"(?:euro|eur|usd|cny|yuan|price|цена|€|\$)\s*/?\s*m2|m2\s*/\s*(?:euro|eur|usd|price|цена)|per\s*m2",
+        text,
+    ):
+        return "price"
     # METERS — количество. M2 и MT2 — площадь, их это не забирает.
     if re.search(r"\bmeters?\b|\bmetres?\b|\bmetrs?\b", text) and not re.search(r"\bm2\b|\bmt2\b|кв", text):
         if not any(mark in text for mark in ("price", "цена", "weight", "вес", "width", "ширина")):
@@ -95,6 +101,9 @@ def column_of(header):
         "n.w": "net",
         "nw": "net",
         "нетто": "net",
+        "kg": "net",
+        "kgs": "net",
+        "кг": "net",
         "gross": "gross",
         "g.w": "gross",
         "gw": "gross",

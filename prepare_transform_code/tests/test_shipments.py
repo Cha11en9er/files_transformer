@@ -3092,6 +3092,45 @@ class Pravka11RulesTest(unittest.TestCase):
             "packing",
         )
 
+    def test_leather_packing_m2_is_qty_hides_are_packages(self):
+        from prepare_transform_code.fields import column_of
+        from prepare_transform_code.exceldoc import read_excel
+
+        self.assertEqual(column_of("Euro/m2"), "price")
+        self.assertEqual(column_of("HIDES"), "packages")
+        self.assertEqual(column_of("kg"), "net")
+        path = Path("documents/11_pravka/18499 Кожа/PACKING LIST PELLI LLC FT. N. VEST313 DEL 01.09.2026.xls")
+        if not path.exists():
+            self.skipTest("VEST packing xls missing")
+        docs = read_excel(path)
+        if not isinstance(docs, list):
+            docs = [docs]
+        lines = next((doc.get("lines") or [] for doc in docs if doc.get("lines")), [])
+        self.assertEqual(len(lines), 13)
+        self.assertEqual(lines[0].pieces, 312.32)
+        self.assertEqual(lines[0].packages, 74)
+        self.assertEqual(lines[0].net, 179)
+        self.assertEqual(lines[0].price, 19.9)
+        self.assertEqual(lines[0].unit, "m2")
+        self.assertAlmostEqual(sum(line.pieces or 0 for line in lines), 1778.11, places=2)
+
+    def test_leather_vest_join_m2_hs_no_fake_gross(self):
+        folder = Path("documents/11_pravka/18499 Кожа")
+        packing = folder / "PACKING LIST PELLI LLC FT. N. VEST313 DEL 01.09.2026.xls"
+        invoice = folder / "PELLI LLC FT. N. VEST313 DEL 01.09.2026.PDF"
+        if not packing.exists() or not invoice.exists():
+            self.skipTest("VEST files missing")
+        draft = _only(folder, [packing.name, invoice.name])
+        lots = draft.get("lots") or []
+        self.assertEqual(len(lots), 13)
+        self.assertAlmostEqual(sum(lot.get("pieces") or 0 for lot in lots), 1778.11, places=2)
+        self.assertEqual(sum(lot.get("packages") or 0 for lot in lots), 349)
+        self.assertEqual(sum(lot.get("net") or 0 for lot in lots), 1361)
+        self.assertTrue(all(lot.get("gross") in (None, "") for lot in lots))
+        self.assertTrue(all(str(lot.get("hs") or "") == "41071291" for lot in lots))
+        self.assertEqual(lots[0].get("unit"), "m2")
+        self.assertAlmostEqual(lots[0].get("pieces") or 0, 312.32, places=2)
+
 
 def _only(folder, names):
     import shutil

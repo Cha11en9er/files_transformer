@@ -219,7 +219,8 @@ def test_recipient_is_not_a_copy_of_the_buyer(tmp_path: Path) -> None:
         },
     )
     wb = load_workbook(out)
-    inv = list(wb["INV"].iter_rows(values_only=True))
+    sheet = next(name for name in wb.sheetnames if "Invoice" in name or name == "INV")
+    inv = list(wb[sheet].iter_rows(values_only=True))
     flat = [" ".join(str(cell or "") for cell in row) for row in inv]
     recipient_rows = [row for row in flat if "Master LLC" in row]
     assert recipient_rows

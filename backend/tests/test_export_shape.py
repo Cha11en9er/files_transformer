@@ -48,24 +48,24 @@ class ExportShapeTest(unittest.TestCase):
         self.assertFalse(is_tsd_layout(items))
         self.assertTrue(is_fabric_layout("626-1", items))
 
-    def test_18233_export_uses_tsd_book_for_nuts(self, tmp_path=None):
+    def test_18233_export_always_three_books(self, tmp_path=None):
         from tempfile import TemporaryDirectory
 
         items = [_nut(1), _nut(2), _nut(3)]
         preview = build_export_preview(items, profile_type="18233", header={"invoice_no": "THN-1"})
-        self.assertEqual(len(preview["files"]), 1)
-        headers = preview["files"][0]["sheets"][0]["headers"]
-        blob = " ".join(headers)
-        self.assertIn("Customs", blob)
-        self.assertIn("COUNTRY", blob)
-        self.assertIn("QTY", blob)
-        self.assertIn("pcs", blob.lower())
-        self.assertNotIn("Meters", blob)
-        self.assertNotIn("Width", blob)
+        self.assertEqual(len(preview["files"]), 3)
+        titles = [sheet["title"] for file in preview["files"] for sheet in file["sheets"]]
+        self.assertEqual(
+            titles,
+            ["Invoice Инвойс", "Packing Пакинг", "Specification Спецификация"],
+        )
         with TemporaryDirectory() as tmp:
             paths = export_18233(items, Path(tmp), header={"invoice_no": "THN-1"}, shipment_title="nuts")
-            self.assertEqual(len(paths), 1)
-            self.assertTrue(paths[0].name.startswith("ТСД"))
+            self.assertEqual(len(paths), 3)
+            joined = " ".join(path.name.upper() for path in paths)
+            self.assertIn("ИНВОЙС", joined)
+            self.assertIn("ПАКИНГ", joined)
+            self.assertIn("СПЕЦИФИКАЦИЯ", joined)
 
 
 if __name__ == "__main__":

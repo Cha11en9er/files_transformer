@@ -304,9 +304,21 @@ def _best(line, others, used):
         if score > best_score:
             best_score = score
             best_at = index
-    if best_score < 60:
+    if best_score >= 60:
+        return best_at
+    # Кожа: на инвойсе ZKELLY02610, на пакинге ARTICLE=KELLY. Одинаковые m2 одной строки — ключ.
+    if line.pieces is None:
         return None
-    return best_at
+    exact = [
+        index
+        for index, other in enumerate(others)
+        if index not in used
+        and other.pieces is not None
+        and abs(other.pieces - line.pieces) < 0.01
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    return None
 
 
 def _score(left, right):
@@ -330,11 +342,17 @@ def _score(left, right):
             score += 70
         elif left_desc.startswith(right_desc[:24]) or right_desc.startswith(left_desc[:24]):
             score += 55
+    # ARTICLE пакинга (KELLY) внутри описания инвойса (KELLY COL COBALT).
+    pack_name = " ".join(str(right.vendor or right.model or "").split())
+    if pack_name and left_desc and pack_name.casefold() in left_desc:
+        score += 45
     if left.pieces is not None and right.pieces is not None and abs(left.pieces - right.pieces) < 0.01:
         score += 40
     elif left.pieces is not None and right.pieces is not None:
         score -= 30
     if _color_hit(left.finish, right.finish):
+        score += 25
+    elif right.finish and left_desc and str(right.finish).casefold() in left_desc:
         score += 25
     return score
 
@@ -455,7 +473,7 @@ def _merge(base, packing):
         and "packages" not in packing_continued
     ):
         lot["packages_conflict"] = True
-    for name in ("packages", "gross", "net", "net_primary", "volume", "gross_with_pallet", "pallet_count", "pallet_weight"):
+    for name in ("packages", "gross", "net", "net_primary", "volume", "gross_with_pallet", "pallet_count", "pallet_weight", "price"):
         if lot.get(name) is None and getattr(packing, name, None) is not None:
             lot[name] = getattr(packing, name)
             if name == "packages" and "packages" in packing_continued:
