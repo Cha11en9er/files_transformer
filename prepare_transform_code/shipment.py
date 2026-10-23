@@ -383,7 +383,24 @@ def _pick(documents, role, prefer_pdf):
         pdfs = [doc for doc in pool if doc.get("kind") == "pdf"]
         if pdfs:
             return pdfs[0]
+    if role == "specification":
+        varied = [doc for doc in pool if not _repeated_quantity(doc)]
+        if varied:
+            pool = varied
     return max(pool, key=lambda doc: len(doc["lines"]))
+
+
+def _repeated_quantity(doc):
+    """Одно и то же количество на каждой строке — копия, не тело. Рядом лист с разными количествами."""
+    values = []
+    for line in doc.get("lines") or []:
+        if getattr(line, "freight", False) or line.pieces is None:
+            continue
+        values.append(round(float(line.pieces), 3))
+    if len(values) < 4:
+        return False
+    top = max(values.count(value) for value in set(values))
+    return top >= len(values) * 0.8
 
 
 def _is_role(doc, role):
@@ -937,13 +954,28 @@ def _invoice_no_from_text(text):
 
 
 def _looks_like_delivery(value):
-    """Значение базиса начинается с Incoterm. «Address: …» после Delivery basis — не базис."""
+    """Значение базиса начинается с Incoterm. «Address: …» после Delivery basis — не базис.
+
+    «Terms of delivery: - FOB Ningbo» и «DELIVERY TERMS : FOB.» — оба базисы.
+    """
+    text = _clean_delivery(value)
     return bool(
         re.match(
             r"(?i)^(?:EX[\s\-]*WORKS?|EXW|FOB|FCA|CIF|CFR|CPT|CIP|DAP|DDP|DPU)\b",
-            str(value or "").strip(),
+            text,
         )
     )
+
+
+def _delivery_has_place(value):
+    """После кода есть город или пометка. Голый FCA с имени листа письма отсекается."""
+    text = _clean_delivery(value)
+    rest = re.sub(
+        r"(?i)^(?:EX[\s\-]*WORKS?|EXW|FOB|FCA|CIF|CFR|CPT|CIP|DAP|DDP|DPU)\b",
+        "",
+        text,
+    ).strip(" ./-")
+    return bool(rest)
 
 
 def _delivery(text):
@@ -960,6 +992,7 @@ def _delivery(text):
             value = " ".join(match.group(1).split())
             value = re.split(r"(?i)\b(?:shipment|payment|manufacturer|origin|address|адрес)\b", value)[0].strip(" .:")
             value = _trim_delivery_company(value)
+            value = _clean_delivery(value)
             if value and _looks_like_delivery(value) and not _same_term(value, found):
                 found.append(value)
     for match in re.finditer(
@@ -969,6 +1002,10 @@ def _delivery(text):
     ):
         value = " ".join(match.group(1).split())
         value = _trim_delivery_company(value)
+        value = _clean_delivery(value)
+        # Строка целиком «FCA» / «CPT» — часто имя листа с письмом, не базис инвойса.
+        if not _delivery_has_place(value):
+            continue
         if value and _looks_like_delivery(value) and not _same_term(value, found):
             found.append(value)
     # Базис в середине строки только после номера и даты: «1310267841 ОТ 13.10.26 CPT USSURIYSK».
@@ -982,6 +1019,7 @@ def _delivery(text):
         ):
             value = " ".join(match.group(1).split())
             value = _trim_delivery_company(value)
+            value = _clean_delivery(value)
             if value and _looks_like_delivery(value) and not _same_term(value, found):
                 found.append(value)
     if not found:
@@ -989,6 +1027,11 @@ def _delivery(text):
     if len(found) == 1:
         return found[0], False
     return " / ".join(found), True
+
+
+def _clean_delivery(value):
+    """Дефис и точка после двоеточия («: - FOB») в базис не входят."""
+    return re.sub(r"^[\-–—•·.\s]+", "", str(value or "")).strip()
 
 
 def _trim_delivery_company(value):
@@ -1371,14 +1414,24 @@ def _packages_miss_stated(lots, stated):
 
 
 def _letterhead_seller(text):
-    """Фирма над COMMERCIAL INVOICE, если слова Seller нет."""
+    """Фирма над COMMERCIAL INVOICE, если слова Seller нет.
+
+    Строки тела таблицы (№, Наименование, Производитель в колонке) продавцом не становятся.
+    """
     company = re.compile(r"\b(LTD|LIMITED|GMBH|LLC|INC|COMPANY)\b", re.I)
     title = re.compile(r"\b(COMMERCIAL\s+INVOICE|PACKING\s+LIST|SPECIFICATION|INVOICE)\b", re.I)
+    table = re.compile(
+        r"^(?:№|no\.?|n/№|item|арт\.?|артикул|наименование|описание|description|qty|quantity|"
+        r"производитель|manufacturer|т\.?\s*м|код товара)\b",
+        re.I,
+    )
     picked = ""
     for line in str(text or "").splitlines():
         line = " ".join(line.split())
         if not line:
             continue
+        if table.search(line):
+            break
         if title.search(line) and not re.search(r"\.(?:xls|xlsx|xlsm|pdf)\b", line, re.I):
             break
         if company.search(line) and not re.search(r"\bbuyer\b", line, re.I):

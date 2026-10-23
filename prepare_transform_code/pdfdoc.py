@@ -90,6 +90,7 @@ def read_pdf(path):
     if readable:
         _carry_open_span_tails(found_lines)
         found_lines = _enrich_from_text(found_lines, _text_goods(text))
+        found_lines = _apply_z002_designs(found_lines, text)
     lines = fold_parts(_share_measures(found_lines)) if readable else []
     if readable:
         lines = _drop_shade_meters(lines, text)
@@ -135,10 +136,23 @@ _QUALITY_INV = re.compile(
     r"(\d{1,5}[.,]\d{2,3})\s+(?:ROLLS\s+)?(\d+[.,]\d+)\s+((?:\d{1,3},)*\d+[.,]\d+)",
     re.I,
 )
+# VELL. KAORI 34 MT 103,80 €19,00 54 €1.972,20 — метры после MT, число в имени не количество.
 _CUT_ROW = re.compile(
-    r"((?:VELL\.|TESS\.)\s+[A-Z][A-Z0-9 ./-]{1,40}?\s+\d{1,4}(?:/\d)?)\s+.*?(\d{1,4})\s*MT\b",
+    r"((?:VELL\.|TESS\.)\s+[A-Z][A-Z0-9 ./-]{1,40}?\s+\d{1,4}(?:/\d)?)\s+MT\s+"
+    r"(\d{1,5}[.,]\d{2})\s+[€$]?\s*(\d{1,5}[.,]\d{2})\s+\d{1,3}\s+[€$]?\s*"
+    r"(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})",
     re.I,
 )
+# Z002 PELLI — код категории. Цвет после HS-CODE: CIGAR RANCH 1^P.75 / CIGAR TERRA P.76.
+_Z002_LEATHER = re.compile(
+    r"Z002\s+PELLI\s+BOVINE\s+FINITE\s+\d+\s*m2\s+"
+    r"([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+E\d+\s+HS-CODE:\s*\d+\s*\.\s*"
+    r"([A-Z0-9][A-Z0-9 /]*?)"
+    r"(?:\s+(?:\d+\^\s*P\.?\d*|\d+\s*\^\s*P\.?\d*|P\.\d+))?"
+    r"(?=\s+(?:Z002\b|Z[A-Z]{2,}\d{3,}|Totale\b|Total\b|Our\b|R\.))",
+    re.I,
+)
+_LOT_MARK = re.compile(r"\s+(?:\d+\^\s*P\.?\d*|\d+\s*\^\s*P\.?\d*|P\.\d+)\s*$", re.I)
 _ALC_CODE = r"(?:\d{4,}[A-Z][A-Z0-9]*|\d{6,}[A-Z0-9]*)"
 _ALC_ROW = re.compile(
     rf"({_ALC_CODE})\s+(ALCANTARA(?:\(\s*R\s*\))?|STD)\s+([A-Z0-9.-]{{2,}}(?:\s+[A-Z0-9.-]{{1,12}})?)\s+.{{0,80}}?(\d[\d,.]*)\s*M(?![A-Z]{{2}})",
@@ -255,14 +269,97 @@ def _cut_fabric_lines(text):
     seen = set()
     for match in _CUT_ROW.finditer(text or ""):
         vendor = " ".join(match.group(1).split())
-        if vendor.casefold() in seen:
+        key = (vendor.casefold(), match.group(2))
+        if key in seen:
             continue
-        seen.add(vendor.casefold())
+        seen.add(key)
         line = Line(source="pdf", vendor=vendor, description=vendor)
         line.pieces = parse_number(match.group(2))
+        line.price = parse_number(match.group(3))
+        line.amount = parse_number(match.group(4))
         line.unit = "meters"
         lines.append(line)
     return lines
+
+
+def _leather_z002_designs(text):
+    """Одинаковый Codice Z002 PELLI — категория. Артикул строкой ниже после HS-CODE."""
+    rows = []
+    for match in _Z002_LEATHER.finditer(text or ""):
+        design = _LOT_MARK.sub("", " ".join(match.group(4).split())).strip(" .")
+        if len(design) < 2:
+            continue
+        line = Line(source="pdf", vendor=design, description="BOVINE FINITE")
+        line.pieces = parse_number(match.group(1))
+        line.price = parse_number(match.group(2))
+        line.amount = parse_number(match.group(3))
+        line.unit = "m2"
+        rows.append(line)
+    return rows
+
+
+def _apply_z002_designs(found, text):
+    """Сетка взяла Z002 PELLI. Подставляем цвет из текстового слоя по количеству и цене.
+
+    Хвост страницы без имени после HS-CODE часто дублирует уже разобранную строку — такой Z002 выбрасываем.
+    """
+    designs = _leather_z002_designs(text)
+    if not designs:
+        return found
+    generic = [
+        line
+        for line in found
+        if re.fullmatch(r"Z002\s+PELLI", " ".join(str(line.vendor or "").split()), re.I)
+    ]
+    if not generic:
+        return found
+    unused = list(designs)
+    for line in generic:
+        twin = next(
+            (
+                item
+                for item in unused
+                if item.pieces is not None
+                and line.pieces is not None
+                and abs(item.pieces - line.pieces) < 0.05
+                and (
+                    line.amount is None
+                    or item.amount is None
+                    or abs(item.amount - line.amount) < 0.05
+                )
+            ),
+            None,
+        )
+        if twin is None:
+            continue
+        line.vendor = twin.vendor
+        if twin.price is not None and line.price is None:
+            line.price = twin.price
+        if twin.amount is not None and line.amount is None:
+            line.amount = twin.amount
+        if twin.unit and not line.unit:
+            line.unit = twin.unit
+        unused.remove(twin)
+    # Хвост страницы без имени после HS-CODE часто дублирует уже разобранную строку.
+    colored_amounts = {
+        round(line.amount, 2)
+        for line in found
+        if line.amount is not None
+        and line.vendor
+        and not re.fullmatch(r"Z002\s+PELLI", " ".join(str(line.vendor).split()), re.I)
+    }
+    if not colored_amounts:
+        return found
+    kept = []
+    for line in found:
+        if (
+            re.fullmatch(r"Z002\s+PELLI", " ".join(str(line.vendor or "").split()), re.I)
+            and line.amount is not None
+            and round(line.amount, 2) in colored_amounts
+        ):
+            continue
+        kept.append(line)
+    return kept
 
 
 def _meter_qty(token):
@@ -390,12 +487,22 @@ def _enrich_from_text(found, extra):
         for item in extra_named
         if re.match(r"(?:VELL\.|TESS\.)", item.vendor or "", re.I)
     ]
-    found_is_cut_noise = (not found) or all(
-        (line.vendor or "").casefold().startswith("composition")
-        or (line.description or "").casefold().startswith("n.i. art")
-        or re.fullmatch(r"\d+[.,]\d+", str(line.vendor or "").strip())
-        for line in found
-    )
+    def _cut_noise_line(line):
+        vendor = str(line.vendor or "").strip()
+        low = vendor.casefold()
+        return (
+            low.startswith("composition")
+            or (line.description or "").casefold().startswith("n.i. art")
+            or re.fullmatch(r"\d+[.,]\d+", vendor) is not None
+        )
+
+    found_is_cut_noise = (not found) or all(_cut_noise_line(line) for line in found)
+    cut_priced = [
+        item for item in cut_extra if item.pieces is not None and item.price is not None and item.amount is not None
+    ]
+    found_cut_junk = sum(1 for line in found if _cut_noise_line(line))
+    if cut_priced and (found_is_cut_noise or found_cut_junk >= max(1, len(found) // 2)):
+        return cut_priced
     if cut_extra and found_is_cut_noise:
         return cut_extra
     for line in found:

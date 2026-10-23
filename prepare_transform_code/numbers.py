@@ -173,10 +173,14 @@ def currencies_of(text):
 
 
 def goods_currency(text):
-    """Валюта у колонки цены или суммы. Валюта счёта в подвале — не она."""
+    """Валюта у колонки цены или суммы. Валюта счёта в подвале — не она.
+
+    Код должен стоять своим словом: TRY внутри INDUSTRY и USD внутри INDUSTRY не валюта.
+    """
     found = []
     for match in re.finditer(
-        r"(?:amount|price|сумма|цена)(?:\s+[a-zа-яё]{2,12}){0,2}\s*[,:(/]?\s*(?:in\s+)?(RUB|USD|EUR|CNY|GBP|TRY|PLN|CHF|JPY|руб)",
+        r"(?:amount|price|сумма|цена)(?:\s+per)?(?:\s+[a-zа-яё]{2,12}){0,2}\s*[,:(/]?\s*(?:in\s+)?"
+        r"(?<![A-ZА-ЯЁ])(RUB|USD|EUR|CNY|GBP|TRY|PLN|CHF|JPY|руб)(?![A-ZА-ЯЁ])",
         str(text or ""),
         re.I,
     ):
@@ -187,14 +191,17 @@ def goods_currency(text):
             found.append(code)
     if found:
         return found[0]
-    # Шапка порвана: AMOUNT, на следующей строке USD. Юань в условии оплаты сюда не попадает.
-    for match in re.finditer(r"(?:amount|price|сумма|цена)\s*,", str(text or ""), re.I):
+    # Шапка порвана: PRICE PER / AMOUNT, на следующей строке USD.
+    for match in re.finditer(r"(?:amount|price|сумма|цена)(?:\s+per)?\s*,?", str(text or ""), re.I):
         window = str(text or "")[match.end() : match.end() + 220]
-        code = re.search(r"\b(RUB|USD|EUR|CNY|GBP|TRY|PLN|CHF|JPY)\b", window, re.I)
+        code = re.search(r"(?<![A-ZА-ЯЁ])(RUB|USD|EUR|CNY|GBP|TRY|PLN|CHF|JPY)(?![A-ZА-ЯЁ])", window, re.I)
         if not code:
             continue
         before = window[: code.start()]
         if re.search(r"\d{6,}", before):
+            continue
+        # Счёт в CNY/USD под банком — не валюта колонки цены.
+        if re.search(r"(?i)\b(?:account|iban|swift|bank)\b", before):
             continue
         return code.group(1).upper()
     return None

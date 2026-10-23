@@ -46,6 +46,7 @@ class Line:
     price: float | None = None
     amount: float | None = None
     discount: float | None = None
+    price_discounted: float | None = None
     gross: float | None = None
     net: float | None = None
     net_primary: float | None = None
@@ -547,7 +548,7 @@ def assign_cell(line, name, value, header_is_package=False):
     if name == "packages":
         fill_qty(line, value, header_is_package=True)
         return
-    if name in {"price", "amount", "discount", "gross", "net", "net_primary", "volume", "area", "width", "gsm", "gross_with_pallet", "unit_net"}:
+    if name in {"price", "amount", "discount", "price_discounted", "gross", "net", "net_primary", "volume", "area", "width", "gsm", "gross_with_pallet", "unit_net"}:
         if name == "volume" and isinstance(value, str) and re.search(r"\d\s*[*x×]\s*\d", value):
             return
         number = parse_number(value)
