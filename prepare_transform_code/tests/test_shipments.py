@@ -2792,7 +2792,41 @@ class CustomerPravkaTest(unittest.TestCase):
     def test_desing_and_discount_headers(self):
         self.assertEqual(column_of("DESING"), "model")
         self.assertEqual(column_of("Discount ¥/ Скидка, ¥"), "discount")
-        self.assertIsNone(column_of("Total price with discount, ¥/ Цена со скидкой, ¥"))
+        self.assertEqual(column_of("Скидки"), "discount")
+        self.assertEqual(column_of("со скидкой"), "price_discounted")
+        self.assertEqual(
+            column_of("Total price with discount, ¥/ Цена со скидкой, ¥"),
+            "price_discounted",
+        )
+
+    def test_its_price_and_bare_cena_become_amount(self):
+        self.assertEqual(column_of("ИТС"), "price")
+        from prepare_transform_code.exceldoc import _map_row
+
+        mapped, _ = _map_row(
+            ["№", "Наименование", "Груз.мест", "Нетто,кг", "Штуки", "ИТС", "Цена"]
+        )
+        self.assertEqual(mapped.get("price"), 5)
+        self.assertEqual(mapped.get("amount"), 6)
+
+    def test_try_inside_industry_is_not_currency(self):
+        from prepare_transform_code.numbers import goods_currency
+        from prepare_transform_code.shipment import _looks_like_delivery
+
+        self.assertIsNone(goods_currency("Price\nHANYI INDUSTRY COMPANY LIMITED"))
+        self.assertEqual(goods_currency("PRICE PER\nUSD\npcs"), "USD")
+        self.assertTrue(_looks_like_delivery("- FOB Ningbo (Incoterms 2020)"))
+        self.assertTrue(_looks_like_delivery("FOB."))
+        from prepare_transform_code.shipment import _delivery, _delivery_has_place
+
+        self.assertFalse(_delivery_has_place("FCA"))
+        self.assertFalse(_delivery_has_place("CPT"))
+        text, conflict = _delivery("Terms of delivery: - FOB Ningbo (Incoterms 2020)\nFCA\nCPT")
+        self.assertEqual(text, "FOB Ningbo (Incoterms 2020)")
+        self.assertFalse(conflict)
+        labeled, _ = _delivery("DELIVERY TERMS : FOB.\nFCA Стамбул")
+        self.assertIn("FOB", labeled)
+        self.assertIn("FCA", labeled)
 
     def test_design_and_neighbour_colour_become_one_article(self):
         from openpyxl import Workbook
@@ -2990,6 +3024,73 @@ class Pravka11RulesTest(unittest.TestCase):
         text = _dedupe_repeated([raw])
         self.assertEqual(text.lower().count("jp morgan"), 1)
         self.assertEqual(text.lower().count("bbr bank"), 1)
+
+    def test_cut_fabric_meters_come_after_mt(self):
+        from prepare_transform_code.pdfdoc import _cut_fabric_lines
+
+        text = (
+            "02850.0024 VELL. KAORI 34 MT 103,80 €19,00 54 €1.972,20 Composition 54VI "
+            "14111.0046 TESS. BALMORAL GRS 08/1 MT 96,85 €20,00 54 €1.937,00 Composition 41RPL"
+        )
+        rows = _cut_fabric_lines(text)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].vendor, "VELL. KAORI 34")
+        self.assertEqual(rows[0].pieces, 103.8)
+        self.assertEqual(rows[0].price, 19.0)
+        self.assertEqual(rows[0].amount, 1972.2)
+        self.assertEqual(rows[1].vendor, "TESS. BALMORAL GRS 08/1")
+        self.assertEqual(rows[1].pieces, 96.85)
+
+    def test_z002_pelli_takes_design_after_hs_code(self):
+        from prepare_transform_code.lines import Line
+        from prepare_transform_code.pdfdoc import _apply_z002_designs
+
+        text = (
+            "Z002 PELLI BOVINE FINITE 641 m2 350,64 23,30 8.169,91 E02 HS-CODE: 41071291 . "
+            "CIGAR RANCH 1^P.75 Z002 PELLI BOVINE FINITE 640 m2 344,96 23,30 8.037,57 E02 "
+            "HS-CODE: 41071291 . CIGAR TERRA P.76 Z002 PELLI"
+        )
+        found = [
+            Line(vendor="Z002 PELLI", description="BOVINE FINITE", pieces=350.64, amount=8169.91),
+            Line(vendor="Z002 PELLI", description="BOVINE FINITE", pieces=344.96, amount=8037.57),
+        ]
+        out = _apply_z002_designs(found, text)
+        self.assertEqual([line.vendor for line in out], ["CIGAR RANCH", "CIGAR TERRA"])
+        self.assertEqual(out[0].price, 23.3)
+
+    def test_family_invoice_splits_by_specification_variants(self):
+        from prepare_transform_code.join import build_lots
+        from prepare_transform_code.lines import Line
+
+        invoice = [
+            Line(description="CAMBRIDGE SOFT FABRIC", pieces=211.8, price=9.55, amount=2022.69, unit="meters"),
+            Line(description="OXFORD SOFT FABRIC", pieces=324.9, price=10.4, amount=3378.96, unit="meters"),
+        ]
+        spec = [
+            Line(vendor="CAMBRIDGE 550-250", pieces=106.0, packages=4, net=74.0, gross=74.4, unit="meters"),
+            Line(vendor="CAMBRIDGE 600", pieces=105.8, packages=4, net=74.5, gross=74.9, unit="meters"),
+            Line(vendor="OXFORD 550-250", pieces=115.0, packages=4, net=92.9, gross=93.3, unit="meters"),
+            Line(vendor="OXFORD 600", pieces=209.9, packages=8, net=168.4, gross=169.2, unit="meters"),
+        ]
+        lots, _ = build_lots(invoice, [], spec)
+        goods = [lot for lot in lots if not lot.get("freight")]
+        self.assertEqual(len(goods), 4)
+        self.assertEqual(sorted(lot["vendor"] for lot in goods), [
+            "CAMBRIDGE 550-250",
+            "CAMBRIDGE 600",
+            "OXFORD 550-250",
+            "OXFORD 600",
+        ])
+        self.assertEqual(sum(lot["packages"] for lot in goods), 20)
+        self.assertAlmostEqual(sum(lot["pieces"] for lot in goods), 536.7, places=2)
+
+    def test_packing_description_of_goods_is_packing(self):
+        from prepare_transform_code.fields import role_of
+
+        self.assertEqual(
+            role_of("ROLLS PACKING DESCRIPTION OF GOODS ARTICLE TOTAL QTY (MT) 26,50"),
+            "packing",
+        )
 
 
 def _only(folder, names):

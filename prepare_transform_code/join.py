@@ -18,10 +18,19 @@ def build_lots(base_lines, packing_lines, spec_lines=None):
     goods = _collapse_price_bands([line for line in base_lines if not line.freight])
     freights = [line for line in base_lines if line.freight]
     packing_goods = [line for line in packing_lines if not line.freight]
+    measured_spec = [
+        line
+        for line in (spec_lines or [])
+        if not line.freight and not _card_line(line) and line.pieces is not None
+    ]
+    # Пакинг-скан без вариантов, а спецификация уже режет семейство на цвета с теми же метрами.
+    split_source = packing_goods
+    if measured_spec and _family_split_count(goods, measured_spec) > _family_split_count(goods, packing_goods):
+        split_source = measured_spec
     used = set()
     lots = []
     for line in goods:
-        group = _take(line, packing_goods, used)
+        group = _take(line, split_source, used)
         if len(group) > 1:
             whole = line.packages
             design_article = not (line.vendor or "").strip()
@@ -29,7 +38,7 @@ def build_lots(base_lines, packing_lines, spec_lines=None):
             for index in group:
                 lot = _merge_split(
                     line,
-                    packing_goods[index],
+                    split_source[index],
                     design_is_article=design_article,
                 )
                 created.append(lot)
@@ -47,7 +56,7 @@ def build_lots(base_lines, packing_lines, spec_lines=None):
                         item["amount"] = amount
                     created[-1]["amount"] = round(rounded[-1] + gap, 2)
         elif group:
-            lots.append(_merge(line, packing_goods[group[0]]))
+            lots.append(_merge(line, split_source[group[0]]))
         else:
             lots.append(_merge(line, None))
     if spec_lines:
@@ -195,8 +204,31 @@ def _unique_subset(indexes, others, target, price):
     return found[0] if found else None
 
 
+def _family_labels(line):
+    """Имя дизайна может быть в артикуле, модели или описании. Номер рулона PM… семейством не является."""
+    labels = set()
+    for text in (line.vendor, line.model, line.description):
+        word = _lead_word(text)
+        if not word or re.fullmatch(r"pm\d+", word):
+            continue
+        labels.add(word)
+    return labels
+
+
+def _family_split_count(goods, others):
+    """Сколько строк инвойса без артикула пакинг/спека режет на несколько вариантов."""
+    used = set()
+    count = 0
+    for line in goods:
+        if (line.vendor or "").strip() or line.pieces is None:
+            continue
+        if len(_family_group(line, others, used)) > 1:
+            count += 1
+    return count
+
+
 def _family_group(line, others, used):
-    """Инвойс без артикула. Пакинг режет его на варианты с тем же первым словом, метры в сумме те же."""
+    """Инвойс без артикула. Пакинг или спецификация режет его на варианты с тем же первым словом, метры в сумме те же."""
     if line.pieces is None or (line.vendor or "").strip():
         return []
     token = _lead_word(line.description)
@@ -206,7 +238,7 @@ def _family_group(line, others, used):
     for index, other in enumerate(others):
         if index in used or other.pieces is None:
             continue
-        if _lead_word(other.description) != token:
+        if token not in _family_labels(others[index]):
             continue
         group.append(index)
     if len(group) < 2:
@@ -637,7 +669,7 @@ def _take_fields(lot, spec, check=True):
         lot["hs_alt_shipper"] = bool(getattr(spec, "hs_alt_shipper", False))
     if not lot.get("unit") and spec.unit and not re.fullmatch(r"\d+[.,]?\d*", str(spec.unit).strip()):
         lot["unit"] = spec.unit
-    for name in ("price", "amount", "discount", "width"):
+    for name in ("price", "amount", "discount", "price_discounted", "width"):
         if lot.get(name) is None and getattr(spec, name, None) is not None:
             lot[name] = getattr(spec, name)
     for name in ("packages", "net", "net_primary", "gross", "volume", "area"):

@@ -547,6 +547,12 @@ def _bare_measurement(cell):
     return re.search(r"cbm|m3|м3|куб", raw) is None
 
 
+def _rate_price_header(cell):
+    """ИТС и похожая ставка за единицу веса — цена, не сумма строки."""
+    text = " ".join(str(cell or "").lower().replace("\n", " ").split())
+    return bool(re.search(r"(?:^|\b)итс\b|customs?\s*value|unit\s*value|indicative", text))
+
+
 def _map_row(row):
     mapped = {}
     score = 0
@@ -577,6 +583,13 @@ def _map_row(row):
             # Вторая колонка количества (метры рядом с пустыми штуками) не выбрасывается.
             elif name == "qty" and "qty_alt" not in mapped and _meter_qty(cell):
                 mapped["qty_alt"] = col
+            elif (
+                name == "price"
+                and "amount" not in mapped
+                and (_rate_price_header(row[mapped["price"]]) or _rate_price_header(cell))
+            ):
+                # ИТС / rate уже цена, голая «Цена» рядом — сумма строки (ИТС × нетто).
+                mapped["amount"] = col
             continue
         mapped[name] = col
         score += 2 if name in {"description", "qty", "vendor", "price"} else 1

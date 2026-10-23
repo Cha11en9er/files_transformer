@@ -11,7 +11,7 @@ COLUMNS = (
     ("unit_net", ("вес ед", "нетт за", "n.w./ctn", "nw/ctn", "n.w./bundle", "nw/bundle", "unit n.w", "unit nw", "unit net", "1 груз", "1 мест", "за место", "на 1 место", "per place", "per package", "per carton")),
     ("gross_with_pallet", ("with pallet", "брутто с", "с весом паллет", "с паллет")),
     ("qty", ("q-ty items", "q/ty pairs", "quantity(mts)", "quantity (mts)", "qty(m)", "net meters", "net metres", "net meter", "net metre", "net mt", "goods pcs", "mal adedi", "кол-во пар", "кол-во штук", "кол-во шт", "количество", "штуки", "装箱数")),
-    ("price", ("unit price", "price per", "price for pair", "price for unit", "eur unit", "цена за пару", "цена за ед", "цена за шт", "unitprice")),
+    ("price", ("unit price", "price per", "price for pair", "price for unit", "eur unit", "цена за пару", "цена за ед", "цена за шт", "unitprice", "итс")),
     ("amount", ("gesamtpreis", "total price", "total amount", "total value", "eur item", "amount", "стоимость", "общая стоимость")),
     ("gross", ("w/o pallet", "without pallet", "без паллет", "gross weight", "gross wt", "gesamtgewicht", "total g. weight", "total kg", "gross kg", "итого вес брутто", "g.w", "gw", "брутто", "brutto", "brut", "毛重")),
     ("net", ("net weight", "net wt", "total n. weight", "total nett", "итого вес нетто", "net kg", "n.w", "nw", "нетто", "netto", "nett")),
@@ -42,7 +42,7 @@ _PARTY = (
 _CONSIGNEE_WORDS = ("recipient", "consignee", "consingnee", "получатель", "грузополучатель")
 
 _ROLE_MARKS = (
-    ("packing", ("PACKING AND WEIGHT", "PACKING LIST", "УПАКОВОЧН", "PACKLISTE", "LISTE DE COLISAGE", "LISTA DE EMBALAJE", "LISTA DI IMBALLAGGIO", "AMBALAJ LIST", "SEÇME LIST", "SECME LIST", "PAKLIJST", "PACKLISTA", "装箱单")),
+    ("packing", ("PACKING AND WEIGHT", "PACKING LIST", "PACKING DESCRIPTION", "TOTAL QTY (MT)", "УПАКОВОЧН", "PACKLISTE", "LISTE DE COLISAGE", "LISTA DE EMBALAJE", "LISTA DI IMBALLAGGIO", "AMBALAJ LIST", "SEÇME LIST", "SECME LIST", "PAKLIJST", "PACKLISTA", "装箱单")),
     ("proforma", ("PRO FORMA", "PROFORMA")),
     ("invoice", ("COMMERCIAL INVOICE", "FAKTURA", "INVOICE", "СЧЕТ-ФАКТУРА", "СЧЁТ-ФАКТУРА", "ИНВОЙС", "RECHNUNG", "FACTURE", "FACTURA", "FATURA", "FATTURA", "发票")),
     ("specification", ("СПЕЦИФИКАЦИЯ", "СПЕЦИФИКАЦ", "SPECIFICATION", "SPEZIFIKATION", "ESPECIFICACION", "SPECYFIKACJA")),
@@ -83,10 +83,10 @@ def column_of(header):
             return "qty"
     if re.search(r"\bwidth\b|\bширина\b", text) and not any(mark in text for mark in ("короб", "carton", "box", "report")):
         return "width"
-    # Скидка только своей колонкой. «Цена со скидкой» — уже другая сумма, amount ею не затираем.
-    if re.search(r"\bdiscount\b|скидк", text):
+    # «Скидка» и discount — сумма скидки. «Цена со скидкой» — уже итог после неё, не цена и не amount.
+    if re.search(r"\bdiscount\b|\bскидк|\bsale\b", text):
         if any(mark in text for mark in ("with discount", "со скидк", "after discount", "цена со скид")):
-            return None
+            return "price_discounted"
         return "discount"
     # «N.W. / CTN» и «N.W./CTN» — одна подпись. Пробелы вокруг слэша не меняют поле.
     compact = re.sub(r"\s*/\s*", "/", text)
@@ -839,6 +839,7 @@ LOT_FIELDS = (
     "price",
     "amount",
     "discount",
+    "price_discounted",
     "net",
     "net_primary",
     "gross",
