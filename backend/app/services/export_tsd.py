@@ -7,6 +7,7 @@ column — the same shape as a finished-goods invoice/packing/specification PDF.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -73,6 +74,16 @@ def is_tsd_layout(items: list[dict[str, Any]]) -> bool:
         if packing.get("meters") not in (None, "") or packing.get("width") not in (None, ""):
             fabric += 1
     if fabric >= max(2, int(n * 0.3)):
+        return False
+    # Кожа / площадь: единица m2 или колонка area — не штучный ТСД.
+    areaish = 0
+    for item in products:
+        commercial = item.get("commercial_data") or {}
+        packing = item.get("packing_data") or {}
+        unit = str(commercial.get("unit") or "").casefold()
+        if packing.get("area") not in (None, "") or re.search(r"m2|м2|кв", unit):
+            areaish += 1
+    if areaish >= max(2, int(n * 0.3)):
         return False
     if color > n * 0.25 or volume > n * 0.25:
         return False
@@ -849,25 +860,17 @@ def export_tsd_book(
     (inv_h, inv_r), (pl_h, pl_r), (spec_h, spec_r), header = _tsd_role_tables(items, header, column_layout)
     wb = Workbook()
     ws = wb.active
-    ws.title = "INV"
+    ws.title = "Invoice Инвойс"
     _write_invoice_letterhead(ws, header, len(inv_h))
     _append_table(ws, inv_h, inv_r)
 
-    ws_pl = wb.create_sheet("PAK")
+    ws_pl = wb.create_sheet("Packing Пакинг")
     _write_packing_letterhead(ws_pl, header, len(pl_h))
     _append_table(ws_pl, pl_h, pl_r)
 
-    ws_spec = wb.create_sheet("Specification")
+    ws_spec = wb.create_sheet("Specification Спецификация")
     _write_spec_letterhead(ws_spec, header, len(spec_h))
     _append_table(ws_spec, spec_h, spec_r)
-
-    ws_desc = wb.create_sheet("ОПИСАНИЕ")
-    desc_h, desc_r = _description_table(items, header)
-    _append_table(ws_desc, desc_h, desc_r)
-
-    ws_dt = wb.create_sheet("ДЛЯ ДТ")
-    dt_h, dt_r = dt_table(items, header)
-    _append_table(ws_dt, dt_h, dt_r)
 
     unfreeze_workbook(wb)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -894,15 +897,11 @@ def tsd_preview(
     column_layout: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     (inv_h, inv_r), (pl_h, pl_r), (spec_h, spec_r), header = _tsd_role_tables(items, header, column_layout)
-    desc_h, desc_r = _description_table(items, header)
-    dt_h, dt_r = dt_table(items, header)
     return {
         "filename": filename,
         "sheets": [
-            {"title": "INV", "headers": inv_h, "rows": inv_r},
-            {"title": "PAK", "headers": pl_h, "rows": pl_r},
-            {"title": "Specification", "headers": spec_h, "rows": spec_r},
-            {"title": "ОПИСАНИЕ", "headers": desc_h, "rows": desc_r},
-            {"title": "ДЛЯ ДТ", "headers": dt_h, "rows": dt_r},
+            {"title": "Invoice Инвойс", "headers": inv_h, "rows": inv_r},
+            {"title": "Packing Пакинг", "headers": pl_h, "rows": pl_r},
+            {"title": "Specification Спецификация", "headers": spec_h, "rows": spec_r},
         ],
     }

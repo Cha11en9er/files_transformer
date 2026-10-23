@@ -1884,6 +1884,7 @@ function isTsdItems(items) {
   let color = 0;
   let volume = 0;
   let fabric = 0;
+  let areaish = 0;
   rows.forEach((item) => {
     const customs = item.customs_data || {};
     const commercial = item.commercial_data || {};
@@ -1896,8 +1897,11 @@ function isTsdItems(items) {
     if ((packing.meters != null && packing.meters !== "") || (packing.width != null && packing.width !== "")) {
       fabric += 1;
     }
+    const unit = String(commercial.unit || "").toLowerCase();
+    if ((packing.area != null && packing.area !== "") || /m2|м2|кв/.test(unit)) areaish += 1;
   });
   if (fabric >= Math.max(2, Math.floor(n * 0.3))) return false;
+  if (areaish >= Math.max(2, Math.floor(n * 0.3))) return false;
   if (color > n * 0.25 || volume > n * 0.25) return false;
   if (hs < n * 0.6) return false;
   return mfr >= n * 0.4 || country >= n * 0.4;
@@ -1991,13 +1995,27 @@ function fallbackRoleColumns(role) {
   ];
 }
 
+function columnHasValues(items, key) {
+  return (items || []).some((item) => {
+    const value = itemField(item, key);
+    if (value == null || value === "") return false;
+    if (typeof value === "string" && value.trim() === "-") return false;
+    return true;
+  });
+}
+
 function visibleRoleColumns() {
   const role = state.role || "invoice";
   const base = (state.roleColumns && state.roleColumns[role]) || fallbackRoleColumns(role);
   const layout = state.columnLayout[role] || { hidden: [], extra: [] };
   const hidden = new Set(layout.hidden || []);
-  const cols = base.filter((col) => !hidden.has(col.key));
   const items = state.workspace?.items || [];
+  const keepAlways = new Set(["article", "description", "qty", "amount", "price"]);
+  const cols = base.filter((col) => {
+    if (hidden.has(col.key)) return false;
+    if (keepAlways.has(col.key) || String(col.key).startsWith("extra:")) return true;
+    return columnHasValues(items, col.key);
+  });
   const hasDiscount = items.some((item) => {
     const commercial = item?.commercial_data || {};
     return (commercial.discount != null && commercial.discount !== "") || (commercial.price_discounted != null && commercial.price_discounted !== "");

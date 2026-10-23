@@ -870,9 +870,12 @@ def test_besway2_pdf_kit_is_fourteen_items(tmp_path: Path):
     from openpyxl import load_workbook
 
     wb = load_workbook(path)
-    assert "INV" in wb.sheetnames
-    assert "PAK" in wb.sheetnames
-    inv = wb["INV"]
+    inv_name = next(name for name in wb.sheetnames if "Invoice" in name or name == "INV")
+    pak_name = next(name for name in wb.sheetnames if "Packing" in name or name == "PAK")
+    assert inv_name
+    assert pak_name
+    assert "ОПИСАНИЕ" not in wb.sheetnames and "ДЛЯ ДТ" not in wb.sheetnames
+    inv = wb[inv_name]
     blob = " ".join(str(inv.cell(r, 1).value or "") for r in range(1, 16))
     assert "HMK" in blob.upper() or "INVOICE" in blob.upper()
     assert "BEIJING GOLDLUCK" not in blob.upper()
@@ -927,28 +930,30 @@ def test_matrac_pdf_kit_is_tsd_not_goldluck(tmp_path: Path):
     from openpyxl import load_workbook
 
     wb = load_workbook(path)
-    assert "INV" in wb.sheetnames
-    blob = " ".join(str(wb["INV"].cell(r, 1).value or "") for r in range(1, 18))
+    inv_name = next(name for name in wb.sheetnames if "Invoice" in name or name == "INV")
+    pak_name = next(name for name in wb.sheetnames if "Packing" in name or name == "PAK")
+    assert "ОПИСАНИЕ" not in wb.sheetnames and "ДЛЯ ДТ" not in wb.sheetnames
+    blob = " ".join(str(wb[inv_name].cell(r, 1).value or "") for r in range(1, 18))
     assert "HMK" in blob.upper()
-    assert "DAP" in blob.upper() or "DAP" in str(wb["INV"].cell(14, 1).value or "").upper() or any(
-        "DAP" in str(wb["INV"].cell(r, 1).value or "").upper() for r in range(1, 18)
+    assert "DAP" in blob.upper() or "DAP" in str(wb[inv_name].cell(14, 1).value or "").upper() or any(
+        "DAP" in str(wb[inv_name].cell(r, 1).value or "").upper() for r in range(1, 18)
     )
     assert "BEIJING GOLDLUCK" not in blob.upper()
     inv_headers = " ".join(
-        str(wb["INV"].cell(r, c).value or "")
+        str(wb[inv_name].cell(r, c).value or "")
         for r in range(1, 30)
         for c in range(1, 13)
     )
     assert "USD" in inv_headers
     assert "RMB" not in inv_headers and "CNY" not in inv_headers
     assert any(
-        "INTEX" in str(wb["INV"].cell(r, 6).value or "").upper()
-        for r in range(1, min(40, wb["INV"].max_row + 1))
+        "INTEX" in str(wb[inv_name].cell(r, 6).value or "").upper()
+        for r in range(1, min(40, wb[inv_name].max_row + 1))
     )
     assert "DESCRIPTION" in inv_headers
     assert "Описание" in inv_headers
     pak_headers = " ".join(
-        str(wb["PAK"].cell(r, c).value or "")
+        str(wb[pak_name].cell(r, c).value or "")
         for r in range(1, 30)
         for c in range(1, 12)
     )
@@ -962,16 +967,17 @@ def test_matrac_pdf_kit_is_tsd_not_goldluck(tmp_path: Path):
     }
     edited_path = export_beijing(rows, tmp_path / "edited.xlsx", edited)
     wb_edit = load_workbook(edited_path)
+    edit_inv = next(name for name in wb_edit.sheetnames if "Invoice" in name or name == "INV")
     inv_blob = " ".join(
-        str(wb_edit["INV"].cell(r, c).value or "")
-        for r in range(1, min(40, wb_edit["INV"].max_row + 1))
+        str(wb_edit[edit_inv].cell(r, c).value or "")
+        for r in range(1, min(40, wb_edit[edit_inv].max_row + 1))
         for c in range(1, 13)
     )
     assert "CUSTOM MAKER" in inv_blob.upper()
     assert "NET 90" in inv_blob.upper()
     assert any(
-        "CUSTOM MAKER" in str(wb_edit["INV"].cell(r, 6).value or "").upper()
-        for r in range(1, min(40, wb_edit["INV"].max_row + 1))
+        "CUSTOM MAKER" in str(wb_edit[edit_inv].cell(r, 6).value or "").upper()
+        for r in range(1, min(40, wb_edit[edit_inv].max_row + 1))
     )
 
     # Same goods under the three-Excel profile must keep USD / Intex, not hardcoded RMB / seller.

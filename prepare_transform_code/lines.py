@@ -281,7 +281,10 @@ def _clean_article_noise(line):
 
 
 _PACKED = re.compile(r"упаковк\w*\s*:\s*(\d+)", re.I)
-_HS_IN_NAME = re.compile(r"(?:код\s*т[нh]\s*вэд|[hн]\s*s\s*code)\s*:?\s*(\d{6,10})", re.I)
+_HS_IN_NAME = re.compile(
+    r"(?:код\s*т[нh]\s*вэд|[hн]\s*s\s*-?\s*code)\s*:?\s*(\d{6,10})",
+    re.I,
+)
 
 
 def _pull_packages(line):

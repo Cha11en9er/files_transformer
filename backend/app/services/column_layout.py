@@ -224,9 +224,15 @@ def prune_empty_columns(
             continue
         filled = False
         for row in body:
-            if index < len(row) and row[index] not in (None, ""):
-                filled = True
-                break
+            if index >= len(row):
+                continue
+            cell = row[index]
+            if cell in (None, ""):
+                continue
+            if isinstance(cell, str) and cell.strip() in {"", "-"}:
+                continue
+            filled = True
+            break
         if filled:
             keep_idx.append(index)
     if len(keep_idx) == len(keys):

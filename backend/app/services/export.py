@@ -191,22 +191,16 @@ def build_export_preview(
                 {
                     "filename": f"{stem} для ЭД.xlsx",
                     "sheets": [
-                        {"title": "Invoice", "headers": inv_h, "rows": inv_r},
-                        {"title": "Packing list", "headers": pl_h, "rows": pl_r},
-                        {"title": "Specification", "headers": spec_h, "rows": spec_r},
-                        {"title": "описание", "headers": description_headers(), "rows": description_rows(products, header)},
+                        {"title": "Invoice Инвойс", "headers": inv_h, "rows": inv_r},
+                        {"title": "Packing Пакинг", "headers": pl_h, "rows": pl_r},
+                        {"title": "Specification Спецификация", "headers": spec_h, "rows": spec_r},
                     ],
                 }
             ],
         }
 
     stem = safe_export_stem(shipment_title)
-    # Штучный ТСД (CODE/COUNTRY/QTY/pcs) даже в профиле 18233 — книга ТСД, не тканевые столбцы.
-    if is_tsd_layout(products):
-        return {
-            "profile_type": "18233",
-            "files": [tsd_preview(products, header, f"ТСД {stem}.xlsx", column_layout)],
-        }
+    # Профиль 18233 — всегда три книги. Авто-ТСД одной книгой профиль не подменяет.
     kit = _kit_label(products, header)
     layout = _layout_kit(kit, products, header)
     fabric = is_fabric_layout(layout, products)
@@ -219,15 +213,15 @@ def build_export_preview(
         "files": [
             {
                 "filename": f"{stem} ИНВОЙС{suffix}.xlsx",
-                "sheets": [{"title": "invoice", "headers": inv_h, "rows": inv_r}],
+                "sheets": [{"title": "Invoice Инвойс", "headers": inv_h, "rows": inv_r}],
             },
             {
                 "filename": f"{stem} ПАКИНГ{suffix}.xlsx",
-                "sheets": [{"title": "packing", "headers": pl_h, "rows": pl_r}],
+                "sheets": [{"title": "Packing Пакинг", "headers": pl_h, "rows": pl_r}],
             },
             {
                 "filename": f"{stem}{suffix} СПЕЦИФИКАЦИЯ С ЦВЕТАМИ.xlsx",
-                "sheets": [{"title": "specification", "headers": spec_h, "rows": spec_r}],
+                "sheets": [{"title": "Specification Спецификация", "headers": spec_h, "rows": spec_r}],
             },
         ],
     }
@@ -442,8 +436,6 @@ def export_18233(
     products = _product_items(items)
     header = prepare_export_header(products, header)
     stem = safe_export_stem(shipment_title)
-    if is_tsd_layout(products):
-        return [export_tsd_book(products, output_dir / f"ТСД {stem}.xlsx", header, column_layout=column_layout)]
     kit = _kit_label(products, header)
     layout = _layout_kit(kit, products, header)
     fabric = is_fabric_layout(layout, products)
@@ -455,16 +447,16 @@ def export_18233(
     }
     paths: list[Path] = []
     names = [
-        (f"{stem} ИНВОЙС{suffix}.xlsx", "invoice"),
-        (f"{stem} ПАКИНГ{suffix}.xlsx", "packing"),
-        (f"{stem}{suffix} СПЕЦИФИКАЦИЯ С ЦВЕТАМИ.xlsx", "specification"),
+        (f"{stem} ИНВОЙС{suffix}.xlsx", "invoice", "Invoice Инвойс"),
+        (f"{stem} ПАКИНГ{suffix}.xlsx", "packing", "Packing Пакинг"),
+        (f"{stem}{suffix} СПЕЦИФИКАЦИЯ С ЦВЕТАМИ.xlsx", "specification", "Specification Спецификация"),
     ]
-    for filename, kind in names:
+    for filename, kind, sheet_title in names:
         headers, rows = writers[kind]()
         paths.append(
             _save_simple_book(
                 output_dir / filename,
-                kind,
+                sheet_title,
                 headers,
                 rows,
                 header=header,

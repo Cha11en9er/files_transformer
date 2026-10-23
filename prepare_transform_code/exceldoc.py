@@ -210,13 +210,31 @@ def _join(rows):
 _SPAN_ONCE_FIELDS = {"packages", "amount", "pieces"}
 
 
+def _m2_sale_qty(mapping, header_cells):
+    """Голое m2 рядом с Euro/m2 — количество продажи (кожа), не отдельная площадь."""
+    if "qty" in mapping or "area" not in mapping or "price" not in mapping:
+        return mapping, ""
+    price_h = header_cells[mapping["price"]] if mapping["price"] < len(header_cells) else ""
+    area_h = header_cells[mapping["area"]] if mapping["area"] < len(header_cells) else ""
+    price_l = " ".join(str(price_h or "").lower().split())
+    area_l = re.sub(r"\s+", "", str(area_h or "").lower())
+    if re.search(r"m2|м2|sqm|кв", price_l) and re.fullmatch(r"m2|м2|mt2|sqm|кв\.?м", area_l):
+        next_map = dict(mapping)
+        next_map["qty"] = next_map.pop("area")
+        return next_map, "m2"
+    return mapping, ""
+
+
 def _lines(rows, continued_cells=None):
     header_idx, mapping = _header(rows)
     if header_idx is None:
         return [], {}
     continued_cells = continued_cells or set()
-    pair_unit = _qty_unit(rows[header_idx][mapping["qty"]]) if "qty" in mapping else ""
     header_cells = rows[header_idx]
+    mapping, m2_unit = _m2_sale_qty(mapping, header_cells)
+    pair_unit = _qty_unit(rows[header_idx][mapping["qty"]]) if "qty" in mapping else ""
+    if m2_unit and not pair_unit:
+        pair_unit = m2_unit
     lines = []
     stated = {}
     scale = _label_scale(header_cells, mapping)
@@ -233,9 +251,11 @@ def _lines(rows, continued_cells=None):
             if lines:
                 mapped, _score = _map_row(row)
                 if _header_ready(mapped):
-                    mapping = mapped
                     header_cells = row
+                    mapping, m2_unit = _m2_sale_qty(mapped, header_cells)
                     pair_unit = _qty_unit(row[mapping["qty"]]) if "qty" in mapping else ""
+                    if m2_unit and not pair_unit:
+                        pair_unit = m2_unit
                     scale = _label_scale(row, mapping)
                     kg_cols = _bare_kg_columns(row, mapping)
             continue
@@ -662,11 +682,10 @@ def _labelish(row):
 
 
 def _bare_kg_columns(header, mapping):
-    """Несколько колонок с одной подписью KG. Подписанные нетто и брутто сюда не входят."""
-    used = {col for col in mapping.values() if isinstance(col, int)}
+    """Все колонки с голой подписью KG. Первая могла уже сесть в net — всё равно считаем все четыре."""
     found = []
     for col, cell in enumerate(header):
-        if col in used or cell in (None, ""):
+        if cell in (None, ""):
             continue
         token = " ".join(str(cell).lower().replace("\n", " ").split()).strip(".")
         if token in {"kg", "kgs", "кг"}:
@@ -676,7 +695,7 @@ def _bare_kg_columns(header, mapping):
 
 def _bare_kg_weights(line, row, cols):
     """Четыре одинаковых KG: первые две на места дают вес строки. Вес коробки в строку не пишется."""
-    if len(cols) < 4 or line.packages in (None, 0) or line.net is not None or line.gross is not None:
+    if len(cols) < 4 or line.packages in (None, 0):
         return
     nums = []
     for col in cols[:4]:
@@ -689,6 +708,7 @@ def _bare_kg_weights(line, row, cols):
         return
     if abs(left_b * places - right_b) > max(0.5, abs(right_b) * 0.02):
         return
+    # Первая KG уже могла лечь в net как вес коробки — заменяем на вес строки.
     if left_a <= left_b:
         line.net, line.gross = right_a, right_b
     else:

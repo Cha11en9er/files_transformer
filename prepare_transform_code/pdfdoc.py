@@ -95,6 +95,7 @@ def read_pdf(path):
     if readable:
         lines = _drop_shade_meters(lines, text)
         _apply_header_measures(lines, text)
+        _fill_hs_from_text(lines, text)
     while lines and is_bare_total(lines[-1], lines[:-1]):
         lines.pop()
     settle_pallets(lines)
@@ -207,6 +208,55 @@ def _apply_header_measures(lines, text):
         line.gross = parse_number(gross.group(1))
     if line.net is None and net:
         line.net = parse_number(net.group(1))
+
+
+_LINE_HS = re.compile(
+    r"(?P<code>[A-Z][A-Z0-9./-]{2,})\s+(?:ART\s+)?(?P<desc>.+?)\s+"
+    r"(?:\d+\s+m2\s+)?(?P<qty>[\d.,]+)\s+[\d.,]+\s+[\d.,]+\s+E\d+\s+"
+    r"(?P<tail>.+?)\s+HS-CODE:\s*(?P<hs>\d{6,12})",
+    re.I,
+)
+
+
+def _fill_hs_from_text(lines, text):
+    """HS-CODE рядом со строкой товара в текстовом слое — в hs строки, не в описание."""
+    goods = [line for line in lines if not line.freight]
+    if not goods or not text:
+        return
+    hits = list(_LINE_HS.finditer(text))
+    unused = list(hits)
+    for line in goods:
+        if line.hs:
+            continue
+        vendor = str(line.vendor or "").strip()
+        twin = None
+        for hit in unused:
+            if vendor and hit.group("code").casefold() != vendor.casefold():
+                continue
+            qty = parse_number(hit.group("qty"))
+            if (
+                line.pieces is not None
+                and qty is not None
+                and abs(line.pieces - qty) > 0.05
+            ):
+                continue
+            twin = hit
+            break
+        if twin is None:
+            continue
+        line.hs = twin.group("hs")
+        desc = " ".join((twin.group("desc") + " " + twin.group("tail")).split())
+        if desc and (not line.description or len(desc) > len(str(line.description))):
+            line.description = desc
+        unused.remove(twin)
+    # Один HS на весь лист — дописать пустым строкам.
+    codes = re.findall(r"HS-CODE:\s*(\d{6,12})", text, re.I)
+    unique = {code for code in codes}
+    if len(unique) == 1:
+        only = next(iter(unique))
+        for line in goods:
+            if not line.hs:
+                line.hs = only
 
 
 def _text_goods(text):
@@ -1235,6 +1285,17 @@ def stated_from_text(text):
         gross = parse_number(weight.group(2))
         if net is not None:
             out["net"] = net
+        if gross is not None:
+            out["gross"] = gross
+    # Подвал инвойса: «NET WEIGHT KG 1.361,00» / «GROSS WEIGHT KG 1.384,40» — итог партии, не строка.
+    footer_net = re.search(r"\bnet\s+weight\s*kg\s*([\d.,]+)", text or "", re.I)
+    footer_gross = re.search(r"\bgross\s+weight\s*kg\s*([\d.,]+)", text or "", re.I)
+    if footer_net and out.get("net") is None:
+        net = parse_number(footer_net.group(1))
+        if net is not None:
+            out["net"] = net
+    if footer_gross and out.get("gross") is None:
+        gross = parse_number(footer_gross.group(1))
         if gross is not None:
             out["gross"] = gross
     cll = re.search(r"(?i)\b(?:cll|total\s+packages?|итого\s+мест)\s*:?\s*([\d.,]+)", text or "")
