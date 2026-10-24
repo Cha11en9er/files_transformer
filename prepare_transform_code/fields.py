@@ -7,10 +7,10 @@ from prepare_transform_code.numbers import collapse_letter_spacing
 
 # Более длинные фразы проверяются раньше коротких.
 COLUMNS = (
-    ("packages", ("q-ty packages", "q/ty cases", "qty cases", "qty of packages", "number of packages", "quantity of places", "quantity of place", "количество упаковок", "box qty", "koli adedi", "кол-во упаковок", "кол-во коробок", "кол-во мест", "количество мест", "количество коробок", "quantity/package", "груз.мест", "груз мест", "грузовых мест", "грузомест", "места", "hides", "hide", "шкур", "ctns", "ctn", "коробка", "boxes", "box", "bundles", "bundle", "связок", "связки", "件数")),
+    ("packages", ("q-ty packages", "q/ty cases", "qty cases", "qty of packages", "qty bags", "q-ty bags", "number of packages", "number of bags", "quantity of places", "quantity of place", "количество упаковок", "кол-во пакетов", "количество пакетов", "box qty", "koli adedi", "кол-во упаковок", "кол-во коробок", "кол-во мест", "количество мест", "количество коробок", "quantity/package", "груз.мест", "груз мест", "грузовых мест", "грузомест", "места", "hides", "hide", "шкур", "ctns", "ctn", "коробка", "boxes", "box", "bundles", "bundle", "связок", "связки", "件数")),
     ("unit_net", ("вес ед", "нетт за", "n.w./ctn", "nw/ctn", "n.w./bundle", "nw/bundle", "unit n.w", "unit nw", "unit net", "1 груз", "1 мест", "за место", "на 1 место", "per place", "per package", "per carton")),
     ("gross_with_pallet", ("with pallet", "брутто с", "с весом паллет", "с паллет")),
-    ("qty", ("q-ty items", "q/ty pairs", "quantity(mts)", "quantity (mts)", "qty(m)", "net meters", "net metres", "net meter", "net metre", "net mt", "goods pcs", "mal adedi", "кол-во пар", "кол-во штук", "кол-во шт", "количество", "штуки", "装箱数")),
+    ("qty", ("q-ty items", "q/ty pairs", "quantity(mts)", "quantity (mts)", "qty(m)", "qty in bag", "q-ty in bag", "net meters", "net metres", "net meter", "net metre", "net mt", "goods pcs", "mal adedi", "кол-во пар", "кол-во штук", "кол-во шт", "штук в пакете", "количество", "штуки", "装箱数")),
     ("price", ("unit price", "price per", "price for pair", "price for unit", "eur unit", "цена за пару", "цена за ед", "цена за шт", "unitprice", "итс")),
     ("amount", ("gesamtpreis", "total price", "total amount", "total value", "eur item", "amount", "стоимость", "общая стоимость")),
     ("gross", ("w/o pallet", "without pallet", "без паллет", "gross weight", "gross wt", "gesamtgewicht", "total g. weight", "total kg", "gross kg", "итого вес брутто", "g.w", "gw", "брутто", "brutto", "brut", "毛重")),
@@ -111,12 +111,18 @@ def column_of(header):
         "measure": "volume",
         "measurement": "volume",
         "место": "packages",
+        "cll": "packages",
         "个": "unit",
         "серия": "model",
         "series": "model",
     }
     if text in exact or compact in exact:
         return exact.get(text) or exact.get(compact)
+    # Total (USD) после снятия скобок остаётся total — сумма колонки, не итог таблицы.
+    if text == "total" and re.search(r"\b(?:usd|eur|cny|gbp|pln|sek|rub|try|chf|jpy|rmb|yuan)\b", paren):
+        return "amount"
+    if text == "total" and not paren:
+        return "amount"
     # «арт.» — артикул. «код» рядом с артикулом — таможенный код. «состав» — текст карточки.
     if re.fullmatch(r"арт\.?", text):
         return "vendor"
@@ -212,11 +218,19 @@ def column_of(header):
             for mark in ("/ctn", "per ctn", "per carton", "/bundle", "n.w", "g.w", "weight", "вес", "нетто", "брут", "размер", "size", "cbm", "объ", "kg", "kgs", "кг")
         ):
             continue
+        # Обрывок шапки «Unit price for cargo package» — цена, не места.
+        if name == "packages" and "cargo" in text:
+            continue
         if name == "packages" and re.search(r"груз", text) and re.search(r"мест", text):
             return "packages"
         # ROLL No. — номер рулона, не количество мест.
         if name == "packages" and re.search(r"\broll\s*(?:no|nr|number|#|№)\b", text):
             continue
+        # QTY Bags / кол-во пакетов — места. QTY in Bag / штук в пакете остаётся qty.
+        if name == "qty" and re.search(r"\bbags?\b|пакетов", text) and not re.search(
+            r"\bin\s+bag\b|в\s+пакет", text
+        ):
+            return "packages"
         # Qty/Ctn и «кол-во в коробке» — штуки в одной коробке, не количество строки.
         if name == "qty" and any(
             mark in text for mark in ("/ctn", "per ctn", "/carton", "в коробке", "per carton", "/bundle", "per bundle")

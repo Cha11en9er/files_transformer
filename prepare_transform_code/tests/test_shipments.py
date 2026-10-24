@@ -3114,6 +3114,48 @@ class Pravka11RulesTest(unittest.TestCase):
         self.assertEqual(lines[0].unit, "m2")
         self.assertAlmostEqual(sum(line.pieces or 0 for line in lines), 1778.11, places=2)
 
+    def test_cll_column_is_packages(self):
+        from prepare_transform_code.fields import column_of
+        from prepare_transform_code.pdfdoc import read_pdf
+
+        self.assertEqual(column_of("CLL"), "packages")
+        self.assertEqual(column_of("Total (USD)"), "amount")
+        self.assertIsNone(column_of("package cargo"))
+        path = Path("documents/13_pravka/2/исходник_инвойс.pdf")
+        if not path.exists():
+            self.skipTest("13_pravka invoice pdf missing")
+        docs = read_pdf(path)
+        if not isinstance(docs, list):
+            docs = [docs]
+        lines = next((doc.get("lines") or [] for doc in docs if doc.get("lines")), [])
+        self.assertGreaterEqual(len(lines), 30)
+        self.assertEqual(lines[0].packages, 50)
+        self.assertEqual(lines[0].price, 3.6)
+        self.assertEqual(lines[0].amount, 180)
+        self.assertAlmostEqual(sum(line.packages or 0 for line in lines), 3215, places=2)
+        self.assertAlmostEqual(sum(line.amount or 0 for line in lines), 15611.73, places=2)
+
+    def test_qty_bags_are_packages_product_name_is_description(self):
+        from prepare_transform_code.fields import column_of
+        from prepare_transform_code.exceldoc import read_excel
+
+        self.assertEqual(column_of("QTY Bags/Кол-во пакетов"), "packages")
+        self.assertEqual(column_of("QTY in Bag/Штук в пакете"), "qty")
+        self.assertEqual(column_of("Product Name/Наименование товара"), "description")
+        path = Path("documents/13_pravka/5/исходник_описание товара.xlsx")
+        if not path.exists():
+            self.skipTest("13_pravka description xlsx missing")
+        docs = read_excel(path)
+        if not isinstance(docs, list):
+            docs = [docs]
+        lines = next((doc.get("lines") or [] for doc in docs if doc.get("lines")), [])
+        self.assertEqual(len(lines), 96)
+        self.assertEqual(lines[0].packages, 300)
+        self.assertEqual(lines[0].pieces, 20)
+        self.assertIn("втулка", (lines[0].description or "").casefold())
+        self.assertEqual(lines[0].size, "M2*4*3.5")
+        self.assertEqual(sum(line.packages or 0 for line in lines), 29000)
+
     def test_leather_vest_join_m2_hs_no_fake_gross(self):
         folder = Path("documents/11_pravka/18499 Кожа")
         packing = folder / "PACKING LIST PELLI LLC FT. N. VEST313 DEL 01.09.2026.xls"
