@@ -38,6 +38,14 @@ pytest-cache-files-*/
 *.zip
 *.rar
 *.7z
+*.jpg
+*.jpeg
+*.png
+*.tif
+*.tiff
+*.bmp
+# Снимок лотов с реальными именами сторон — только локально
+prepare_transform_code/golden/snapshot.json
 # Исключение: если понадобится крошечный публичный пример — класть в samples/ и снять ignore точечно
 !samples/**/*.pdf
 !samples/**/*.xlsx

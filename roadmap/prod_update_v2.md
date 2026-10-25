@@ -1,4 +1,4 @@
-# prod_update_v2
+﻿# prod_update_v2
 
 ## Сделано
 
@@ -30,7 +30,7 @@
 - Лимиты размера загрузки, пульс прогресса раз в 12 с.
 
 ## Как смотреть
-- Ветка: `prod_update_v2`
+- Ветка: `prod` (бывшая линия prod_update_v2)
 - Порт: 8200, каталог `/opt/files_transformer_update`, unit `excel-transformer-update`
 - Один раз: `mkdir -p /opt/files_transformer_update/data/model_inputs`
 - В `.env`: `MODEL_INPUTS_ROOT=/opt/files_transformer_update/data/model_inputs`, `ALLOW_SKIP_MODEL=0`, `VERDICT_PROMPT=full`, `OPENCODE_TIMEOUT_S=0` (ждать ответ)
