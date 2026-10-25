@@ -1,96 +1,124 @@
 # files_transformer
 
-Сервис для таможенного брокера. Сотрудник загружает комплект одной поставки (инвойс, пакинг, спецификация, иногда справочник и скан). Код собирает таблицу позиций, модель проверяет черновик по исходным файлам, на выходе Excel для декларирования.
+Рабочее место таможенного брокера: загружаешь комплект одной поставки (инвойс, пакинг, спецификация, при необходимости справочник и скан), получаешь Excel для декларирования.
 
-Неуверенные данные не подставляются молча — уходят на проверку. Правила опираются на подписи колонок и склейку лотов, не на имя отправителя.
+## Как устроено
+
+1. **Код** читает все файлы комплекта, находит шапки по подписям колонок, собирает лоты до строки `TOTAL` / `ИТОГО` и склеивает роли в один набор позиций.
+2. **Модель** (OpenCode) получает полный промпт и пути к исходникам на диске. Черновик кода для неё подсказка, не истина: по файлам она может поправить поле, выбросить или добавить лот. Число, которого нет ни в черновике, ни в файле, она не выдумывает.
+3. **Экспорт** пишет книги по выбранному профилю. Модель файл не верстает.
+
+На сайте: загрузка → граф разбора → таблица / вид «как в Excel» → ZIP.
+
+`package` — места (коробки, рулоны). `quantity` — штуки / метры / пары по смыслу колонки.
 
 ## Профили выхода
 
-Профиль задаёт только форму Excel. Чтение входа одно и то же.
+Профиль меняет только форму Excel. Разбор входа один.
 
-| Профиль | Выход |
-|---------|--------|
-| **18233** (Hangzhou) | Три книги: инвойс, пакинг, спецификация с цветами |
-| **BEIJING** (Goldluck) | Одна книга, листы Invoice / Packing / Specification / описание |
-| **TSD** | Лист для ДТ |
+| В UI | Код | Результат |
+|------|-----|-----------|
+| Три Excel: Инвойс + Пакинг + Спецификация | `18233` | Три книги в ZIP |
+| Одна книга: Invoice + Packing + Specification + Описание | `BEIJING` | Одна книга с листами |
 
-На входе граница ролей размыта: несколько файлов или одна книга с листами — один комплект строк. Роль берётся из заголовка внутри документа.
+Для штучного товара дополнительно собирается лист **ДТ** (колонки TSD), если это уместно по составу поставки. Ткань (метры, рулоны, площадь) и штучный товар выходят разным набором столбцов.
+
+Роль документа берётся из заголовка внутри файла (`INVOICE`, `PACKING LIST`, `Спецификация №`), не из имени файла и не из профиля. Несколько файлов или одна книга с несколькими листами — один комплект строк.
 
 ## Структура репозитория
 
 ```
-backend/                  FastAPI, UI, экспорт
-frontend/                 Статика сайта (отдаётся бэкендом)
-prepare_transform_code/   Разбор и склейка поставок
-deploy/                   systemd unit и скрипт выкладки
-study_tools/              dump_shipment.py — снимок поставки для разбора
-roadmap/                  Дневник работ (для команды)
-documents/                Локальные поставки (в git не входят)
-documents_final/          Локальные эталоны шаблонов (в git не входят)
+backend/                   FastAPI, API, экспорт, отдача UI
+frontend/                  Статика сайта
+prepare_transform_code/    Разбор Excel/PDF и склейка лотов
+deploy/                    systemd и скрипты выкладки
+study_tools/               dump_shipment.py — снимок поставки для отладки
 ```
 
-Секреты только в `backend/.env`. PDF, Excel и сканы поставок в git не кладутся.
+Локально (в git не входят): `documents/`, `documents_final/` — ваши поставки и эталоны для тестов.
+
+Секреты только в `backend/.env`. PDF, Excel и сканы поставок в репозиторий не коммитятся.
 
 ## Локальный запуск
+
+Нужны Python 3.10+ и доступный OpenCode на `:4096` (см. `backend/.env.example`).
 
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 copy .env.example .env
+# поправь OPENROUTER_API_KEY / пароль OpenCode; для локали удобно:
+# MODEL_INPUTS_ROOT= (пусто) → backend/data/model_inputs
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8010
 ```
 
-Открой http://127.0.0.1:8010/
+Сайт: http://127.0.0.1:8010/
 
-Подробнее: [backend/README.md](backend/README.md), [prepare_transform_code/README.md](prepare_transform_code/README.md).
+Важные переменные `.env`:
 
-## Боевой путь
+| Переменная | Смысл |
+|------------|--------|
+| `OPENCODE_URL` | Сервер модели, обычно `http://127.0.0.1:4096` |
+| `OPENCODE_MODEL` / `_1` / `_2` | Модели вердикта |
+| `MODEL_INPUTS_ROOT` | Куда класть копии загрузок для модели |
+| `MODEL_INPUTS_TTL_H` | Через сколько часов чистить `postavka_*` (по умолчанию 24) |
+| `ALLOW_SKIP_MODEL` | `0` на бою; `1` только для отладки без модели |
+| `VERDICT_PROMPT` | `full` — полный промпт вердикта |
+| `OPENCODE_TIMEOUT_S` | `0` — ждать ответ модели без обрыва |
 
-`POST /api/v1/shipments/` → `prepare_transform_code.analyze` (черновик) → вердикт модели по файлам на диске → export по профилю.
+Подробнее: [backend/README.md](backend/README.md), [prepare_transform_code/README.md](prepare_transform_code/README.md), [frontend/README.md](frontend/README.md).
 
-1. Код читает xls/xlsx/pdf и собирает лоты.
-2. Копии загрузок кладутся в `MODEL_INPUTS_ROOT/postavka_{uuid}/`.
-3. Модель получает промпт (`verdict.py`) и пути к исходникам; числа, которых нет ни в черновике, ни в файле, не выдумывает.
-4. Выгрузка: шаблоны 18233 / Beijing / TSD.
+## API (боевой путь)
 
-`package` — места, `quantity` — штуки.
+`POST /api/v1/shipments/` → `prepare_transform_code.analyze` → вердикт по файлам в `MODEL_INPUTS_ROOT/postavka_{uuid}/` → `apply_verdict` → export.
+
+Копии загрузок удаляются после ответа модели и дополнительно чистятся по TTL.
 
 ## Сервер
 
 | | |
 |--|--|
-| Remote | `https://github.com/Cha11en9er/files_transformer.git` |
-| Боевая ветка | `prod` (код с линии prod_update_v2) |
+| Ветка | `prod` |
 | Каталог | `/opt/files_transformer_update` |
 | Unit | `excel-transformer-update` |
-| Порт | **8200** |
+| Порт сайта | **8200** |
+| OpenCode | **4096** (не перезапускать вместе с сайтом без нужды) |
 
-OpenCode на :4096 не трогать. Один раз:
+Один раз на машине:
 
 ```bash
 mkdir -p /opt/files_transformer_update/data/model_inputs
 ```
 
-В `.env`: `MODEL_INPUTS_ROOT=...`, `ALLOW_SKIP_MODEL=0`, `VERDICT_PROMPT=full`.
+В `.env` на сервере: `MODEL_INPUTS_ROOT=/opt/files_transformer_update/data/model_inputs`, `ALLOW_SKIP_MODEL=0`, `VERDICT_PROMPT=full`, `OPENCODE_TIMEOUT_S=0`.
 
-Выкладка с рабочей машины (пароль только в env сессии):
+Выкладка с рабочей машины:
 
 ```powershell
 $env:SSH_DEPLOY_PASSWORD='…'
 python deploy/deploy_8200.py
 ```
 
+Перед передачей сервера заказчику очистить загрузки и кэш:
+
+```powershell
+$env:SSH_DEPLOY_PASSWORD='…'
+python deploy/_clean_server_uploads.py --wipe
+```
+
+См. также [deploy/README.md](deploy/README.md).
+
 ## Тесты
 
 ```powershell
 python -m unittest prepare_transform_code.tests.test_shipments
-cd backend; python -m pytest
+cd backend
+python -m pytest
 ```
 
-Тесты поставок ожидают локальные `documents_final/` и `documents/`. Без них часть кейсов пропускается.
+Часть тестов читает локальные `documents_final/` и `documents/`. Без этих папок соответствующие кейсы пропускаются или падают.
 
-## Документация по полям
+## Правила разбора
 
-- Правила подписей и склейки: `.cursor/rules/field-anchors.mdc`
-- История разбора шаблонов: `prepare_logic.md` (внутренняя, для доработки парсера)
+Подписи колонок и склейка лотов описаны в `.cursor/rules/field-anchors.mdc` (для разработки парсера). История разбора шаблонов — `prepare_logic.md`, это внутренний дневник, не инструкция пользователя.

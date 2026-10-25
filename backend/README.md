@@ -1,6 +1,6 @@
 # Backend
 
-FastAPI-приложение: загрузка комплекта поставки, вызов `prepare_transform_code`, вердикт модели, выгрузка Excel по профилю.
+FastAPI: загрузка комплекта, вызов `prepare_transform_code`, вердикт OpenCode, экспорт Excel, отдача `frontend/`.
 
 ## Запуск
 
@@ -12,15 +12,17 @@ copy .env.example .env
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8010
 ```
 
-Сайт: http://127.0.0.1:8010/
-
-Секреты только в `.env`. Пример переменных — `.env.example`.
+http://127.0.0.1:8010/ — секреты только в `.env` (образец `.env.example`).
 
 ## Структура
 
-- `app/api` — HTTP API
-- `app/services` — оркестрация поставки, вызов модели, экспорт
-- `app/transform` — легаси-путь (живой UI идёт через prepare)
-- `tests` — unit/API тесты бэкенда
+| Путь | Назначение |
+|------|------------|
+| `app/api` | HTTP API (`/api/v1/shipments/…`) |
+| `app/services` | Оркестрация, model_inputs, вердикт, export 18233 / Beijing / TSD |
+| `app/parsing` | Вспомогательный разбор шапки (легаси-слой рядом с prepare) |
+| `app/transform` | Старый путь `POST /recognize`; живой UI им не пользуется |
+| `data/model_inputs` | Локальные копии загрузок для модели (если `MODEL_INPUTS_ROOT` пуст) |
+| `tests` | Тесты API и экспорта |
 
-Боевой путь: `POST /api/v1/shipments/` → `prepare_transform_code.analyze` → вердикт → export.
+Боевой путь: create shipment → analyze → files to model → apply_verdict → export ZIP.
