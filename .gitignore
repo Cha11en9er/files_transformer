@@ -14,12 +14,33 @@ data/model_inputs/
 uploads/
 exports/
 documents/
+documents_final/
 materials/
+# Кадры/сканы поставок для разбора (локально ок, в git не класть)
+prepare_transform_code/prepare_photo/
 backend/_anydoc_probe/
 backend/out/
 out/
+study_tools/out/
 *.tar.gz
 pytest-cache-files-*/
+
+# Бинарники поставок и офисные вложения (даже вне documents*)
+*.pdf
+*.PDF
+*.xls
+*.xlsx
+*.xlsm
+*.doc
+*.docx
+*.ppt
+*.pptx
+*.zip
+*.rar
+*.7z
+# Исключение: если понадобится крошечный публичный пример — класть в samples/ и снять ignore точечно
+!samples/**/*.pdf
+!samples/**/*.xlsx
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,17 +1,37 @@
 # files_transformer
 
-Сервис для таможенного брокера: сотрудник кладёт комплект одной поставки (инвойс, пакинг, спецификация, иногда справочник и скан). Парсер собирает таблицу позиций, модель OpenCode проверяет черновик, на выходе Excel для декларирования.
+Сервис для таможенного брокера. Сотрудник загружает комплект одной поставки (инвойс, пакинг, спецификация, иногда справочник и скан). Код собирает таблицу позиций, модель проверяет черновик по исходным файлам, на выходе Excel для декларирования.
 
-Неуверенные данные не подставляются молча, а идут на проверку. Правила живут на заголовках колонок и merge, не на имени отправителя.
+Неуверенные данные не подставляются молча — уходят на проверку. Правила опираются на подписи колонок и склейку лотов, не на имя отправителя.
 
-## Профили
+## Профили выхода
 
-- **18233** (Hangzhou): три книги, инвойс / пакинг / спецификация с цветами.
-- **BEIJING** (Goldluck): одна книга, листы Invoice / Packing list / Specification / описание.
+Профиль задаёт только форму Excel. Чтение входа одно и то же.
 
-Вход Beijing это не один файл. Товарная книга (Invoice+Packing) в основные файлы, `(описание )сводная.xlsx` в зону «Справочник», подписанный PDF в основные файлы.
+| Профиль | Выход |
+|---------|--------|
+| **18233** (Hangzhou) | Три книги: инвойс, пакинг, спецификация с цветами |
+| **BEIJING** (Goldluck) | Одна книга, листы Invoice / Packing / Specification / описание |
+| **TSD** | Лист для ДТ |
 
-## Локально
+На входе граница ролей размыта: несколько файлов или одна книга с листами — один комплект строк. Роль берётся из заголовка внутри документа.
+
+## Структура репозитория
+
+```
+backend/                  FastAPI, UI, экспорт
+frontend/                 Статика сайта (отдаётся бэкендом)
+prepare_transform_code/   Разбор и склейка поставок
+deploy/                   systemd unit и скрипт выкладки
+study_tools/              dump_shipment.py — снимок поставки для разбора
+roadmap/                  Дневник работ (для команды)
+documents/                Локальные поставки (в git не входят)
+documents_final/          Локальные эталоны шаблонов (в git не входят)
+```
+
+Секреты только в `backend/.env`. PDF, Excel и сканы поставок в git не кладутся.
+
+## Локальный запуск
 
 ```powershell
 cd backend
@@ -21,26 +41,56 @@ copy .env.example .env
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8010
 ```
 
-Сайт: http://127.0.0.1:8010/
+Открой http://127.0.0.1:8010/
 
-Секреты только в `backend/.env`. В git не класть.
+Подробнее: [backend/README.md](backend/README.md), [prepare_transform_code/README.md](prepare_transform_code/README.md).
 
-## Боевой путь кода (ветка prod_update_v2)
+## Боевой путь
 
-`POST /api/v1/shipments/` → `prepare_transform_code.analyze` (черновик) → OpenCode-вердикт по исходным файлам на диске → export по профилю.
+`POST /api/v1/shipments/` → `prepare_transform_code.analyze` (черновик) → вердикт модели по файлам на диске → export по профилю.
 
-1. Код читает xls/xlsx/pdf и собирает лоты (`prepare_transform_code`).
-2. Копии загрузок кладутся в `MODEL_INPUTS_ROOT/postavka_{uuid}/` (на сервере обычно `/opt/files_transformer_update/data/model_inputs`).
-3. Модель получает полный промпт (`verdict.py`) + абсолютные пути; PDF/сканы могут идти вложениями, Excel через tool `read`. JPEG-кадры листов для модели не строятся.
-4. Выгрузка: `export.py` / `export_beijing.py` / шаблоны 18233.
+1. Код читает xls/xlsx/pdf и собирает лоты.
+2. Копии загрузок кладутся в `MODEL_INPUTS_ROOT/postavka_{uuid}/`.
+3. Модель получает промпт (`verdict.py`) и пути к исходникам; числа, которых нет ни в черновике, ни в файле, не выдумывает.
+4. Выгрузка: шаблоны 18233 / Beijing / TSD.
 
-Легаси `app/transform/` и `POST /recognize` остаются в коде, живой UI идёт через prepare. `package` это места, `quantity` это штуки.
+`package` — места, `quantity` — штуки.
 
-## Git
+## Сервер
 
-Remote: `https://github.com/Cha11en9er/files_transformer.git`
+| | |
+|--|--|
+| Remote | `https://github.com/Cha11en9er/files_transformer.git` |
+| Боевая ветка | `prod` (код с линии prod_update_v2) |
+| Каталог | `/opt/files_transformer_update` |
+| Unit | `excel-transformer-update` |
+| Порт | **8200** |
 
-Боевой сайт: ветка `prod_update_v2`, каталог `/opt/files_transformer_update`, systemd `excel-transformer-update`, порт 8200. OpenCode на :4096 не трогать.
-Один раз: `mkdir -p /opt/files_transformer_update/data/model_inputs` и в `.env` строка `MODEL_INPUTS_ROOT=...`.
+OpenCode на :4096 не трогать. Один раз:
 
-Порт 8100 больше не используется. На нём стояла ветка `prod`, коммит `733c7354d5cde6728a8d12249a9e743ea129262a` («Do not invent RMB when the shipment currency is USD or unknown», 5 октября 2026).
+```bash
+mkdir -p /opt/files_transformer_update/data/model_inputs
+```
+
+В `.env`: `MODEL_INPUTS_ROOT=...`, `ALLOW_SKIP_MODEL=0`, `VERDICT_PROMPT=full`.
+
+Выкладка с рабочей машины (пароль только в env сессии):
+
+```powershell
+$env:SSH_DEPLOY_PASSWORD='…'
+python deploy/deploy_8200.py
+```
+
+## Тесты
+
+```powershell
+python -m unittest prepare_transform_code.tests.test_shipments
+cd backend; python -m pytest
+```
+
+Тесты поставок ожидают локальные `documents_final/` и `documents/`. Без них часть кейсов пропускается.
+
+## Документация по полям
+
+- Правила подписей и склейки: `.cursor/rules/field-anchors.mdc`
+- История разбора шаблонов: `prepare_logic.md` (внутренняя, для доработки парсера)
