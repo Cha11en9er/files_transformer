@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>История загрузок</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/styles.css?v=59" />
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div>
+        <p class="brand">Таможенные документы</p>
+        <h1>История загрузок</h1>
+      </div>
+      <div class="top-actions">
+        <a class="btn" href="/" id="btn-back-workspace">К рабочему месту</a>
+        <button type="button" class="btn" id="btn-history-refresh">Обновить</button>
+      </div>
+    </header>
+
+    <section class="panel history-panel" id="history-panel" aria-label="История поставок">
+      <div class="history-head">
+        <div>
+          <p class="hint" id="history-summary">Общая лента на весь сайт. Дата и время — по Москве.</p>
+        </div>
+      </div>
+      <form class="history-filters" id="history-filters">
+        <label>
+          <span class="upload-label">Поиск</span>
+          <input type="search" id="history-search" placeholder="Название или № инвойса" autocomplete="off" />
+        </label>
+        <label>
+          <span class="upload-label">Дата с</span>
+          <input type="date" id="history-date-from" />
+        </label>
+        <label>
+          <span class="upload-label">Дата по</span>
+          <input type="date" id="history-date-to" />
+        </label>
+        <div class="history-filter-actions">
+          <button type="button" class="btn" id="btn-history-filter-clear">Сбросить</button>
+        </div>
+      </form>
+      <div id="history-list" class="history-list"></div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/assets/history.js?v=1"></script>
+</body>
+</html>

@@ -56,8 +56,6 @@ const state = {
   excelPreviewCache: null,
   excelPreviewFile: 0,
   excelPreviewSheet: 0,
-  historyOpen: false,
-  historyCache: null,
 };
 const extraFiles = new WeakSet();
 
@@ -3554,97 +3552,6 @@ async function exportWithHistory() {
   return zipName;
 }
 
-function setHistoryPanelOpen(open) {
-  state.historyOpen = Boolean(open);
-  const panel = $("#history-panel");
-  if (!panel) return;
-  panel.classList.toggle("hidden", !state.historyOpen);
-}
-
-function renderHistoryList(data) {
-  const box = $("#history-list");
-  const summary = $("#history-summary");
-  if (!box) return;
-  state.historyCache = data;
-  const items = data?.items || [];
-  if (summary) {
-    summary.textContent = items.length
-      ? `Всего ${items.length}, на диске ${formatBytes(data.total_bytes || 0)}. Дата и время — по Москве.`
-      : "Пока пусто. После обработки поставка появится здесь сама.";
-  }
-  if (!items.length) {
-    box.innerHTML = `<p class="history-empty">Записей пока нет.</p>`;
-    return;
-  }
-  box.innerHTML = items
-    .map((item) => {
-      const profile = PROFILE_RU[item.profile_type] || item.profile_type || "";
-      const title = String(item.title || "поставка").replace(/"/g, "&quot;");
-      return `
-        <article class="history-card" data-history-id="${item.id}">
-          <div class="history-card-top">
-            <div>
-              <input class="history-title-input" data-history-rename value="${title}" aria-label="Название поставки" />
-              <p class="history-meta">
-                ${item.updated_at_moscow || item.created_at_moscow || ""}
-                · ${profile}
-                · исходники ${item.source_count || 0} (${formatBytes(item.source_bytes)})
-                · архивы ${item.export_count || 0} (${formatBytes(item.export_bytes)})
-              </p>
-            </div>
-            <div class="history-card-actions">
-              <button type="button" class="btn tiny" data-history-open>Открыть</button>
-              <button type="button" class="btn tiny" data-history-expand>Файлы</button>
-              <button type="button" class="btn tiny danger" data-history-delete>Удалить</button>
-            </div>
-          </div>
-          <div class="history-files hidden" data-history-files></div>
-        </article>`;
-    })
-    .join("");
-}
-
-async function loadHistoryList() {
-  const data = await api("/api/v1/history/");
-  renderHistoryList(data);
-  return data;
-}
-
-async function expandHistoryCard(card) {
-  const id = card?.dataset?.historyId;
-  const filesBox = card?.querySelector("[data-history-files]");
-  if (!id || !filesBox) return;
-  filesBox.classList.remove("hidden");
-  filesBox.innerHTML = `<p class="hint">Загрузка…</p>`;
-  const detail = await api(`/api/v1/history/${encodeURIComponent(id)}`);
-  const sources = detail.sources || [];
-  const exports = detail.exports || [];
-  const renderRows = (rows, kind) => {
-    if (!rows.length) return `<p class="history-empty">Пусто</p>`;
-    return rows
-      .map(
-        (f) => `
-      <div class="history-file-row">
-        <span class="history-file-name">${f.name} · ${formatBytes(f.bytes)}${f.updated_at_moscow ? ` · ${f.updated_at_moscow}` : ""}</span>
-        <span class="history-file-actions">
-          <a class="btn tiny" href="/api/v1/history/${encodeURIComponent(id)}/files/${encodeURIComponent(kind)}/${encodeURIComponent(f.name)}">Скачать</a>
-          <button type="button" class="btn tiny danger" data-history-file-del data-kind="${kind}" data-name="${String(f.name).replace(/"/g, "&quot;")}">Удалить</button>
-        </span>
-      </div>`
-      )
-      .join("");
-  };
-  filesBox.innerHTML = `
-    <div>
-      <h3>Исходники</h3>
-      ${renderRows(sources, "sources")}
-    </div>
-    <div>
-      <h3>Архивы Excel</h3>
-      ${renderRows(exports, "exports")}
-    </div>`;
-}
-
 async function openHistoryShipment(id) {
   if (state.dirty && !window.confirm("Есть несохранённые правки. Открыть другую поставку и потерять их?")) {
     return;
@@ -3670,92 +3577,26 @@ async function openHistoryShipment(id) {
   setSessionLocked(true, { busy: false, buttonLabel: "Из истории" });
   clearDirty();
   renderWorkspace();
-  setHistoryPanelOpen(false);
   showToast("Поставка открыта из истории", { kind: "ok" });
 }
 
-$("#btn-history")?.addEventListener("click", async () => {
-  setHistoryPanelOpen(true);
+async function maybeOpenHistoryFromQuery() {
+  const params = new URLSearchParams(window.location.search || "");
+  const hid = (params.get("open_history") || "").trim();
+  if (!hid) return;
   try {
-    await loadHistoryList();
+    await openHistoryShipment(hid);
+    params.delete("open_history");
+    const next = params.toString();
+    const url = next ? `${window.location.pathname}?${next}` : window.location.pathname;
+    window.history.replaceState({}, "", url);
   } catch (err) {
-    showToast(`История: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5000 });
-  }
-});
-$("#btn-history-close")?.addEventListener("click", () => setHistoryPanelOpen(false));
-$("#btn-history-refresh")?.addEventListener("click", async () => {
-  try {
-    await loadHistoryList();
-    showToast("История обновлена", { kind: "ok" });
-  } catch (err) {
-    showToast(`История: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5000 });
-  }
-});
-
-$("#history-list")?.addEventListener("click", async (e) => {
-  const card = e.target.closest(".history-card");
-  if (!card) return;
-  const id = card.dataset.historyId;
-  try {
-    if (e.target.closest("[data-history-open]")) {
-      await openHistoryShipment(id);
-      return;
-    }
-    if (e.target.closest("[data-history-expand]")) {
-      await expandHistoryCard(card);
-      return;
-    }
-    if (e.target.closest("[data-history-delete]")) {
-      if (!window.confirm("Удалить всю поставку из истории вместе с файлами на сервере?")) return;
-      await api(`/api/v1/history/${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (state.historyId === id) {
-        state.historyId = null;
-      }
-      await loadHistoryList();
-      showToast("Поставка удалена из истории", { kind: "ok" });
-      return;
-    }
-    const delFile = e.target.closest("[data-history-file-del]");
-    if (delFile) {
-      if (!window.confirm("Удалить этот файл с сервера?")) return;
-      await api(`/api/v1/history/${encodeURIComponent(id)}/files`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: delFile.dataset.kind, name: delFile.dataset.name }),
-      });
-      await expandHistoryCard(card);
-      await loadHistoryList();
-      showToast("Файл удалён", { kind: "ok" });
-    }
-  } catch (err) {
-    showToast(`История: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5200 });
-  }
-});
-
-$("#history-list")?.addEventListener("change", async (e) => {
-  const input = e.target.closest("[data-history-rename]");
-  const card = e.target.closest(".history-card");
-  if (!input || !card) return;
-  const id = card.dataset.historyId;
-  const title = (input.value || "").trim();
-  if (!title) {
-    showToast("Название не может быть пустым", { kind: "info" });
-    return;
-  }
-  try {
-    await api(`/api/v1/history/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
+    showToast(`Не удалось открыть из истории: ${humanizeClientError(err.message)}`, {
+      kind: "error",
+      ms: 5200,
     });
-    if (state.historyId === id && state.workspace) {
-      applyShipmentTitle(title, { force: true });
-    }
-    showToast("Название обновлено", { kind: "ok" });
-  } catch (err) {
-    showToast(`Не удалось переименовать: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5000 });
   }
-});
+}
 
 $("#btn-save-history")?.addEventListener("click", async () => {
   const btn = $("#btn-save-history");
@@ -3977,3 +3818,4 @@ $("#opencode-status")?.addEventListener("click", pingOpenCode);
 refreshOpenCodeStatus();
 setInterval(() => refreshOpenCodeStatus(), 15000);
 pipeline.idle();
+maybeOpenHistoryFromQuery();

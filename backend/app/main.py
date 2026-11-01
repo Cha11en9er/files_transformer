@@ -68,6 +68,13 @@ def create_app() -> FastAPI:
                 headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
             )
 
+        @app.get("/history")
+        def history_page() -> FileResponse:
+            return FileResponse(
+                FRONTEND_DIR / "history.html",
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+            )
+
     return app
 
 

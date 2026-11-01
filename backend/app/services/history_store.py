@@ -64,10 +64,35 @@ def init_history_db() -> None:
                 source_bytes INTEGER NOT NULL DEFAULT 0,
                 export_bytes INTEGER NOT NULL DEFAULT 0,
                 source_count INTEGER NOT NULL DEFAULT 0,
-                export_count INTEGER NOT NULL DEFAULT 0
+                export_count INTEGER NOT NULL DEFAULT 0,
+                invoice_no TEXT NOT NULL DEFAULT ''
             )
             """
         )
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(shipments)")}
+        if "invoice_no" not in cols:
+            conn.execute("ALTER TABLE shipments ADD COLUMN invoice_no TEXT NOT NULL DEFAULT ''")
+
+
+def _invoice_from_workspace(workspace: dict[str, Any] | None) -> str:
+    header = (workspace or {}).get("header_fields") or {}
+    return str(header.get("invoice_no") or "").strip()
+
+
+def moscow_date(iso_utc: str) -> str:
+    """Calendar date in Europe/Moscow as YYYY-MM-DD for filters."""
+    text = (iso_utc or "").strip()
+    if not text:
+        return ""
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_MOSCOW).strftime("%Y-%m-%d")
 
 
 def _utc_now() -> datetime:
@@ -240,10 +265,12 @@ def create_draft(
 
     title_text = (title or "").strip() or "поставка"
     profile = str(profile_type or "").strip() or "18233"
+    invoice_no = _invoice_from_workspace(workspace)
     meta = {
         "id": sid,
         "title": title_text,
         "profile_type": profile,
+        "invoice_no": invoice_no,
         "created_at": now,
         "updated_at": now,
         "sources": copied,
@@ -261,12 +288,11 @@ def create_draft(
             """
             INSERT INTO shipments (
                 id, title, profile_type, created_at, updated_at,
-                source_bytes, export_bytes, source_count, export_count
-            ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0)
+                source_bytes, export_bytes, source_count, export_count, invoice_no
+            ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?)
             """,
-            (sid, title_text, profile, now, now, sizes[0], sizes[1]),
+            (sid, title_text, profile, now, now, sizes[0], sizes[1], invoice_no),
         )
-        conn.commit()
     return sid
 
 
@@ -276,7 +302,7 @@ def list_shipments() -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT id, title, profile_type, created_at, updated_at,
-                   source_bytes, export_bytes, source_count, export_count
+                   source_bytes, export_bytes, source_count, export_count, invoice_no
             FROM shipments
             ORDER BY updated_at DESC
             """
@@ -286,6 +312,9 @@ def list_shipments() -> list[dict[str, Any]]:
         item = dict(row)
         item["created_at_moscow"] = moscow_label(item["created_at"])
         item["updated_at_moscow"] = moscow_label(item["updated_at"])
+        item["updated_date_moscow"] = moscow_date(item["updated_at"])
+        item["created_date_moscow"] = moscow_date(item["created_at"])
+        item["invoice_no"] = str(item.get("invoice_no") or "")
         item["total_bytes"] = int(item["source_bytes"] or 0) + int(item["export_bytes"] or 0)
         out.append(item)
     return out
@@ -310,8 +339,8 @@ def get_shipment(shipment_id: str) -> dict[str, Any] | None:
                 """
                 INSERT OR REPLACE INTO shipments (
                     id, title, profile_type, created_at, updated_at,
-                    source_bytes, export_bytes, source_count, export_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_bytes, export_bytes, source_count, export_count, invoice_no
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     sid,
@@ -323,9 +352,9 @@ def get_shipment(shipment_id: str) -> dict[str, Any] | None:
                     sizes["export_bytes"],
                     sizes["source_count"],
                     sizes["export_count"],
+                    str(meta.get("invoice_no") or ""),
                 ),
             )
-            conn.commit()
             row = conn.execute("SELECT * FROM shipments WHERE id = ?", (sid,)).fetchone()
     assert row is not None
     meta = _read_json(_meta_path(sid)) if _meta_path(sid).is_file() else {}
@@ -338,6 +367,10 @@ def get_shipment(shipment_id: str) -> dict[str, Any] | None:
     item = dict(row)
     item["created_at_moscow"] = moscow_label(item["created_at"])
     item["updated_at_moscow"] = moscow_label(item["updated_at"])
+    item["updated_date_moscow"] = moscow_date(item["updated_at"])
+    item["created_date_moscow"] = moscow_date(item["created_at"])
+    if not item.get("invoice_no") and workspace:
+        item["invoice_no"] = _invoice_from_workspace(workspace)
     item["total_bytes"] = int(item["source_bytes"] or 0) + int(item["export_bytes"] or 0)
     item["meta"] = meta
     item["sources"] = _list_files(_sources_dir(sid), "sources")
@@ -390,22 +423,26 @@ def save_workspace(
     title_text = (title if title is not None else ws.get("title") or "").strip()
     if title_text:
         ws["title"] = title_text
+    invoice_no = _invoice_from_workspace(ws)
     _write_json(_workspace_path(sid), ws)
     meta_path = _meta_path(sid)
     meta = _read_json(meta_path) if meta_path.is_file() else {"id": sid}
     if title_text:
         meta["title"] = title_text
+    meta["invoice_no"] = invoice_no
     meta["updated_at"] = now
     _write_json(meta_path, meta)
     with _db() as conn:
         if title_text:
             conn.execute(
-                "UPDATE shipments SET title = ?, updated_at = ? WHERE id = ?",
-                (title_text, now, sid),
+                "UPDATE shipments SET title = ?, invoice_no = ?, updated_at = ? WHERE id = ?",
+                (title_text, invoice_no, now, sid),
             )
         else:
-            conn.execute("UPDATE shipments SET updated_at = ? WHERE id = ?", (now, sid))
-        conn.commit()
+            conn.execute(
+                "UPDATE shipments SET invoice_no = ?, updated_at = ? WHERE id = ?",
+                (invoice_no, now, sid),
+            )
     return get_shipment(sid)
 
 
