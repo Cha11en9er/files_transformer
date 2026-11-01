@@ -401,52 +401,53 @@ def _write_spec_letterhead(ws, header: dict[str, Any], cols: int) -> None:
 
 
 def invoice_headers(ccy: str) -> list[str]:
+    # Порядок как в «Артикул»: №, артикул, фирма, наименование, ТН ВЭД, страна, цена, сумма, нетто…
     return [
         bilingual("No.", "№"),
-        "Customs code / Таможенный код",
-        "DESCRIPTION / Описание",
-        "COUNTRY OF ORIGIN / Страна происхождения",
         "MODEL / SERIES / ART. / Модель, серия, арт.",
         "MANUFACTURER / BRAND / Производитель",
+        "DESCRIPTION / Описание",
+        "Customs code / Таможенный код",
+        "COUNTRY OF ORIGIN / Страна происхождения",
+        f"PRICE PER {ccy} / Цена за ед., {ccy}",
+        f"AMOUNT, {ccy} / Сумма, {ccy}",
         "WEIGHT NETTO, kg / Вес нетто, кг",
         "NETTO WITH PRIMARY PACKAGING, kg / Нетто с первичной упаковкой, кг",
         "QTY / Кол-во",
-        f"PRICE PER {ccy} / Цена за ед., {ccy}",
         "pcs, pcg, set / шт, уп, компл",
-        f"AMOUNT, {ccy} / Сумма, {ccy}",
     ]
 
 
 def packing_headers() -> list[str]:
     return [
         bilingual("No.", "№"),
-        "Customs code / Таможенный код",
-        "DESCRIPTION / Описание",
-        "MANUFACTURER / Производитель",
         "MODEL / SERIES / ART. / Модель, серия, арт.",
+        "MANUFACTURER / Производитель",
+        "DESCRIPTION / Описание",
+        "Customs code / Таможенный код",
+        "COUNTRY OF ORIGIN / Страна происхождения",
+        "WEIGHT NETTO, kg / Вес нетто, кг",
+        "WEIGHT BRUTTO, kg / Вес брутто, кг",
         "PACKAGE / Места",
         "QTY / Кол-во",
-        "WEIGHT NETTO, kg / Вес нетто, кг",
         "WEIGHT NETTO WITH PRIMARY PACKAGING, kg / Нетто с первичной упаковкой, кг",
-        "WEIGHT BRUTTO, kg / Вес брутто, кг",
-        "COUNTRY OF ORIGIN / Страна происхождения",
     ]
 
 
 def spec_headers(ccy: str) -> list[str]:
     return [
-        "НАИМЕНОВАНИЕ ТОВАРА / Description of goods",
         "МОДЕЛЬ, СЕРИЯ, АРТ. / Model, series, art.",
         "ФИРМА ПРОИЗВ-ЛЬ / Manufacturer",
+        "НАИМЕНОВАНИЕ ТОВАРА / Description of goods",
         "СТРАНА ПРОИСХ. / Country of origin",
+        f"СТ-СТЬ {ccy} / Unit price, {ccy}",
+        f"СТОИМОСТЬ, {ccy} / Amount, {ccy}",
+        "ВЕС НЕТТО, КГ / Net weight, kg",
+        "ВЕС БРУТТО, КГ / Gross weight, kg",
         "КОЛ-ВО / Quantity",
         "ЕД.ИЗМ. / Unit",
-        "ВЕС БРУТТО, КГ / Gross weight, kg",
-        "ВЕС НЕТТО, КГ / Net weight, kg",
         "ВЕС НЕТТО С ПЕРВИЧНОЙ УПАКОВКОЙ, КГ / Net with primary packing, kg",
-        f"СТОИМОСТЬ, {ccy} / Amount, {ccy}",
         "ЕД.ИЗМ. / Unit",
-        f"СТ-СТЬ {ccy} / Unit price, {ccy}",
         "РАЗМЕР / Size",
     ]
 
@@ -459,17 +460,17 @@ def invoice_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
         rows.append(
             [
                 idx,
-                _hs(item),
-                _desc(item),
-                _country(item, header),
                 item.get("article") or "",
                 _mfr(item, header),
+                _desc(item),
+                _hs(item),
+                _country(item, header),
+                _fnum(_price(item), 4),
+                _fnum(_amount(item)),
                 net,
                 primary,
                 _count(_qty(item)),
-                _fnum(_price(item), 4),
                 _unit(item),
-                _fnum(_amount(item)),
             ]
         )
     if rows:
@@ -482,12 +483,12 @@ def invoice_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
                 None,
                 None,
                 None,
-                _fnum(sum(float(r[6] or 0) for r in body)),
-                _sum_present(body, 7),
-                _count(sum(float(r[8] or 0) for r in body)),
                 None,
+                _fnum(sum(float(r[7] or 0) for r in body)),
+                _fnum(sum(float(r[8] or 0) for r in body)),
+                _sum_present(body, 9),
+                _count(sum(float(r[10] or 0) for r in body)),
                 None,
-                _fnum(sum(float(r[11] or 0) for r in body)),
             ]
         )
     return rows
@@ -501,16 +502,16 @@ def packing_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
         rows.append(
             [
                 idx,
-                _hs(item),
-                _desc(item),
-                _mfr(item, header),
                 item.get("article") or "",
+                _mfr(item, header),
+                _desc(item),
+                _hs(item),
+                _country(item, header),
+                net,
+                _fnum(_gross(item)),
                 _count(_packages(item)),
                 _count(_qty(item)),
-                net,
                 primary,
-                _fnum(_gross(item)),
-                _country(item, header),
             ]
         )
     if rows:
@@ -522,12 +523,12 @@ def packing_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> 
                 None,
                 None,
                 None,
-                _count(sum(float(r[5] or 0) for r in body)),
-                _count(sum(float(r[6] or 0) for r in body)),
-                _fnum(sum(float(r[7] or 0) for r in body)),
-                _sum_present(body, 8),
-                _fnum(sum(float(r[9] or 0) for r in body)),
                 None,
+                _fnum(sum(float(r[6] or 0) for r in body)),
+                _fnum(sum(float(r[7] or 0) for r in body)),
+                _count(sum(float(r[8] or 0) for r in body)),
+                _count(sum(float(r[9] or 0) for r in body)),
+                _sum_present(body, 10),
             ]
         )
     return rows
@@ -540,18 +541,18 @@ def spec_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> lis
         primary = _fnum(_net_primary(item))
         rows.append(
             [
-                _desc(item),
                 item.get("article") or "",
                 _mfr(item, header),
+                _desc(item),
                 _country(item, header),
+                _fnum(_price(item), 4),
+                _fnum(_amount(item)),
+                net,
+                _fnum(_gross(item)),
                 _count(_qty(item)),
                 _unit(item),
-                _fnum(_gross(item)),
-                net,
                 primary,
-                _fnum(_amount(item)),
                 _unit(item),
-                _fnum(_price(item), 4),
                 (item.get("commercial_data") or {}).get("size") or None,
             ]
         )
@@ -563,13 +564,13 @@ def spec_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> lis
                 None,
                 None,
                 None,
-                _count(sum(float(r[4] or 0) for r in body)),
                 None,
+                _fnum(sum(float(r[5] or 0) for r in body)),
                 _fnum(sum(float(r[6] or 0) for r in body)),
                 _fnum(sum(float(r[7] or 0) for r in body)),
-                _sum_present(body, 8),
-                _fnum(sum(float(r[9] or 0) for r in body)),
+                _count(sum(float(r[8] or 0) for r in body)),
                 None,
+                _sum_present(body, 10),
                 None,
                 None,
             ]
@@ -580,10 +581,10 @@ def spec_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> lis
 def description_headers() -> list[str]:
     return [
         bilingual("No.", "№"),
-        bilingual("HS Code", "Код ТН ВЭД"),
-        bilingual("Manufacturer / Brand", "Изготовитель / Торговая марка"),
         bilingual("Model / Article", "Модель / артикул"),
+        bilingual("Manufacturer / Brand", "Изготовитель / Торговая марка"),
         bilingual("Description", "Описание"),
+        bilingual("HS Code", "Код ТН ВЭД"),
     ]
 
 
@@ -593,10 +594,10 @@ def description_rows(items: list[dict[str, Any]], header: dict[str, Any] | None)
         rows.append(
             [
                 idx,
-                _hs(item),
-                _mfr(item, header),
                 item.get("article") or "",
+                _mfr(item, header),
                 _ru_desc(item) or _desc(item),
+                _hs(item),
             ]
         )
     return rows
@@ -790,44 +791,44 @@ def dt_rows(items: list[dict[str, Any]], header: dict[str, Any] | None) -> list[
 
 TSD_INV_KEYS = [
     "no",
-    "hs_code",
-    "description",
-    "country",
     "article",
     "manufacturer",
+    "description",
+    "hs_code",
+    "country",
+    "price",
+    "amount",
     "net_weight",
     "net_primary",
     "qty",
-    "price",
     "unit",
-    "amount",
 ]
 TSD_PL_KEYS = [
     "no",
-    "hs_code",
-    "description",
-    "manufacturer",
     "article",
+    "manufacturer",
+    "description",
+    "hs_code",
+    "country",
+    "net_weight",
+    "gross_weight",
     "packages",
     "qty",
-    "net_weight",
     "net_primary",
-    "gross_weight",
-    "country",
 ]
 TSD_SPEC_KEYS = [
-    "description",
     "article",
     "manufacturer",
+    "description",
     "country",
+    "price",
+    "amount",
+    "net_weight",
+    "gross_weight",
     "qty",
     "unit",
-    "gross_weight",
-    "net_weight",
     "net_primary",
-    "amount",
     "unit_2",
-    "price",
     "size",
 ]
 

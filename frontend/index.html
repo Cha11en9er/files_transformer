@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=57" />
+  <link rel="stylesheet" href="/assets/styles.css?v=58" />
 </head>
 <body>
   <div class="app">
@@ -117,16 +117,16 @@
         <p class="field-note header-note">Шапка выгрузки: покупатель, продавец, инвойс, контракт, оплата, производитель. Правки из этого блока уходят в Excel при выгрузке.</p>
         <div id="header-changes" class="header-changes" hidden></div>
         <form id="header-form" class="header-form">
+          <label>Invoice No. / № инвойса <input name="invoice_no" /></label>
+          <label>Invoice date / Дата инвойса <input name="invoice_date" /></label>
+          <label>Seller / Фирма / Продавец <input name="seller" /></label>
+          <label>Currency / Валюта <input name="currency" /></label>
           <label>Buyer / Покупатель <input name="buyer" /></label>
           <label>Buyer address / Адрес покупателя <textarea name="buyer_address" rows="2"></textarea></label>
-          <label>Seller / Продавец <input name="seller" /></label>
           <label>Seller address / Адрес продавца <textarea name="seller_address" rows="2"></textarea></label>
           <label>Contract No. / № контракта <input name="contract_no" /></label>
           <label>Contract date / Дата контракта <input name="contract_date" /></label>
-          <label>Invoice No. / № инвойса <input name="invoice_no" /></label>
-          <label>Invoice date / Дата инвойса <input name="invoice_date" /></label>
           <label>Terms of delivery / Условия поставки <input name="delivery_terms" /></label>
-          <label>Currency / Валюта <input name="currency" /></label>
           <label>Terms of payment / Условия оплаты <input name="payment_terms" /></label>
           <label>Manufacturer / Производитель <input name="manufacturer" /></label>
           <label>Delivery date / Срок поставки <input name="delivery_date" /></label>
@@ -268,6 +268,6 @@
     </form>
   </dialog>
 
-  <script src="/assets/app.js?v=77"></script>
+  <script src="/assets/app.js?v=78"></script>
 </body>
 </html>
