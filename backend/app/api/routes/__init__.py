@@ -1,3 +1,3 @@
-from app.api.routes import shipments
+from app.api.routes import history, shipments
 
-__all__ = ["shipments"]
+__all__ = ["history", "shipments"]

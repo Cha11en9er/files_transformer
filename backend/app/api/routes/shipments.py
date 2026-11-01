@@ -43,6 +43,7 @@ from app.schemas.api import (
     ShipmentCreateResponse,
     ValidationErrorOut,
 )
+from app.services.history_store import create_draft as history_create_draft
 from app.services.model_inputs import new_postavka_dir, remove_postavka, stash_reading
 from app.services.opencode_review import review_with_opencode
 from app.services.vision_cache import resolve_vision_file
@@ -1094,9 +1095,11 @@ def _iter_create_events(
             else ShipmentStatus.READY_TO_EXPORT
         )
 
+        shipment_id = uuid.uuid4()
+        resolved_title = resolve_shipment_title(title, header_fields)
         payload = ShipmentCreateResponse(
-            id=uuid.uuid4(),
-            title=resolve_shipment_title(title, header_fields),
+            id=shipment_id,
+            title=resolved_title,
             profile_type=active_profile,
             status=status,
             header_fields=header_fields,
@@ -1117,7 +1120,30 @@ def _iter_create_events(
                 "disk_files": [str(path) for path in disk_paths],
             },
         )
+        history_id: str | None = None
+        try:
+            source_pairs: list[tuple[Path, str]] = []
+            for path_str, display in saved:
+                path = Path(path_str)
+                if path.is_file():
+                    source_pairs.append((path, display))
+            history_id = history_create_draft(
+                title=resolved_title,
+                profile_type=active_profile.value if hasattr(active_profile, "value") else str(active_profile),
+                workspace=payload.model_dump(mode="json"),
+                sources=source_pairs,
+                catalog_names=catalog_names,
+                shipment_id=str(shipment_id),
+            )
+            payload.history_id = history_id
+        except Exception as hist_exc:  # noqa: BLE001 — history must not break recognition
+            header_notes = list(header_notes) + [
+                f"История не записалась: {humanize_exception(hist_exc)}"
+            ]
+            payload.header_notes = header_notes
         done = payload.model_dump(mode="json")
+        if history_id:
+            done["history_id"] = history_id
         if disk_names:
             done["disk_files"] = [str(path) for path in disk_paths]
             done["disk_names"] = disk_names
@@ -1364,8 +1390,8 @@ def attach_source_column(payload: AttachColumnRequest) -> dict[str, Any]:
     return attach_column(items, payload.source_rows or [], payload.column)
 
 
-@router.post("/export")
-def export_workspace(payload: ExportRequest) -> Response:
+def build_export_zip(payload: ExportRequest) -> tuple[bytes, str]:
+    """Build Excel ZIP bytes and download filename from workspace payload."""
     items = [item.model_dump(mode="json") for item in payload.items]
     header = export_header_fields(payload.header_fields or {}, items)
     title = resolve_shipment_title(payload.title, header)
@@ -1391,6 +1417,10 @@ def export_workspace(payload: ExportRequest) -> Response:
                 zf.write(path, arcname=path.name)
         data = zip_buf.getvalue()
     filename = f"{safe_title}_Excel.zip"
+    return data, filename
+
+
+def _zip_response(data: bytes, filename: str) -> Response:
     ascii_name = filename.encode("ascii", "replace").decode("ascii").replace("?", "_")
     if not ascii_name.lower().endswith(".zip"):
         ascii_name = "export.zip"
@@ -1402,6 +1432,12 @@ def export_workspace(payload: ExportRequest) -> Response:
         media_type="application/zip",
         headers={"Content-Disposition": disposition},
     )
+
+
+@router.post("/export")
+def export_workspace(payload: ExportRequest) -> Response:
+    data, filename = build_export_zip(payload)
+    return _zip_response(data, filename)
 
 
 @router.post("/export/preview")

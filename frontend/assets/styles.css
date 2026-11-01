@@ -1580,3 +1580,112 @@ pre {
     text-align: left;
   }
 }
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.history-panel {
+  margin-bottom: 18px;
+}
+.history-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.history-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 12px 14px;
+}
+.history-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.history-title-input {
+  width: min(420px, 100%);
+  font: inherit;
+  font-weight: 600;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.history-meta {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.history-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.history-files {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 720px) {
+  .history-files { grid-template-columns: 1fr; }
+}
+.history-files h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.history-file-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+  border-bottom: 1px solid #eef2f5;
+  font-size: 13px;
+}
+.history-file-row:last-child { border-bottom: 0; }
+.history-file-name {
+  overflow-wrap: anywhere;
+  flex: 1;
+}
+.history-file-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.history-empty {
+  color: var(--muted);
+  padding: 12px 0;
+}
+.history-dirty {
+  color: #8a5a00;
+  background: var(--yellow);
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+.btn.danger {
+  color: #8b1e1e;
+  border-color: #e3b4b4;
+  background: #fff5f5;
+}
+.btn.danger:hover {
+  background: #ffe8e8;
+}
+.btn.tiny {
+  font-size: 12px;
+  padding: 3px 8px;
+}

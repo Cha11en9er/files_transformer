@@ -164,6 +164,37 @@ class ShipmentCreateResponse(BaseModel):
     warning_count: int
     skipped_count: int = 0
     model_review: ModelReviewOut | None = None
+    history_id: str | None = None
+
+
+class HistorySaveRequest(BaseModel):
+    """Persist current browser workspace into an existing history entry."""
+
+    history_id: str
+    title: str = "export"
+    profile_type: ProfileType
+    header_fields: dict[str, Any] = Field(default_factory=dict)
+    items: list[ItemOut] = Field(default_factory=list)
+    column_layout: dict[str, Any] = Field(default_factory=dict)
+    recognition: dict[str, Any] = Field(default_factory=dict)
+    files: list[Any] = Field(default_factory=list)
+    status: str | None = None
+    header_changes: list[Any] = Field(default_factory=list)
+    header_notes: list[str] = Field(default_factory=list)
+    model_review: dict[str, Any] | None = None
+    verdict_run: dict[str, Any] = Field(default_factory=dict)
+    item_count: int | None = None
+    warning_count: int | None = None
+    skipped_count: int | None = None
+
+
+class HistoryRenameRequest(BaseModel):
+    title: str
+
+
+class HistoryDeleteFileRequest(BaseModel):
+    kind: str
+    name: str
 
 
 class WorkspaceOut(BaseModel):

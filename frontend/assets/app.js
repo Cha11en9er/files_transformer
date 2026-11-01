@@ -39,6 +39,8 @@ function emptyColumnLayout() {
 
 const state = {
   shipmentId: null,
+  historyId: null,
+  dirty: false,
   workspace: null,
   selectedItemId: null,
   pendingFiles: [],
@@ -54,6 +56,8 @@ const state = {
   excelPreviewCache: null,
   excelPreviewFile: 0,
   excelPreviewSheet: 0,
+  historyOpen: false,
+  historyCache: null,
 };
 const extraFiles = new WeakSet();
 
@@ -432,8 +436,39 @@ function applyShipmentTitle(value, { force = false } = {}) {
   if (wsTitle && (force || document.activeElement !== wsTitle)) wsTitle.value = next;
 }
 
+function markDirty(reason) {
+  if (!state.workspace) return;
+  state.dirty = true;
+  const el = $("#history-dirty");
+  if (el) {
+    el.classList.remove("hidden");
+    el.textContent =
+      reason ||
+      "Есть несохранённые правки. Сохрани в историю или сформируй Excel — иначе при закрытии страницы они пропадут.";
+  }
+}
+
+function clearDirty() {
+  state.dirty = false;
+  const el = $("#history-dirty");
+  if (el) {
+    el.classList.add("hidden");
+    el.textContent = "";
+  }
+}
+
+function formatBytes(n) {
+  const value = Number(n) || 0;
+  if (value < 1024) return `${value} Б`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} КБ`;
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} МБ`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} ГБ`;
+}
+
 function hideOldWorkspace() {
   state.shipmentId = null;
+  state.historyId = null;
+  clearDirty();
   state.workspace = null;
   state.selectedItemId = null;
   state.role = "invoice";
@@ -1502,8 +1537,11 @@ async function processShipment() {
     if (Array.isArray(created.disk_files)) pipeline.trace.diskFiles = created.disk_files;
     if (Array.isArray(created.disk_names)) pipeline.trace.diskNames = created.disk_names;
     state.shipmentId = created.id;
+    state.historyId = created.history_id || created.id || null;
     state.workspace = created;
+    if (state.historyId) state.workspace.history_id = state.historyId;
     applyShipmentTitle(created.title, { force: true });
+    clearDirty();
     refreshOpenCodeStatus();
     const skipped = created.skipped_count || 0;
     const modelErr = created.model_review && created.model_review.status === "error"
@@ -2933,6 +2971,7 @@ function applyDeleteColumn() {
   state.columnLayout[pending.role] = layout;
   state.pendingDelete = null;
   paintItemsTable();
+  markDirty("Столбец удалён. Сохрани в историю или сформируй Excel.");
 }
 
 $("#column-delete-form")?.addEventListener("submit", (e) => {
@@ -3222,7 +3261,9 @@ async function saveEditedItem() {
     state.workspace.items[idx] = nextItem;
     $("#edit-dialog").close();
     renderWorkspace();
-    $("#upload-status").textContent = "Изменения сохранены в текущем сеансе. При обновлении страницы данные будут потеряны.";
+    markDirty("Строка изменена. Сохрани в историю или сформируй Excel.");
+    $("#upload-status").textContent =
+      "Правки пока только в этом сеансе. Сохрани в историю или сформируй Excel — иначе при обновлении страницы они пропадут.";
     showToast(`Вы изменили ${rowCountLabel(1)}`, { kind: "ok" });
   } catch (err) {
     status.textContent = `Ошибка: ${err.message}`;
@@ -3398,6 +3439,7 @@ function applyAddColumn() {
   state.pendingAdd = null;
   syncRoleTabs();
   paintItemsTable();
+  markDirty("Столбец добавлен. Сохрани в историю или сформируй Excel.");
   showToast("Столбец добавлен в конец таблицы", { kind: "ok" });
 }
 
@@ -3415,8 +3457,9 @@ $("#header-form").addEventListener("submit", async (e) => {
     if (state.excelView) {
       await refreshExportPreview();
     }
+    markDirty("Реквизиты изменены. Сохрани в историю или сформируй Excel.");
     $("#upload-status").textContent =
-      "Реквизиты сохранены в текущем сеансе. При обновлении страницы правки будут потеряны.";
+      "Реквизиты пока только в этом сеансе. Сохрани в историю или сформируй Excel — иначе при обновлении страницы они пропадут.";
     showToast("Реквизиты изменились", { kind: "ok" });
   } catch (err) {
     alert(`Не удалось сохранить шапку: ${err.message}`);
@@ -3451,6 +3494,290 @@ $("#export-preview")?.addEventListener("click", (e) => {
   renderExportPreview(state.excelPreviewCache);
 });
 
+function historySavePayload() {
+  const base = exportPayload();
+  const ws = state.workspace || {};
+  return {
+    history_id: state.historyId || ws.history_id || ws.id,
+    title: base.title,
+    profile_type: base.profile_type,
+    header_fields: base.header_fields,
+    items: base.items,
+    column_layout: base.column_layout,
+    recognition: base.recognition,
+    files: ws.files || [],
+    status: ws.status || null,
+    header_changes: ws.header_changes || [],
+    header_notes: ws.header_notes || [],
+    model_review: ws.model_review || null,
+    verdict_run: ws.verdict_run || {},
+    item_count: ws.item_count ?? (base.items || []).length,
+    warning_count: ws.warning_count ?? 0,
+    skipped_count: ws.skipped_count ?? 0,
+  };
+}
+
+async function saveWorkspaceToHistory() {
+  if (!state.workspace) throw new Error("Нет открытой поставки");
+  const hid = state.historyId || state.workspace.history_id || state.workspace.id;
+  if (!hid) throw new Error("Нет записи в истории для этой поставки");
+  state.historyId = hid;
+  const saved = await api("/api/v1/history/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...historySavePayload(), history_id: hid }),
+  });
+  clearDirty();
+  return saved;
+}
+
+async function exportWithHistory() {
+  const payload = exportPayload();
+  const hid = state.historyId || state.workspace?.history_id || state.workspace?.id;
+  const url = hid ? `/api/v1/history/${encodeURIComponent(hid)}/export` : "/api/v1/shipments/export";
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || res.statusText);
+  }
+  const blob = await res.blob();
+  const zipName = `${state.workspace.title || "export"}_Excel.zip`;
+  await downloadBlob(blob, zipName);
+  if (hid) {
+    state.historyId = hid;
+    clearDirty();
+  }
+  return zipName;
+}
+
+function setHistoryPanelOpen(open) {
+  state.historyOpen = Boolean(open);
+  const panel = $("#history-panel");
+  if (!panel) return;
+  panel.classList.toggle("hidden", !state.historyOpen);
+}
+
+function renderHistoryList(data) {
+  const box = $("#history-list");
+  const summary = $("#history-summary");
+  if (!box) return;
+  state.historyCache = data;
+  const items = data?.items || [];
+  if (summary) {
+    summary.textContent = items.length
+      ? `Всего ${items.length}, на диске ${formatBytes(data.total_bytes || 0)}. Дата и время — по Москве.`
+      : "Пока пусто. После обработки поставка появится здесь сама.";
+  }
+  if (!items.length) {
+    box.innerHTML = `<p class="history-empty">Записей пока нет.</p>`;
+    return;
+  }
+  box.innerHTML = items
+    .map((item) => {
+      const profile = PROFILE_RU[item.profile_type] || item.profile_type || "";
+      const title = String(item.title || "поставка").replace(/"/g, "&quot;");
+      return `
+        <article class="history-card" data-history-id="${item.id}">
+          <div class="history-card-top">
+            <div>
+              <input class="history-title-input" data-history-rename value="${title}" aria-label="Название поставки" />
+              <p class="history-meta">
+                ${item.updated_at_moscow || item.created_at_moscow || ""}
+                · ${profile}
+                · исходники ${item.source_count || 0} (${formatBytes(item.source_bytes)})
+                · архивы ${item.export_count || 0} (${formatBytes(item.export_bytes)})
+              </p>
+            </div>
+            <div class="history-card-actions">
+              <button type="button" class="btn tiny" data-history-open>Открыть</button>
+              <button type="button" class="btn tiny" data-history-expand>Файлы</button>
+              <button type="button" class="btn tiny danger" data-history-delete>Удалить</button>
+            </div>
+          </div>
+          <div class="history-files hidden" data-history-files></div>
+        </article>`;
+    })
+    .join("");
+}
+
+async function loadHistoryList() {
+  const data = await api("/api/v1/history/");
+  renderHistoryList(data);
+  return data;
+}
+
+async function expandHistoryCard(card) {
+  const id = card?.dataset?.historyId;
+  const filesBox = card?.querySelector("[data-history-files]");
+  if (!id || !filesBox) return;
+  filesBox.classList.remove("hidden");
+  filesBox.innerHTML = `<p class="hint">Загрузка…</p>`;
+  const detail = await api(`/api/v1/history/${encodeURIComponent(id)}`);
+  const sources = detail.sources || [];
+  const exports = detail.exports || [];
+  const renderRows = (rows, kind) => {
+    if (!rows.length) return `<p class="history-empty">Пусто</p>`;
+    return rows
+      .map(
+        (f) => `
+      <div class="history-file-row">
+        <span class="history-file-name">${f.name} · ${formatBytes(f.bytes)}${f.updated_at_moscow ? ` · ${f.updated_at_moscow}` : ""}</span>
+        <span class="history-file-actions">
+          <a class="btn tiny" href="/api/v1/history/${encodeURIComponent(id)}/files/${encodeURIComponent(kind)}/${encodeURIComponent(f.name)}">Скачать</a>
+          <button type="button" class="btn tiny danger" data-history-file-del data-kind="${kind}" data-name="${String(f.name).replace(/"/g, "&quot;")}">Удалить</button>
+        </span>
+      </div>`
+      )
+      .join("");
+  };
+  filesBox.innerHTML = `
+    <div>
+      <h3>Исходники</h3>
+      ${renderRows(sources, "sources")}
+    </div>
+    <div>
+      <h3>Архивы Excel</h3>
+      ${renderRows(exports, "exports")}
+    </div>`;
+}
+
+async function openHistoryShipment(id) {
+  if (state.dirty && !window.confirm("Есть несохранённые правки. Открыть другую поставку и потерять их?")) {
+    return;
+  }
+  const detail = await api(`/api/v1/history/${encodeURIComponent(id)}`);
+  const ws = detail.workspace;
+  if (!ws || typeof ws !== "object") {
+    throw new Error("В истории нет сохранённого workspace");
+  }
+  state.historyId = detail.id;
+  state.shipmentId = ws.id || detail.id;
+  state.workspace = { ...ws, history_id: detail.id, title: detail.title || ws.title };
+  if (ws.column_layout && typeof ws.column_layout === "object") {
+    state.columnLayout = {
+      invoice: { hidden: [], extra: [], ...(ws.column_layout.invoice || {}) },
+      packing: { hidden: [], extra: [], ...(ws.column_layout.packing || {}) },
+      specification: { hidden: [], extra: [], ...(ws.column_layout.specification || {}) },
+    };
+  } else {
+    state.columnLayout = emptyColumnLayout();
+  }
+  applyShipmentTitle(state.workspace.title, { force: true });
+  setSessionLocked(true, { busy: false, buttonLabel: "Из истории" });
+  clearDirty();
+  renderWorkspace();
+  setHistoryPanelOpen(false);
+  showToast("Поставка открыта из истории", { kind: "ok" });
+}
+
+$("#btn-history")?.addEventListener("click", async () => {
+  setHistoryPanelOpen(true);
+  try {
+    await loadHistoryList();
+  } catch (err) {
+    showToast(`История: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5000 });
+  }
+});
+$("#btn-history-close")?.addEventListener("click", () => setHistoryPanelOpen(false));
+$("#btn-history-refresh")?.addEventListener("click", async () => {
+  try {
+    await loadHistoryList();
+    showToast("История обновлена", { kind: "ok" });
+  } catch (err) {
+    showToast(`История: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5000 });
+  }
+});
+
+$("#history-list")?.addEventListener("click", async (e) => {
+  const card = e.target.closest(".history-card");
+  if (!card) return;
+  const id = card.dataset.historyId;
+  try {
+    if (e.target.closest("[data-history-open]")) {
+      await openHistoryShipment(id);
+      return;
+    }
+    if (e.target.closest("[data-history-expand]")) {
+      await expandHistoryCard(card);
+      return;
+    }
+    if (e.target.closest("[data-history-delete]")) {
+      if (!window.confirm("Удалить всю поставку из истории вместе с файлами на сервере?")) return;
+      await api(`/api/v1/history/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (state.historyId === id) {
+        state.historyId = null;
+      }
+      await loadHistoryList();
+      showToast("Поставка удалена из истории", { kind: "ok" });
+      return;
+    }
+    const delFile = e.target.closest("[data-history-file-del]");
+    if (delFile) {
+      if (!window.confirm("Удалить этот файл с сервера?")) return;
+      await api(`/api/v1/history/${encodeURIComponent(id)}/files`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: delFile.dataset.kind, name: delFile.dataset.name }),
+      });
+      await expandHistoryCard(card);
+      await loadHistoryList();
+      showToast("Файл удалён", { kind: "ok" });
+    }
+  } catch (err) {
+    showToast(`История: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5200 });
+  }
+});
+
+$("#history-list")?.addEventListener("change", async (e) => {
+  const input = e.target.closest("[data-history-rename]");
+  const card = e.target.closest(".history-card");
+  if (!input || !card) return;
+  const id = card.dataset.historyId;
+  const title = (input.value || "").trim();
+  if (!title) {
+    showToast("Название не может быть пустым", { kind: "info" });
+    return;
+  }
+  try {
+    await api(`/api/v1/history/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    if (state.historyId === id && state.workspace) {
+      applyShipmentTitle(title, { force: true });
+    }
+    showToast("Название обновлено", { kind: "ok" });
+  } catch (err) {
+    showToast(`Не удалось переименовать: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5000 });
+  }
+});
+
+$("#btn-save-history")?.addEventListener("click", async () => {
+  const btn = $("#btn-save-history");
+  if (!state.workspace) {
+    showToast("Сначала обработай поставку", { kind: "info" });
+    return;
+  }
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = "Сохраняю…";
+  try {
+    await saveWorkspaceToHistory();
+    showToast("Сохранено в историю", { kind: "ok" });
+    $("#export-result").textContent = "Текущая версия записана в историю.";
+  } catch (err) {
+    showToast(`Не удалось сохранить: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5200 });
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+});
+
 $("#btn-export").addEventListener("click", async () => {
   const btn = $("#btn-export");
   const box = $("#export-result");
@@ -3465,19 +3792,8 @@ $("#btn-export").addEventListener("click", async () => {
   box.textContent = "Формирование Excel…";
   showToast("Формирование Excel", { kind: "info", ms: 2200 });
   try {
-    const res = await fetch("/api/v1/shipments/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(exportPayload()),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(text || res.statusText);
-    }
-    const blob = await res.blob();
-    const zipName = `${state.workspace.title || "export"}_Excel.zip`;
-    await downloadBlob(blob, zipName);
-    box.textContent = `Файл сохранен: ${zipName}`;
+    const zipName = await exportWithHistory();
+    box.textContent = `Файл сохранен: ${zipName}` + (state.historyId ? " (версия записана в историю)" : "");
     showToast("Excel сформирован", { kind: "ok" });
   } catch (err) {
     box.textContent = `Ошибка экспорта: ${err.message}`;
@@ -3490,10 +3806,19 @@ $("#btn-export").addEventListener("click", async () => {
 
 function onTitleEdited(event) {
   const value = (event.target.value || "").trim();
-  if (state.workspace && value) state.workspace.title = value;
+  if (state.workspace && value) {
+    if (state.workspace.title !== value) markDirty("Название изменено. Сохрани в историю или сформируй Excel.");
+    state.workspace.title = value;
+  }
   const other = event.target === $("#ws-title") ? currentTitleInput() : $("#ws-title");
   if (other && document.activeElement !== other) other.value = event.target.value;
 }
+
+window.addEventListener("beforeunload", (event) => {
+  if (!state.dirty) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 
 currentTitleInput()?.addEventListener("input", onTitleEdited);
 $("#ws-title")?.addEventListener("input", onTitleEdited);

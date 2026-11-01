@@ -8,8 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.routes.history import router as history_router
 from app.api.routes.shipments import router as shipments_router
 from app.parsing.user_messages import humanize_exception
+from app.services.history_store import init_history_db
 from app.services.opencode_review import ping_opencode, probe_opencode
 
 FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
@@ -29,6 +31,11 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(shipments_router)
+    app.include_router(history_router)
+    try:
+        init_history_db()
+    except OSError:
+        pass
 
     @app.exception_handler(Exception)
     async def _unhandled(_request: Request, exc: Exception) -> JSONResponse:

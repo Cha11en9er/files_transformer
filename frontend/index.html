@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=56" />
+  <link rel="stylesheet" href="/assets/styles.css?v=57" />
 </head>
 <body>
   <div class="app">
@@ -16,14 +16,31 @@
         <p class="brand">Таможенные документы</p>
         <h1>Рабочее место</h1>
       </div>
-      <span id="opencode-status" class="model-status unknown" title="Проверить сайт и модель">
-        <span class="dot"></span>
-        <span class="model-status-text">
-          <span id="opencode-status-label">Сайт…</span>
-          <span id="opencode-status-money" class="model-status-money" hidden></span>
+      <div class="top-actions">
+        <button type="button" class="btn" id="btn-history" title="Предыдущие загрузки и выгрузки">История</button>
+        <span id="opencode-status" class="model-status unknown" title="Проверить сайт и модель">
+          <span class="dot"></span>
+          <span class="model-status-text">
+            <span id="opencode-status-label">Сайт…</span>
+            <span id="opencode-status-money" class="model-status-money" hidden></span>
+          </span>
         </span>
-      </span>
+      </div>
     </header>
+
+    <section class="panel history-panel hidden" id="history-panel" aria-label="История поставок">
+      <div class="history-head">
+        <div>
+          <h2>История загрузок</h2>
+          <p class="hint" id="history-summary">Общая лента на весь сайт. Дата и время — по Москве.</p>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn" id="btn-history-refresh">Обновить</button>
+          <button type="button" class="btn" id="btn-history-close">Закрыть</button>
+        </div>
+      </div>
+      <div id="history-list" class="history-list"></div>
+    </section>
 
     <section class="panel upload-panel" id="upload-panel">
       <h2>Загрузка документов</h2>
@@ -86,9 +103,11 @@
           <p id="ws-meta" class="hint"></p>
         </div>
         <div class="actions export-actions">
+          <button type="button" class="btn" id="btn-save-history" title="Записать текущую версию в историю">Сохранить в историю</button>
           <button type="button" class="btn primary" id="btn-export">Сформировать Excel</button>
         </div>
       </div>
+      <p id="history-dirty" class="status history-dirty hidden" aria-live="polite"></p>
       <div id="export-result" class="status export-status" aria-live="polite"></div>
 
       <div class="files-badges" id="files-badges"></div>
@@ -249,6 +268,6 @@
     </form>
   </dialog>
 
-  <script src="/assets/app.js?v=76"></script>
+  <script src="/assets/app.js?v=77"></script>
 </body>
 </html>

@@ -9,8 +9,12 @@ backend/exports/
 backend/data/vision_cache/
 backend/data/model_inputs/*
 !backend/data/model_inputs/.gitkeep
+backend/data/history/*
+!backend/data/history/.gitkeep
 data/model_inputs/
 !data/model_inputs/.gitkeep
+data/history/
+!data/history/.gitkeep
 uploads/
 exports/
 documents/
