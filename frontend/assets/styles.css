@@ -380,15 +380,47 @@ input, select, button, textarea {
   border-radius: 10px;
 }
 
-.btn {
+.btn,
+a.btn,
+a.btn:link,
+a.btn:visited,
+a.btn:hover,
+a.btn:active {
   cursor: pointer;
-  background: white;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--ink);
+  background: #fff;
   border: 1px solid var(--line);
+  border-radius: 8px;
+  text-decoration: none;
+  appearance: none;
+  -webkit-appearance: none;
 }
-.btn.primary {
+.btn:hover,
+a.btn:hover {
+  border-color: #a9b8c4;
+  background: #f8fbfd;
+}
+.btn.primary,
+a.btn.primary,
+a.btn.primary:visited {
   background: linear-gradient(180deg, var(--accent-2), var(--accent));
-  color: white;
+  color: #fff;
   border-color: transparent;
+}
+.btn.primary:hover,
+a.btn.primary:hover {
+  filter: brightness(1.03);
 }
 .form-actions .btn.primary:disabled,
 .btn.primary:disabled,
@@ -1622,12 +1654,6 @@ pre {
   display: flex;
   gap: 8px;
   align-items: end;
-}
-a.btn {
-  text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 @media (max-width: 820px) {
   .history-filters {
