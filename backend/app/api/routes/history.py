@@ -73,13 +73,31 @@ def rename_history(history_id: str, payload: HistoryRenameRequest) -> dict[str, 
 
 @router.post("/")
 def save_history(payload: HistorySaveRequest) -> dict[str, Any]:
+    """Save workspace and always write an Excel ZIP into history exports."""
     hid = (payload.history_id or "").strip()
     if not hid:
         raise HTTPException(status_code=400, detail="Нет history_id")
     item = history_store.save_workspace(hid, _workspace_blob(payload), title=payload.title)
     if item is None:
         raise HTTPException(status_code=404, detail="Поставка в истории не найдена")
-    return item
+    # «Сохранить в историю» раньше писало только workspace.json — архивы оставались Пусто.
+    # ZIP пишем здесь же, без скачивания: тот же build_export_zip, что у кнопки Excel.
+    from app.api.routes.shipments import build_export_zip
+
+    export_payload = ExportRequest(
+        title=payload.title,
+        profile_type=payload.profile_type,
+        header_fields=payload.header_fields or {},
+        items=payload.items,
+        column_layout=payload.column_layout or {},
+        recognition=payload.recognition or {},
+    )
+    data, filename = build_export_zip(export_payload)
+    stored = history_store.store_export_zip(hid, data, filename=filename)
+    if stored is None:
+        raise HTTPException(status_code=500, detail="Workspace сохранён, но архив в историю не записался")
+    refreshed = history_store.get_shipment(hid)
+    return refreshed or item
 
 
 @router.post("/{history_id}/export")

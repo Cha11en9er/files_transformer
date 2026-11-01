@@ -2884,7 +2884,7 @@ function paintItemsTable() {
       })
       .join("");
     tr.innerHTML = `
-      <td class="row-no">${idx + 1}</td>
+      <td class="row-no"><span class="row-no-inner">${idx + 1}<button type="button" class="row-action" data-row-delete="${escapeHtml(item.id)}" aria-label="Удалить строку" title="Удалить строку">×</button></span></td>
       ${body}
       <td class="flags-cell">
         <button type="button" class="btn compact-btn item-edit-btn" data-edit-item="${escapeHtml(item.id)}">Изменить</button>
@@ -2905,6 +2905,22 @@ function paintItemsTable() {
   fillExcelTotals(ws.items || [], ws.model_review);
 }
 
+function askDeleteRow(itemId) {
+  if (!state.workspace) return;
+  const items = state.workspace.items || [];
+  const item = items.find((row) => String(row.id) === String(itemId));
+  if (!item) return;
+  const label = (item.article || itemField(item, "description") || `строка`).toString().trim().slice(0, 80);
+  if (!window.confirm(`Удалить строку ${label}?`)) return;
+  state.workspace.items = items.filter((row) => String(row.id) !== String(itemId));
+  state.workspace.item_count = state.workspace.items.length;
+  renderWorkspace();
+  markDirty("Строка удалена. Сохрани в историю или сформируй Excel.");
+  $("#upload-status").textContent =
+    "Правки пока только в этом сеансе. Сохрани в историю или сформируй Excel — иначе при обновлении страницы они пропадут.";
+  showToast("Строка удалена", { kind: "ok" });
+}
+
 function toggleLongCell(td, open) {
   if (!td?.classList.contains("cell-long")) return;
   td.classList.toggle("is-open", open);
@@ -2913,6 +2929,13 @@ function toggleLongCell(td, open) {
 }
 
 $("#items-table")?.addEventListener("click", (e) => {
+  const delRow = e.target.closest("[data-row-delete]");
+  if (delRow) {
+    e.preventDefault();
+    e.stopPropagation();
+    askDeleteRow(delRow.dataset.rowDelete);
+    return;
+  }
   const del = e.target.closest("[data-col-delete]");
   if (del) {
     e.preventDefault();
@@ -3608,9 +3631,13 @@ $("#btn-save-history")?.addEventListener("click", async () => {
   const prev = btn.textContent;
   btn.textContent = "Сохраняю…";
   try {
-    await saveWorkspaceToHistory();
-    showToast("Сохранено в историю", { kind: "ok" });
-    $("#export-result").textContent = "Текущая версия записана в историю.";
+    const saved = await saveWorkspaceToHistory();
+    const exports = Number(saved?.export_count || 0);
+    showToast(exports > 0 ? "Сохранено в историю (Excel в архивах)" : "Сохранено в историю", { kind: "ok" });
+    $("#export-result").textContent =
+      exports > 0
+        ? `Текущая версия и Excel-архив записаны в историю (${exports}).`
+        : "Текущая версия записана в историю.";
   } catch (err) {
     showToast(`Не удалось сохранить: ${humanizeClientError(err.message)}`, { kind: "error", ms: 5200 });
   } finally {

@@ -158,6 +158,9 @@ class HistoryApiTest(unittest.TestCase):
             },
         )
         self.assertEqual(saved.status_code, 200)
+        saved_body = saved.json()
+        self.assertGreaterEqual(int(saved_body.get("export_count") or 0), 1)
+        self.assertTrue(saved_body.get("exports"))
 
         deleted_file = self.client.request(
             "DELETE",
