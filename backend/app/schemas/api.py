@@ -186,6 +186,9 @@ class HistorySaveRequest(BaseModel):
     item_count: int | None = None
     warning_count: int | None = None
     skipped_count: int | None = None
+    # Оптимистичная блокировка: updated_at на момент открытия/последнего save.
+    base_updated_at: str | None = None
+    force: bool = False
 
 
 class HistoryRenameRequest(BaseModel):

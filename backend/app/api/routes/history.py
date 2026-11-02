@@ -15,6 +15,7 @@ from app.schemas.api import (
     HistorySaveRequest,
 )
 from app.services import history_store
+from app.services.history_store import HistoryConflictError
 
 router = APIRouter(prefix="/api/v1/history", tags=["history"])
 
@@ -77,7 +78,25 @@ def save_history(payload: HistorySaveRequest) -> dict[str, Any]:
     hid = (payload.history_id or "").strip()
     if not hid:
         raise HTTPException(status_code=400, detail="Нет history_id")
-    item = history_store.save_workspace(hid, _workspace_blob(payload), title=payload.title)
+    try:
+        item = history_store.save_workspace(
+            hid,
+            _workspace_blob(payload),
+            title=payload.title,
+            base_updated_at=payload.base_updated_at,
+            force=bool(payload.force),
+        )
+    except HistoryConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "history_conflict",
+                "message": "Эту поставку уже сохранил кто-то другой. Обнови из истории или перезапиши своей версией.",
+                "updated_at": exc.updated_at,
+                "title": exc.title,
+                "id": exc.shipment_id,
+            },
+        ) from exc
     if item is None:
         raise HTTPException(status_code=404, detail="Поставка в истории не найдена")
     # «Сохранить в историю» раньше писало только workspace.json — архивы оставались Пусто.

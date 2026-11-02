@@ -296,6 +296,16 @@ def create_draft(
     return sid
 
 
+def shipment_updated_at(shipment_id: str) -> str:
+    sid = str(shipment_id or "").strip()
+    if not sid:
+        return ""
+    init_history_db()
+    with _db() as conn:
+        row = conn.execute("SELECT updated_at FROM shipments WHERE id = ?", (sid,)).fetchone()
+    return str(row["updated_at"] if row else "") or ""
+
+
 def list_shipments() -> list[dict[str, Any]]:
     init_history_db()
     with _db() as conn:
@@ -408,15 +418,34 @@ def rename_shipment(shipment_id: str, title: str) -> dict[str, Any] | None:
     return get_shipment(sid)
 
 
+class HistoryConflictError(Exception):
+    """Someone else already saved this history row."""
+
+    def __init__(self, shipment_id: str, updated_at: str, title: str = "") -> None:
+        self.shipment_id = shipment_id
+        self.updated_at = updated_at
+        self.title = title
+        super().__init__(f"conflict:{shipment_id}")
+
+
 def save_workspace(
     shipment_id: str,
     workspace: dict[str, Any],
     *,
     title: str | None = None,
+    base_updated_at: str | None = None,
+    force: bool = False,
 ) -> dict[str, Any] | None:
     sid = str(shipment_id or "").strip()
     if not sid or get_shipment(sid) is None:
         return None
+    with _db() as conn:
+        row = conn.execute("SELECT updated_at, title FROM shipments WHERE id = ?", (sid,)).fetchone()
+    current_updated = str(row["updated_at"] if row else "") or ""
+    current_title = str(row["title"] if row else "") or ""
+    expected = (base_updated_at or "").strip()
+    if expected and not force and current_updated and expected != current_updated:
+        raise HistoryConflictError(sid, current_updated, current_title)
     now = _iso(_utc_now())
     ws = dict(workspace or {})
     ws["history_id"] = sid

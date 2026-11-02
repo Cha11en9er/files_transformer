@@ -147,6 +147,8 @@ class HistoryApiTest(unittest.TestCase):
         self.assertEqual(patched.status_code, 200)
         self.assertEqual(patched.json()["title"], "Новое имя")
 
+        got = self.client.get(f"/api/v1/history/{self.hid}").json()
+        base_at = got.get("updated_at")
         saved = self.client.post(
             "/api/v1/history/",
             json={
@@ -155,12 +157,39 @@ class HistoryApiTest(unittest.TestCase):
                 "profile_type": "BEIJING",
                 "items": [],
                 "header_fields": {"invoice_no": "X"},
+                "base_updated_at": base_at,
             },
         )
         self.assertEqual(saved.status_code, 200)
         saved_body = saved.json()
         self.assertGreaterEqual(int(saved_body.get("export_count") or 0), 1)
         self.assertTrue(saved_body.get("exports"))
+
+        stale = self.client.post(
+            "/api/v1/history/",
+            json={
+                "history_id": self.hid,
+                "title": "Чужая правка",
+                "profile_type": "BEIJING",
+                "items": [],
+                "header_fields": {"invoice_no": "Y"},
+                "base_updated_at": base_at,
+            },
+        )
+        self.assertEqual(stale.status_code, 409)
+        forced = self.client.post(
+            "/api/v1/history/",
+            json={
+                "history_id": self.hid,
+                "title": "Чужая правка",
+                "profile_type": "BEIJING",
+                "items": [],
+                "header_fields": {"invoice_no": "Y"},
+                "base_updated_at": base_at,
+                "force": True,
+            },
+        )
+        self.assertEqual(forced.status_code, 200)
 
         deleted_file = self.client.request(
             "DELETE",

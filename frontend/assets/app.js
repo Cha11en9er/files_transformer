@@ -51,6 +51,7 @@ function emptyColumnLayout() {
 const state = {
   shipmentId: null,
   historyId: null,
+  historyUpdatedAt: null,
   dirty: false,
   workspace: null,
   selectedItemId: null,
@@ -500,6 +501,7 @@ function formatBytes(n) {
 function hideOldWorkspace() {
   state.shipmentId = null;
   state.historyId = null;
+  state.historyUpdatedAt = null;
   clearDirty();
   state.workspace = null;
   state.selectedItemId = null;
@@ -1728,6 +1730,7 @@ async function processShipment() {
     if (Array.isArray(created.disk_names)) pipeline.trace.diskNames = created.disk_names;
     state.shipmentId = created.id;
     state.historyId = created.history_id || created.id || null;
+    state.historyUpdatedAt = created.history_updated_at || null;
     state.workspace = created;
     if (state.historyId) state.workspace.history_id = state.historyId;
     applyShipmentTitle(created.title, { force: true });
@@ -3737,7 +3740,7 @@ $("#export-preview")?.addEventListener("click", (e) => {
   renderExportPreview(state.excelPreviewCache);
 });
 
-function historySavePayload() {
+function historySavePayload(force = false) {
   const base = exportPayload();
   const ws = state.workspace || {};
   return {
@@ -3757,7 +3760,39 @@ function historySavePayload() {
     item_count: ws.item_count ?? (base.items || []).length,
     warning_count: ws.warning_count ?? 0,
     skipped_count: ws.skipped_count ?? 0,
+    base_updated_at: state.historyUpdatedAt || null,
+    force: Boolean(force),
   };
+}
+
+async function postHistorySave(hid, force = false) {
+  const res = await fetch("/api/v1/history/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...historySavePayload(force), history_id: hid }),
+  });
+  const text = await res.text();
+  let body = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = null;
+  }
+  if (res.status === 409) {
+    const detail = body?.detail && typeof body.detail === "object" ? body.detail : {};
+    const err = new Error(detail.message || "Конфликт сохранения");
+    err.code = "history_conflict";
+    err.updatedAt = detail.updated_at || "";
+    throw err;
+  }
+  if (!res.ok) {
+    let detail = text || res.statusText;
+    if (body?.detail) {
+      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    }
+    throw new Error(detail);
+  }
+  return body;
 }
 
 async function saveWorkspaceToHistory() {
@@ -3765,11 +3800,18 @@ async function saveWorkspaceToHistory() {
   const hid = state.historyId || state.workspace.history_id || state.workspace.id;
   if (!hid) throw new Error("Нет записи в истории для этой поставки");
   state.historyId = hid;
-  const saved = await api("/api/v1/history/", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...historySavePayload(), history_id: hid }),
-  });
+  let saved;
+  try {
+    saved = await postHistorySave(hid, false);
+  } catch (err) {
+    if (err?.code !== "history_conflict") throw err;
+    const ok = window.confirm(
+      "Эту поставку уже сохранил кто-то другой.\n\nОК - перезаписать своей версией.\nОтмена - оставить чужую и не сохранять."
+    );
+    if (!ok) throw new Error("Сохранение отменено: на сервере уже другая версия");
+    saved = await postHistorySave(hid, true);
+  }
+  if (saved?.updated_at) state.historyUpdatedAt = saved.updated_at;
   clearDirty();
   return saved;
 }
@@ -3807,6 +3849,7 @@ async function openHistoryShipment(id) {
     throw new Error("В истории нет сохранённого workspace");
   }
   state.historyId = detail.id;
+  state.historyUpdatedAt = detail.updated_at || null;
   state.shipmentId = ws.id || detail.id;
   state.workspace = { ...ws, history_id: detail.id, title: detail.title || ws.title };
   if (ws.column_layout && typeof ws.column_layout === "object") {

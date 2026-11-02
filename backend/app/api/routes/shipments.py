@@ -44,6 +44,7 @@ from app.schemas.api import (
     ValidationErrorOut,
 )
 from app.services.history_store import create_draft as history_create_draft
+from app.services.history_store import shipment_updated_at as history_updated_at
 from app.services.model_inputs import new_postavka_dir, remove_postavka, stash_reading
 from app.services.opencode_review import review_with_opencode
 from app.services.vision_cache import resolve_vision_file
@@ -508,6 +509,10 @@ def _items_from_rows(rows: list[dict[str, Any]]) -> list[ItemOut]:
     return items
 
 
+# Одновременно тяжёлых разборов на одном процессе uvicorn. Остальные ждут слот, не мешая /health.
+_PARSE_SLOTS = threading.Semaphore(max(1, int(os.getenv("MAX_PARALLEL_SHIPMENTS") or "3")))
+
+
 def _iter_create_events(
     *,
     title: str,
@@ -515,14 +520,44 @@ def _iter_create_events(
     incoming: list[UploadFile],
     catalog_names: set[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
+    total = len(incoming)
+    yield {"event": "start", "total": total}
+    if not _PARSE_SLOTS.acquire(blocking=False):
+        yield {
+            "event": "progress",
+            "current": 0,
+            "total": total,
+            "filename": "Очередь",
+            "stage": "parse",
+            "message": "Сервер занят другими поставками. Ждём свободный слот…",
+        }
+        _PARSE_SLOTS.acquire(blocking=True)
+    try:
+        yield from _iter_create_events_locked(
+            title=title,
+            profile_type=profile_type,
+            incoming=incoming,
+            catalog_names=catalog_names,
+            total=total,
+        )
+    finally:
+        _PARSE_SLOTS.release()
+
+
+def _iter_create_events_locked(
+    *,
+    title: str,
+    profile_type: ProfileType,
+    incoming: list[UploadFile],
+    catalog_names: set[str] | None = None,
+    total: int,
+) -> Iterator[dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="parse_") as tmp:
         tmp_dir = Path(tmp)
         file_outs: list[FileOut] = []
         skipped_count = 0
         header_fields: dict[str, Any] = {}
         active_profile = profile_type
-        total = len(incoming)
-        yield {"event": "start", "total": total}
 
         saved: list[tuple[str, str]] = []
         for index, upload in enumerate(incoming, start=1):
@@ -1143,6 +1178,7 @@ def _iter_create_events(
         done = payload.model_dump(mode="json")
         if history_id:
             done["history_id"] = history_id
+            done["history_updated_at"] = history_updated_at(history_id)
         if disk_names:
             done["disk_files"] = [str(path) for path in disk_paths]
             done["disk_names"] = disk_names
