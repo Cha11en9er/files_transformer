@@ -2669,10 +2669,17 @@ function fillReviewDialog(ws, filename) {
   if (!tabs || !body) return;
   const { files } = reviewSources(ws);
   const finalRows = finalReviewRows(ws);
-  const wanted = filename && filename !== "__final__" ? findReviewFile(files, filename) : null;
+  const askFile = filename && filename !== "__final__" ? String(filename) : "";
+  const wanted = askFile ? findReviewFile(files, askFile) : null;
+  const showFinal = !askFile;
   const title = $("#review-dialog-title");
-  if (title) title.textContent = wanted ? `Файл: ${wanted.filename || ""}` : "Итоговая таблица";
-  const finalActive = !wanted ? " active" : "";
+  if (title) {
+    title.textContent = wanted
+      ? `Файл: ${wanted.filename || ""}`
+      : askFile
+        ? `Файл: ${askFile}`
+        : "Итоговая таблица";
+  }
   const fileTabs = files
     .map((file) => {
       const n = recognizedRows(file).length;
@@ -2684,18 +2691,22 @@ function fillReviewDialog(ws, filename) {
     .join("");
   tabs.innerHTML =
     fileTabs +
-    `<button type="button" class="review-tab${finalActive}" data-review-file="__final__">Итоговая таблица · ${finalRows.length}</button>`;
-  if (meta) {
-    meta.textContent = wanted
-      ? `${recognizedRows(wanted).length} строк в этом файле`
-      : `${finalRows.length} строк в итоге`;
-  }
+    `<button type="button" class="review-tab${showFinal ? " active" : ""}" data-review-file="__final__">Итоговая таблица · ${finalRows.length}</button>`;
   if (wanted) {
+    if (meta) meta.textContent = `${recognizedRows(wanted).length} строк в этом файле`;
     body.innerHTML = renderFilePane(wanted);
     body.dataset.reviewFile = wanted.filename || "";
     return;
   }
+  if (askFile) {
+    if (meta) meta.textContent = "Лист без товарных строк";
+    body.innerHTML = `<div class="check-card"><h4>${escapeHtml(askFile)}</h4>
+      <p class="check-why">Этот лист пустой или без товарных строк. Его не используем. Открой лист с таблицей вкладкой выше.</p></div>`;
+    body.dataset.reviewFile = "";
+    return;
+  }
   body.dataset.reviewFile = "";
+  if (meta) meta.textContent = `${finalRows.length} строк в итоге`;
   if (!finalRows.length) {
     body.innerHTML = `<p class="hint">Итоговую таблицу собрать не удалось. Открой отдельный файл вкладкой выше.</p>`;
     return;
@@ -2983,7 +2994,7 @@ function renderWorkspace() {
 
   const badges = $("#files-badges");
   badges.innerHTML = "";
-  // Файлы поставки и отдельные оповещения (сверка/модель) - разными чипами.
+  // Файлы с таблицей + оповещения. Пустые Лист2/Лист3 без строк не рисуем.
   const reviewNames = new Set(reviewSources(ws).files.map((entry) => entry.filename));
   (ws.files || []).forEach((f) => {
     const named = String(f.filename || "");
@@ -3002,10 +3013,12 @@ function renderWorkspace() {
       badges.appendChild(alertBtn);
       return;
     }
+    const isCatalog = f.doc_type === "CATALOG";
+    const hasOwnTable = reviewNames.has(f.filename);
+    if (!hasOwnTable && !isCatalog) return;
     const name = named.toLowerCase().split(" / ")[0];
     const isPdf = name.endsWith(".pdf");
     const isExcel = /\.(xlsx|xls|xlsm)$/.test(name);
-    const hasOwnTable = reviewNames.has(f.filename);
     const clickable = parseStatus !== "skipped";
     const span = document.createElement(clickable ? "button" : "span");
     span.type = clickable ? "button" : undefined;
@@ -3017,19 +3030,20 @@ function renderWorkspace() {
           : f.doc_type === "SPECIFICATION"
             ? "specification"
             : guessRoleFromName(named);
-    const typeRu = roleRu(roleGuess) || DOC_TYPE_RU[f.doc_type] || (isPdf ? "PDF" : isExcel ? "Excel" : "");
+    const typeRu =
+      roleRu(roleGuess) || DOC_TYPE_RU[f.doc_type] || (isCatalog ? "Справочник" : isPdf ? "PDF" : isExcel ? "Excel" : "");
     span.className = `badge ${parseStatus === "ok" ? "" : parseStatus} ${clickable ? "clickable" : ""}`.trim();
     let statusHint = "";
     if (parseStatus === "skipped") statusHint = " · пропущен";
     else if (parseStatus === "review") statusHint = " · проверить";
     else if (hasOwnTable) statusHint = " · есть строки";
-    span.title = clickable ? (hasOwnTable ? "Открыть таблицу этого файла" : "Открыть итоговую таблицу") : "";
+    span.title = clickable ? "Открыть этот файл" : "";
     span.setAttribute("aria-controls", "review-dialog");
     span.textContent = typeRu ? `${f.filename} - ${typeRu}${statusHint}` : `${f.filename}${statusHint}`;
     if (clickable) {
       span.addEventListener("click", (event) => {
         event.preventDefault();
-        openReviewPanel(hasOwnTable ? f.filename : "__final__");
+        openReviewPanel(f.filename);
       });
     }
     badges.appendChild(span);

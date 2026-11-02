@@ -643,6 +643,7 @@ def _iter_create_events_locked(
                 "roles": [str(r) for r in (doc.get("roles") or []) if r],
             }
             for doc in (draft.get("documents") or [])
+            if int(doc.get("line_count") or 0) > 0 or str(doc.get("role") or "") in {"image", "scan"}
         ]
         draft_preview = _draft_preview_rows(lots)
         yield {
@@ -980,6 +981,10 @@ def _iter_create_events_locked(
         for doc in draft.get("documents") or []:
             name = str(doc.get("name") or "")
             role = str(doc.get("role") or "")
+            line_count = int(doc.get("line_count") or 0)
+            # Пустой Excel-лист (Лист2/Лист3 без строк) в UI и статусы не тащим.
+            if line_count <= 0 and role not in {"image", "scan"}:
+                continue
             message = f"нашлось {found} позиций"
             roles = [r for r in (doc.get("roles") or []) if r]
             if len(roles) > 1:
