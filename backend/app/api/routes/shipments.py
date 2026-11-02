@@ -592,7 +592,7 @@ def _iter_create_events(
                 "filename": "Справочник",
                 "stage": "catalog",
                 "message": f"Справочник: {len(references)} файл(ов)",
-                "detail": ", ".join(name for _path, name in references[:8]),
+                "detail": f"{len(references)} файлов",
             }
         draft = yield from _while_busy("Чтение файлов кодом", lambda: read_goods(reading))
         catalog = load_catalogs(references)
@@ -622,8 +622,6 @@ def _iter_create_events(
             "draft_preview": draft_preview,
             "detail": f"{len(lots)} лотов",
         }
-        seller = str(draft.get("seller") or "")[:40]
-        buyer = str(draft.get("buyer") or "")[:40]
         inv = str(draft.get("invoice_no") or "")
         yield {
             "event": "progress",
@@ -632,7 +630,8 @@ def _iter_create_events(
             "filename": "Шапка",
             "stage": "header",
             "message": f"Шапка: инвойс {inv or '—'}; продавец/покупатель",
-            "detail": " / ".join(part for part in (seller, buyer) if part) or "шапка",
+            # Короткая подпись на графе: секунды + число файлов, без имён фирм.
+            "detail": f"{len(draft_docs)} файлов" if draft_docs else "шапка",
             "draft_lots": len(lots),
             "draft_docs": draft_docs,
             "draft_preview": draft_preview,

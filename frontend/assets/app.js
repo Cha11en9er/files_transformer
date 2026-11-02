@@ -6,6 +6,17 @@ const DOC_TYPE_RU = {
   PERMIT: "РД",
 };
 
+const ROLE_RU = {
+  invoice: "Инвойс",
+  packing: "Пакинг",
+  specification: "Спецификация",
+  proforma: "Проформа",
+  duplicate: "Дубль",
+  image: "Картинка",
+  scan: "Скан",
+  catalog: "Справочник",
+};
+
 const STATUS_RU = {
   DRAFT: "Черновик",
   UPLOADING: "Загрузка",
@@ -298,6 +309,29 @@ function fileCountLabel(n) {
   if (n10 === 1 && n100 !== 11) return `${n} файл`;
   if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return `${n} файла`;
   return `${n} файлов`;
+}
+
+function lotCountLabel(n) {
+  const n10 = n % 10;
+  const n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return `${n} лот`;
+  if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return `${n} лота`;
+  return `${n} лотов`;
+}
+
+function roleRu(role) {
+  const key = String(role || "").trim().toLowerCase();
+  if (!key || key === "unknown") return "";
+  return ROLE_RU[key] || "";
+}
+
+function guessRoleFromName(name) {
+  const text = String(name || "").toLowerCase();
+  if (text.includes("инвойс") || text.includes("invoice")) return "invoice";
+  if (text.includes("пакинг") || text.includes("packing") || text.includes("упаков")) return "packing";
+  if (text.includes("спецификац") || text.includes("specification")) return "specification";
+  if (text.includes("заполнител") || text.includes("filler")) return "";
+  return "";
 }
 
 function sheetCountLabel(n) {
@@ -1040,13 +1074,35 @@ const pipeline = {
     }
     this.paint();
   },
+  shortCount(node) {
+    const id = node?.id || "";
+    const tr = this.trace || {};
+    const draftN = (tr.draftDocs || []).length;
+    const uploadN = (tr.files || []).filter((f) => !f.catalog).length;
+    const diskN = tr.diskCount || (tr.diskNames || []).length || 0;
+    const fileN = draftN || uploadN || diskN || 0;
+    const lots = Number.isFinite(tr.draftLots)
+      ? tr.draftLots
+      : Array.isArray(state.workspace?.items)
+        ? state.workspace.items.length
+        : 0;
+    if (["receive", "catalog", "read", "header", "files"].includes(id) && fileN) {
+      return fileCountLabel(fileN);
+    }
+    if (["lines", "join", "check", "verdict", "verdict2", "assemble", "done"].includes(id) && lots) {
+      return lotCountLabel(lots);
+    }
+    return "";
+  },
   timeLabel(node) {
-    const note = node.detail ? ` · ${node.detail}` : "";
-    if (node.state === "run" && node.started) return `идёт ${formatStepSeconds(Date.now() - node.started)}${note}`;
+    // Только секунды + короткий счётчик. Длинный detail (фирмы, имена файлов) на граф не кладём.
+    const count = this.shortCount(node);
+    const suffix = count ? ` · ${count}` : "";
+    if (node.state === "run" && node.started) return `идёт ${formatStepSeconds(Date.now() - node.started)}${suffix}`;
     if ((node.state === "past" || node.state === "fail") && (node.started || node.serverSeconds != null)) {
       const client = node.started ? (node.ended || Date.now()) - node.started : 0;
       const server = node.serverSeconds != null ? node.serverSeconds * 1000 : 0;
-      return `${formatStepSeconds(Math.max(client, server))}${note}`;
+      return `${formatStepSeconds(Math.max(client, server))}${suffix}`;
     }
     if (node.state === "skip") return "не было";
     return "";
@@ -1177,7 +1233,7 @@ function openNodeDialog(nodeId) {
   });
 }
 
-function draftPreviewTableHtml(rows) {
+function draftPreviewTableHtml(rows, title) {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return "";
   const body = list
@@ -1198,203 +1254,325 @@ function draftPreviewTableHtml(rows) {
       return `<tr>${cells}</tr>`;
     })
     .join("");
-  return `<div class="check-card"><h4>Что прочитал код</h4>
-    <p class="check-why">Черновик до модели. Модель может поправить числа и строки по файлам.</p>
+  return `<div class="check-card"><h4>${escapeHtml(title || "Строки")}</h4>
     <div class="table-scroll"><table class="mini-table">
       <thead><tr><th>№</th><th>Артикул</th><th>Описание</th><th>Шт</th><th>Места</th><th>Нетто</th><th>Брутто</th><th>Сумма</th><th>ТН ВЭД</th></tr></thead>
       <tbody>${body}</tbody>
     </table></div></div>`;
 }
 
-function draftReadHtml() {
+function readFileEntries() {
   const ws = state.workspace;
   const tr = pipeline.trace || {};
-  const sources = reviewSources(ws).files;
-  const fileStatuses = (ws?.files || [])
-    .filter((f) => f.filename && f.filename !== "сверка" && f.filename !== "модель")
-    .map((f) => `<li><strong>${escapeHtml(f.filename || "")}</strong>: ${escapeHtml(f.parse_message || "")}</li>`)
-    .join("");
-  const draftDocs = (tr.draftDocs || [])
-    .map((d) => {
-      const roles = (d.roles || []).length ? ` · ${(d.roles || []).join(", ")}` : d.role ? ` · ${d.role}` : "";
-      return `<li><strong>${escapeHtml(d.name || "")}</strong>${escapeHtml(roles)}</li>`;
+  const sources = reviewSources(ws).files || [];
+  const byName = new Map(sources.map((f) => [String(f.filename || ""), f]));
+  const seen = new Set();
+  const entries = [];
+  const pushEntry = (name, role, statusText) => {
+    const key = String(name || "").trim();
+    if (!key || key === "сверка" || key === "модель" || seen.has(key.toLowerCase())) return;
+    seen.add(key.toLowerCase());
+    const roleKey = role || guessRoleFromName(key);
+    const label = roleRu(roleKey);
+    entries.push({
+      name: key,
+      role: roleKey,
+      roleLabel: label,
+      statusText: statusText || "",
+      file: byName.get(key) || null,
+    });
+  };
+  (tr.draftDocs || []).forEach((d) => {
+    const roles = (d.roles || []).map((r) => roleRu(r)).filter(Boolean);
+    const one = roleRu(d.role) || roles[0] || "";
+    pushEntry(d.name, d.role || guessRoleFromName(d.name), one);
+  });
+  (ws?.files || []).forEach((f) => {
+    if (!f?.filename || f.filename === "сверка" || f.filename === "модель") return;
+    const role =
+      f.doc_type === "INVOICE"
+        ? "invoice"
+        : f.doc_type === "PACKING_LIST"
+          ? "packing"
+          : f.doc_type === "SPECIFICATION"
+            ? "specification"
+            : guessRoleFromName(f.filename);
+    pushEntry(f.filename, role, "");
+  });
+  sources.forEach((f) => pushEntry(f.filename, guessRoleFromName(f.filename), f.meaning || ""));
+  return entries;
+}
+
+function draftReadHtml(selectedName) {
+  const entries = readFileEntries();
+  const tr = pipeline.trace || {};
+  const lots = Number.isFinite(tr.draftLots) ? tr.draftLots : null;
+  const readDone = ["past", "run", "fail"].includes(pipeline.nodes.read?.state) || pipeline.finished;
+  const activeName = selectedName && entries.some((e) => e.name === selectedName) ? selectedName : entries[0]?.name || "";
+  const active = entries.find((e) => e.name === activeName) || null;
+  let head = "";
+  if (lots != null) head = `<p class="check-why">Код прочитал ${lotCountLabel(lots)}. Выбери файл слева, чтобы посмотреть его таблицу.</p>`;
+  else if (readDone) head = `<p class="check-why">Чтение закончено. Выбери файл, чтобы посмотреть, что собрал код.</p>`;
+  else head = `<p class="check-why">Идёт чтение файлов.</p>`;
+  const chips = entries
+    .map((entry) => {
+      const roleBit = entry.roleLabel ? ` · ${entry.roleLabel}` : "";
+      const activeCls = entry.name === activeName ? " active" : "";
+      return `<button type="button" class="review-tab${activeCls}" data-draft-file="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}${escapeHtml(roleBit)}</button>`;
     })
     .join("");
-  const lots = Number.isFinite(tr.draftLots) ? tr.draftLots : null;
-  const preview = draftPreviewTableHtml(tr.draftPreview || []);
-  const readDone = ["past", "run", "fail"].includes(pipeline.nodes.read?.state) || pipeline.finished;
-  let head = "";
-  if (lots != null) {
-    head = `<p class="check-why">Код уже прочитал: ${lots} лот(ов)${draftDocs ? `, файлы ниже` : ""}.</p>`;
+  let body = "";
+  if (active?.file) {
+    body = `<div class="check-card">${renderFilePane(active.file)}</div>`;
+  } else if (active) {
+    body = `<div class="check-card"><h4>${escapeHtml(active.name)}</h4>
+      <p class="check-why">${active.roleLabel ? `Роль: ${escapeHtml(active.roleLabel)}. ` : ""}Таблица по этому листу ещё не собралась или лист без товарных строк.</p></div>`;
+  } else if (tr.draftPreview?.length) {
+    body = draftPreviewTableHtml(tr.draftPreview, "Что прочитал код");
   } else if (readDone) {
-    head = `<p class="check-why">Чтение закончено. Ниже то, что собрал код до модели.</p>`;
-  } else {
-    head = `<p class="check-why">Идёт чтение файлов кодом.</p>`;
+    body = `<p class="hint">По файлам пока нет таблиц. Смотри итоговую таблицу ниже на странице.</p>`;
   }
-  const docsBlock = draftDocs
-    ? `<div class="check-card"><h4>Файлы в черновике</h4><ul>${draftDocs}</ul></div>`
-    : "";
-  const statusBlock = fileStatuses
-    ? `<div class="check-card"><h4>Статусы файлов</h4><ul>${fileStatuses}</ul></div>`
-    : "";
-  const tables = sources
+  return `<div class="check-card"><h4>Чтение файлов</h4>${head}
+    ${chips ? `<div class="review-tabs step-file-tabs">${chips}</div>` : ""}
+  </div>${body}`;
+}
+
+function headerSummaryHtml() {
+  const hf = state.workspace?.header_fields || {};
+  const fields = [
+    ["invoice_no", "№ инвойса"],
+    ["invoice_date", "Дата инвойса"],
+    ["seller", "Продавец"],
+    ["buyer", "Покупатель"],
+    ["contract_no", "№ контракта"],
+    ["contract_date", "Дата контракта"],
+    ["delivery_terms", "Условия поставки"],
+    ["currency", "Валюта"],
+    ["payment_terms", "Условия оплаты"],
+    ["manufacturer", "Производитель"],
+  ];
+  const rows = fields
+    .map(([key, label]) => {
+      const value = String(hf[key] || "").trim();
+      if (!value) return "";
+      return `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`;
+    })
+    .filter(Boolean)
+    .join("");
+  if (!rows) {
+    return `<div class="check-card"><h4>Шапка</h4>
+      <p class="check-why">Код ищет продавца, покупателя, номер и даты. Пока поля пустые или шаг ещё идёт.</p></div>`;
+  }
+  return `<div class="check-card"><h4>Шапка</h4>
+    <p class="check-why">Что код взял из документов для шапки выгрузки.</p>
+    <div class="table-scroll"><table class="mini-table header-summary-table"><tbody>${rows}</tbody></table></div></div>`;
+}
+
+function roleSourceGroups() {
+  const files = reviewSources(state.workspace).files || [];
+  const groups = { invoice: [], packing: [], specification: [], other: [] };
+  files.forEach((file) => {
+    const meaning = String(file.meaning || "").toLowerCase();
+    const role = guessRoleFromName(file.filename) || guessRoleFromName(meaning);
+    if (role === "invoice" || meaning.includes("инвойс")) groups.invoice.push(file);
+    else if (role === "packing" || meaning.includes("пакинг") || meaning.includes("упаков")) groups.packing.push(file);
+    else if (role === "specification" || meaning.includes("спецификац")) groups.specification.push(file);
+    else groups.other.push(file);
+  });
+  return groups;
+}
+
+function linesStageHtml(selectedRole) {
+  const groups = roleSourceGroups();
+  const tabs = [
+    ["invoice", "Инвойс", groups.invoice],
+    ["packing", "Пакинг", groups.packing],
+    ["specification", "Спецификация", groups.specification],
+  ].filter(([, , list]) => list.length);
+  const tr = pipeline.trace || {};
+  if (!tabs.length) {
+    return `<div class="check-card"><h4>Строки</h4>
+      <p class="check-why">Код собирает строки товаров до строки TOTAL по каждому листу.</p></div>
+      ${draftPreviewTableHtml(tr.draftPreview || [], "Строки черновика")}`;
+  }
+  const activeRole = tabs.some(([key]) => key === selectedRole) ? selectedRole : tabs[0][0];
+  const chips = tabs
     .map(
-      (file) => `<div class="check-card"><h4>${escapeHtml(file.filename || "файл")}</h4>
-        <p class="check-why">${escapeHtml(file.note || file.meaning || "Таблица из черновика кода")}</p>
-        ${renderRecognizedTable(file.table, file)}</div>`
+      ([key, label, list]) =>
+        `<button type="button" class="review-tab${key === activeRole ? " active" : ""}" data-lines-role="${key}">${escapeHtml(label)} · ${list.length}</button>`
     )
     .join("");
-  if (preview || tables || docsBlock || statusBlock) {
-    return `<div class="check-card"><h4>Черновик кода</h4>${head}</div>${docsBlock}${preview}${statusBlock}${tables}`;
-  }
-  if (readDone) {
-    return `<div class="check-card"><h4>Черновик кода</h4>${head}<p class="hint">Таблица черновика ещё не пришла. Подожди конец чтения или открой после сборки «Готово».</p></div>`;
-  }
-  return `<div class="check-card"><h4>Черновик кода</h4>${head}</div>`;
+  const activeFiles = (tabs.find(([key]) => key === activeRole) || [])[2] || [];
+  const panes = activeFiles.map((file) => `<div class="check-card">${renderFilePane(file)}</div>`).join("");
+  return `<div class="check-card"><h4>Строки</h4>
+    <p class="check-why">Таблицы по ролям документов. Переключи вкладку, чтобы увидеть инвойс, пакинг или спецификацию.</p>
+    <div class="review-tabs step-file-tabs">${chips}</div>
+  </div>${panes}`;
 }
 
-function renderDiskFiles() {
+function joinStageHtml() {
   const tr = pipeline.trace || {};
-  const count = tr.diskCount || (tr.diskNames || []).length || (tr.diskFiles || []).length;
-  return `<div class="check-card"><h4>Файлы для модели</h4>
-    <p class="check-why">Исходники на диске сервера. Модель читает их по абсолютному пути (без JPEG-кадров).</p>
-    <p class="check-why"><strong>${count || 0} файлов</strong></p></div>`;
+  const lots = Number.isFinite(tr.draftLots) ? tr.draftLots : state.workspace?.items?.length;
+  const roles = readFileEntries()
+    .map((e) => e.roleLabel)
+    .filter(Boolean);
+  const uniqRoles = [...new Set(roles)];
+  const roleText = uniqRoles.length ? uniqRoles.join(", ") : "инвойс, пакинг и спецификацию";
+  return `<div class="check-card"><h4>Склейка</h4>
+    <p class="check-why">Код соединяет ${escapeHtml(roleText)} в общие позиции поставки.</p>
+    <p class="check-why">${lots != null ? `Получилось ${lotCountLabel(lots)}.` : "Число лотов ещё считается."} Одинаковый товар с разных листов становится одной строкой; разные количества остаются разными лотами.</p>
+  </div>`;
 }
 
-function edgeDialogHtml(edgeId) {
-  const ws = state.workspace;
-  const rec = recognitionOf(ws);
+function checkStageHtml() {
   const tr = pipeline.trace || {};
-  if (edgeId === "receive-read" || edgeId === "receive-catalog") {
-    const rows = (tr.files || [])
-      .filter((f) => (edgeId === "receive-catalog" ? f.catalog : !f.catalog))
-      .map((f) => `<li><strong>${escapeHtml(f.name)}</strong> · ${Math.round((f.size || 0) / 1024)} КБ</li>`)
-      .join("");
-    return `<div class="check-card"><h4>${edgeId === "receive-catalog" ? "Справочник" : "Файлы поставки"}</h4><ul>${rows || "<li>пусто</li>"}</ul></div>`;
-  }
-  if (edgeId === "catalog-read") {
-    return `<div class="check-card"><h4>Справочник</h4><p class="check-why">Допишет код и описание только в пустые клетки по артикулу.</p></div>`;
-  }
-  if (edgeId === "read-check") return draftReadHtml();
-  if (edgeId === "read-header") return codeStageHtml("header");
-  if (edgeId === "header-lines") return codeStageHtml("lines");
-  if (edgeId === "lines-join" || edgeId === "join-check") return codeStageHtml("join");
-  if (edgeId === "check-assemble" || edgeId === "check-verdict") {
-    return renderSheetChecks({ ...rec, reasons: rec.reasons?.length ? rec.reasons : tr.reasons, checks: rec.checks?.length ? rec.checks : tr.checks, leftovers: rec.leftovers?.length ? rec.leftovers : tr.leftovers, unreadable: rec.unreadable?.length ? rec.unreadable : tr.unreadable, route: rec.route || pipeline.route })
-      || `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Пока нет расхождений или шаг ещё идёт.</p></div>`;
-  }
-  if (edgeId === "check-files") {
-    const checks =
-      renderSheetChecks({
-        ...rec,
-        reasons: rec.reasons?.length ? rec.reasons : tr.reasons,
-        checks: rec.checks?.length ? rec.checks : tr.checks,
-        leftovers: rec.leftovers?.length ? rec.leftovers : tr.leftovers,
-        unreadable: rec.unreadable?.length ? rec.unreadable : tr.unreadable,
-        route: rec.route || pipeline.route,
-      }) ||
-      `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Дальше модель сверяет черновик с исходными файлами.</p></div>`;
-    return `${checks}${renderDiskFiles()}`;
-  }
-  if (edgeId === "files-verdict") return renderDiskFiles();
-  if (edgeId === "verdict-verdict2") {
-    return `<div class="check-card"><h4>Улучшенная модель</h4><p class="check-why">Мало столбцов, сомнения или дыра мест. Смотрит более сильная модель.</p></div>`;
-  }
-  if (edgeId === "verdict-assemble" || edgeId === "verdict2-assemble") {
-    const review = ws?.model_review || {};
-    return `<div class="check-card"><h4>${edgeId === "verdict2-assemble" ? "Сильная модель" : "Обычная модель"}</h4>
-      <p class="check-why">${escapeHtml(review.meaning || "Вердикт ещё не пришёл.")}</p>
-      ${review.error ? `<p class="parse-error">${escapeHtml(humanizeClientError(review.error))}</p>` : ""}
-      <p class="hint">${escapeHtml(review.model_label || review.model || "")}</p></div>`;
-  }
-  if (edgeId === "assemble-done") return recognizedAllFilesHtml();
-  return `<div class="check-card"><p class="check-why">Нет данных по этому ребру.</p></div>`;
-}
-
-function recognizedAllFilesHtml() {
-  const ws = state.workspace;
-  if (!ws) {
-    return `<div class="check-card"><h4>Итог</h4><p class="check-why">Файлы ещё собираются.</p></div>`;
-  }
-  const title = ws.title || "Поставка";
-  const sources = reviewSources(ws).files;
-  const fileIndex = (ws.files || [])
-    .filter((f) => f.filename && f.filename !== "сверка" && f.filename !== "модель")
-    .map((f) => {
-      const typeRu = DOC_TYPE_RU[f.doc_type] || "";
-      const msg = f.parse_message ? ` - ${f.parse_message}` : "";
-      return `<li><strong>${escapeHtml(f.filename || "")}</strong>${typeRu ? ` · ${escapeHtml(typeRu)}` : ""}${escapeHtml(msg)}</li>`;
-    })
-    .join("");
-  const panes = sources.map((file) => `<div class="check-card">${renderFilePane(file)}</div>`).join("");
-  const empty =
-    !sources.length && !fileIndex
-      ? `<p class="hint">По файлам пока нет распознанных таблиц.</p>`
-      : !sources.length
-        ? `<p class="hint">Таблицы по листам не собрались - список файлов выше.</p>`
-        : "";
-  return `<div class="check-card">
-      <h4>${escapeHtml(title)}</h4>
-      <p class="check-why">Что распозналось из каждого файла и листа. Сводная таблица поставки - внизу страницы, здесь её нет.</p>
-      ${fileIndex ? `<ul>${fileIndex}</ul>` : ""}
-    </div>${panes}${empty}`;
-}
-
-function codeStageHtml(kind) {
-  const tr = pipeline.trace || {};
-  const titles = {
-    header: "Шапка",
-    lines: "Строки тела",
-    join: "Склейка лотов",
-  };
-  const why = {
-    header: "Код снял продавца, покупателя, номер и даты из документов.",
-    lines: "Код собрал строки тела до TOTAL по ролям.",
-    join: "Код склеил инвойс, пакинг и спецификацию в лоты.",
-  };
-  const detail = tr.detail || "";
-  const lots = Number.isFinite(tr.draftLots) ? tr.draftLots : null;
-  const preview = draftPreviewTableHtml(tr.draftPreview || []);
-  return `<div class="check-card"><h4>${escapeHtml(titles[kind] || kind)}</h4>
-    <p class="check-why">${escapeHtml(why[kind] || "")}</p>
-    ${lots != null ? `<p class="check-why">Лотов в черновике: ${lots}${detail ? ` · ${escapeHtml(detail)}` : ""}</p>` : ""}
-  </div>${preview || ""}`;
-}
-
-function nodeDialogHtml(nodeId) {
-  const map = {
-    receive: ["receive-read", "receive-catalog"],
-    catalog: ["receive-catalog", "catalog-read"],
-    read: ["read-check"],
-    header: ["read-header"],
-    lines: ["header-lines"],
-    join: ["lines-join"],
-    check: ["check-assemble", "check-files", "check-verdict"],
-    files: ["files-verdict"],
-    verdict: ["verdict-assemble", "check-verdict"],
-    verdict2: ["verdict-verdict2", "verdict2-assemble"],
-    assemble: ["assemble-done"],
-    done: ["assemble-done"],
-  };
-  if (nodeId === "read") return draftReadHtml();
-  if (nodeId === "header" || nodeId === "lines" || nodeId === "join") return codeStageHtml(nodeId);
-  if (nodeId === "files") return renderDiskFiles();
-  if (nodeId === "assemble" || nodeId === "done") return recognizedAllFilesHtml();
-  if (nodeId === "check") {
-    const tr = pipeline.trace || {};
-    const rec = recognitionOf(state.workspace);
-    return renderSheetChecks({
+  const rec = recognitionOf(state.workspace);
+  return (
+    renderSheetChecks({
       ...rec,
       reasons: rec.reasons?.length ? rec.reasons : tr.reasons,
       checks: rec.checks?.length ? rec.checks : tr.checks,
       leftovers: rec.leftovers?.length ? rec.leftovers : tr.leftovers,
       unreadable: rec.unreadable?.length ? rec.unreadable : tr.unreadable,
       route: rec.route || pipeline.route,
-    }) || `<div class="check-card"><h4>Сверка</h4><p class="check-why">Пока нет данных сверки.</p></div>`;
+    }) ||
+    `<div class="check-card"><h4>Сверка</h4>
+      <p class="check-why">Сверяем суммы строк с итогом на листе. Если всё сошлось - замечаний нет.</p></div>`
+  );
+}
+
+function sourceDownloadHref(name) {
+  const hid = state.historyId || state.workspace?.history_id || state.workspace?.id;
+  if (!hid || !name) return "";
+  const base = String(name).split(" / ")[0].trim();
+  if (!base) return "";
+  return `/api/v1/history/${encodeURIComponent(hid)}/files/sources/${encodeURIComponent(base)}`;
+}
+
+function filesStageHtml() {
+  const uploads = uniqueUploadNames(state.workspace?.files || []);
+  const tr = pipeline.trace || {};
+  const names = uploads.length ? uploads : tr.diskNames || (tr.files || []).filter((f) => !f.catalog).map((f) => f.name);
+  if (!names.length) {
+    return `<div class="check-card"><h4>Файлы</h4><p class="check-why">Список загруженных файлов появится после обработки.</p></div>`;
   }
-  const edges = map[nodeId] || [];
-  const parts = edges.map((id) => edgeDialogHtml(id)).filter(Boolean);
-  return parts.join("") || `<div class="check-card"><p class="check-why">По этому шагу пока нечего показать.</p></div>`;
+  const rows = names
+    .map((name) => {
+      const href = sourceDownloadHref(name);
+      const link = href
+        ? `<a class="btn tiny" href="${escapeHtml(href)}" download>Скачать</a>`
+        : `<span class="hint">скачивание после сохранения в историю</span>`;
+      return `<li class="file-download-row"><strong>${escapeHtml(name)}</strong> ${link}</li>`;
+    })
+    .join("");
+  return `<div class="check-card"><h4>Файлы</h4>
+    <p class="check-why">Загруженные исходники этой поставки.</p>
+    <ul class="file-download-list">${rows}</ul></div>`;
+}
+
+function modelSummaryHtml(strong) {
+  const review = state.workspace?.model_review || {};
+  const usedSecond = Boolean(pipeline.usedSecond || state.workspace?.verdict_run?.used_second);
+  const title = strong ? "Сильная модель" : "Модель";
+  const status =
+    review.status === "error"
+      ? "ошибка"
+      : review.status === "ok" || review.status === "ready"
+        ? "готово"
+        : review.status
+          ? String(review.status)
+          : pipeline.nodes.verdict?.state === "skip"
+            ? "не вызывали"
+            : "ещё идёт";
+  const changes = Array.isArray(review.items)
+    ? review.items.filter((item) => item && (item.verdict === "question" || item.verdict === "extra" || item.notes)).length
+    : 0;
+  return `<div class="check-card"><h4>${title}</h4>
+    <p class="check-why">Модель смотрит исходные файлы и может поправить числа или строки после кода.</p>
+    <p class="check-why">Статус: <strong>${escapeHtml(status)}</strong>${usedSecond ? " · вызывали более сильную модель" : ""}.</p>
+    <p class="check-why">${escapeHtml(review.meaning || "Краткий вердикт появится после ответа модели.")}</p>
+    ${changes ? `<p class="check-why">Замечаний по строкам: ${changes}. Подробности - в предупреждениях под графом и в таблице ниже.</p>` : ""}
+    ${review.error ? `<p class="parse-error">${escapeHtml(humanizeClientError(review.error))}</p>` : ""}
+  </div>`;
+}
+
+function assembleStageHtml() {
+  return `<div class="check-card"><h4>Сборка</h4>
+    <p class="check-why">Результат уже на странице ниже: реквизиты, таблица позиций и кнопки файлов. Здесь ничего дополнительно не дублируем.</p></div>`;
+}
+
+function doneSummaryHtml() {
+  const ws = state.workspace;
+  if (!ws) {
+    return `<div class="check-card"><h4>Готово</h4><p class="check-why">Обработка ещё идёт.</p></div>`;
+  }
+  const n = (ws.items || []).length;
+  const warns = ws.warning_count || 0;
+  const sheets = (ws.files || []).filter((f) => {
+    const name = String(f.filename || "");
+    return name && name !== "сверка" && name !== "модель";
+  }).length;
+  const roles = [];
+  if ((ws.items || []).length) {
+    roles.push("инвойс", "пакинг", "спецификация");
+  }
+  return `<div class="check-card"><h4>Готово</h4>
+    <p class="check-why">Всё получилось: ${lotCountLabel(n)}${sheets ? `, ${fileCountLabel(sheets)}` : ""}${roles.length ? ` на листах ${roles.join(", ")}` : ""}${warns ? `, замечаний ${warns}` : ""}.</p>
+    <p class="check-why">Проверь таблицу и реквизиты ниже. Если нужно - поправь строку или сохрани в историю.</p></div>`;
+}
+
+function receiveStageHtml(catalogOnly) {
+  const tr = pipeline.trace || {};
+  const rows = (tr.files || [])
+    .filter((f) => (catalogOnly ? f.catalog : !f.catalog))
+    .map((f) => `<li><strong>${escapeHtml(f.name)}</strong> · ${Math.round((f.size || 0) / 1024)} КБ</li>`)
+    .join("");
+  return `<div class="check-card"><h4>${catalogOnly ? "Справочник" : "Приём файлов"}</h4>
+    <ul>${rows || "<li>пусто</li>"}</ul></div>`;
+}
+
+function edgeDialogHtml(edgeId) {
+  const edgeToNode = {
+    "receive-read": "receive",
+    "receive-catalog": "catalog",
+    "catalog-read": "catalog",
+    "read-check": "read",
+    "read-header": "header",
+    "header-lines": "lines",
+    "lines-join": "join",
+    "join-check": "join",
+    "check-assemble": "check",
+    "check-verdict": "check",
+    "check-files": "files",
+    "files-verdict": "files",
+    "verdict-verdict2": "verdict2",
+    "verdict-assemble": "verdict",
+    "verdict2-assemble": "verdict2",
+    "assemble-done": "done",
+  };
+  const nodeId = edgeToNode[edgeId];
+  if (nodeId) return nodeDialogHtml(nodeId);
+  return `<div class="check-card"><p class="check-why">Нет данных по этому шагу.</p></div>`;
+}
+
+function nodeDialogHtml(nodeId) {
+  if (nodeId === "receive") return receiveStageHtml(false);
+  if (nodeId === "catalog") {
+    return `${receiveStageHtml(true)}
+      <div class="check-card"><h4>Зачем справочник</h4>
+      <p class="check-why">Дописывает код и описание только в пустые клетки по артикулу.</p></div>`;
+  }
+  if (nodeId === "read") return draftReadHtml();
+  if (nodeId === "header") return headerSummaryHtml();
+  if (nodeId === "lines") return linesStageHtml();
+  if (nodeId === "join") return joinStageHtml();
+  if (nodeId === "check") return checkStageHtml();
+  if (nodeId === "files") return filesStageHtml();
+  if (nodeId === "verdict") return modelSummaryHtml(false);
+  if (nodeId === "verdict2") return modelSummaryHtml(true);
+  if (nodeId === "assemble") return assembleStageHtml();
+  if (nodeId === "done") return doneSummaryHtml();
+  return `<div class="check-card"><p class="check-why">По этому шагу пока нечего показать.</p></div>`;
 }
 
 const photoZoom = { scale: 1, x: 0, y: 0, drag: false, lastX: 0, lastY: 0 };
@@ -1430,6 +1608,20 @@ $("#flow-svg")?.addEventListener("click", (e) => {
 });
 $("#edge-dialog-close")?.addEventListener("click", () => $("#edge-dialog")?.close());
 $("#edge-dialog-body")?.addEventListener("click", (e) => {
+  const draftFile = e.target.closest("[data-draft-file]");
+  if (draftFile) {
+    e.preventDefault();
+    const body = $("#edge-dialog-body");
+    if (body) body.innerHTML = `${stepBadge(pipeline.nodes.read?.state)}${draftReadHtml(draftFile.dataset.draftFile)}`;
+    return;
+  }
+  const linesRole = e.target.closest("[data-lines-role]");
+  if (linesRole) {
+    e.preventDefault();
+    const body = $("#edge-dialog-body");
+    if (body) body.innerHTML = `${stepBadge(pipeline.nodes.lines?.state)}${linesStageHtml(linesRole.dataset.linesRole)}`;
+    return;
+  }
   const thumb = e.target.closest("[data-photo-url]");
   if (!thumb) return;
   openPhotoLightbox(thumb.dataset.photoUrl, thumb.dataset.photoTitle);
@@ -2418,7 +2610,7 @@ function renderSheetChecks(recognition) {
   const cards = [];
   if (reasons.length) {
     cards.push(
-      `<div class="check-card"><h4>Почему так решили</h4><ul>${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>`
+      `<div class="check-card"><h4>На что обратить внимание</h4><ul>${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>`
     );
   }
   checks.forEach((check) => {
@@ -2426,33 +2618,45 @@ function renderSheetChecks(recognition) {
       const field = CHECK_FIELD_RU[gap.field] || gap.field || "";
       cards.push(`<div class="check-card">
         <h4>${escapeHtml(check.name || "лист")}</h4>
-        <p class="check-why">Столбец «${escapeHtml(field)}»: сумма строк ${formatNum(gap.rows)}, итог листа ${formatNum(gap.printed)}. Оба числа оставляем.</p>
+        <p class="check-why">По столбцу «${escapeHtml(field)}» сумма строк ${formatNum(gap.rows)}, а в итоге листа написано ${formatNum(gap.printed)}. Оба числа оставляем - сверь глазами по документу.</p>
       </div>`);
     });
   });
   leftovers.forEach((item) => {
     cards.push(`<div class="check-card">
       <h4>${escapeHtml(item.name || "лист")}</h4>
-      <p class="check-why">${escapeHtml(item.why || "Строки с количеством не вошли в лоты")}. Лист помечен, не пропал.</p>
+      <p class="check-why">${escapeHtml(item.why || "Часть строк с количеством не попала в итоговые позиции")}. Лист не потерялся - проверь вручную.</p>
     </div>`);
   });
   unreadable.forEach((item) => {
     cards.push(`<div class="check-card">
       <h4>${escapeHtml(item.name || "файл")}</h4>
-      <p class="check-why">Нет текстового слоя. Числа берёт модель из исходного файла.</p>
+      <p class="check-why">Это скан без текста. Числа смотрит модель по картинке файла.</p>
     </div>`);
   });
   if (!cards.length) {
     const route = recognition?.route;
     if (route === "known") {
-      return `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">Суммы строк совпали с итогом листов. Модель всё равно сверяет исходные файлы.</p></div>`;
+      return `<div class="check-card"><h4>Сверка</h4><p class="check-why">Суммы строк совпали с итогом листов. Замечаний нет.</p></div>`;
     }
     if (route === "similar") {
-      return `<div class="check-card"><h4>Сверка итогов</h4><p class="check-why">На части листов нет напечатанного итога. Модель сверяет черновик с исходными файлами.</p></div>`;
+      return `<div class="check-card"><h4>Сверка</h4><p class="check-why">На части листов нет напечатанного итога. Модель дополнительно сверит файлы.</p></div>`;
     }
     return "";
   }
-  return `<h4>Сверка с итогом листов</h4>${cards.join("")}`;
+  return `<div class="check-card"><h4>Сверка</h4><p class="check-why">Сравниваем суммы строк с итогом на листе.</p></div>${cards.join("")}`;
+}
+
+function openAlertNotice(kind, message) {
+  const title = kind === "модель" ? "Замечание модели" : "Замечание по сверке";
+  openStepDialog({
+    title,
+    meta: "Это только предупреждение",
+    html: `<div class="check-card">
+      <p class="check-why">${escapeHtml(message || "Нужно проверить документы.")}</p>
+      <p class="hint">Полная таблица поставки - ниже на странице. Здесь только текст замечания.</p>
+    </div>`,
+  });
 }
 
 function fillReviewDialog(ws, filename) {
@@ -2460,33 +2664,37 @@ function fillReviewDialog(ws, filename) {
   const body = $("#review-dialog-body");
   const meta = $("#review-dialog-meta");
   if (!tabs || !body) return;
-  const review = ws.model_review;
   const { files } = reviewSources(ws);
   const finalRows = finalReviewRows(ws);
   const wanted = filename && filename !== "__final__" ? findReviewFile(files, filename) : null;
   const title = $("#review-dialog-title");
-  if (title) title.textContent = wanted ? `Таблица из ${sourceKind(wanted)}` : "Что распозналось";
+  if (title) title.textContent = wanted ? `Файл: ${wanted.filename || ""}` : "Итоговая таблица";
   const finalActive = !wanted ? " active" : "";
   const fileTabs = files
     .map((file) => {
       const n = recognizedRows(file).length;
       const active = wanted && file.filename === wanted.filename ? " active" : "";
-      return `<button type="button" class="review-tab${active}" data-review-file="${escapeHtml(file.filename || "")}">${escapeHtml(file.filename || "файл")} · ${n}</button>`;
+      const role = roleRu(guessRoleFromName(file.filename) || guessRoleFromName(file.meaning)) || "";
+      const label = role ? `${file.filename || "файл"} · ${role}` : `${file.filename || "файл"} · ${n}`;
+      return `<button type="button" class="review-tab${active}" data-review-file="${escapeHtml(file.filename || "")}">${escapeHtml(label)}</button>`;
     })
     .join("");
   tabs.innerHTML =
-    `<button type="button" class="review-tab${finalActive}" data-review-file="__final__">Итог · ${finalRows.length}</button>` +
-    fileTabs;
+    fileTabs +
+    `<button type="button" class="review-tab${finalActive}" data-review-file="__final__">Итоговая таблица · ${finalRows.length}</button>`;
   if (meta) {
-    meta.textContent = review?.meaning || (wanted ? `${recognizedRows(wanted).length} строк` : `${finalRows.length} строк`);
+    meta.textContent = wanted
+      ? `${recognizedRows(wanted).length} строк в этом файле`
+      : `${finalRows.length} строк в итоге`;
   }
   if (wanted) {
     body.innerHTML = renderFilePane(wanted);
     body.dataset.reviewFile = wanted.filename || "";
     return;
   }
+  body.dataset.reviewFile = "";
   if (!finalRows.length) {
-    body.innerHTML = `${renderSheetChecks(recognitionOf(ws))}<p class="hint">Таблицу собрать не удалось.</p>`;
+    body.innerHTML = `<p class="hint">Итоговую таблицу собрать не удалось. Открой отдельный файл вкладкой выше.</p>`;
     return;
   }
   body.innerHTML = `
@@ -2494,7 +2702,6 @@ function fillReviewDialog(ws, filename) {
       <strong>Итоговая таблица</strong>
       <span class="hint">${finalRows.length} строк после кода и модели</span>
     </div>
-    ${renderSheetChecks(recognitionOf(ws))}
     ${renderRecognizedTable(finalRows)}
   `;
 }
@@ -2773,34 +2980,49 @@ function renderWorkspace() {
 
   const badges = $("#files-badges");
   badges.innerHTML = "";
-  // Нажимается каждый файл, у которого есть вкладка с тем, что в нём прочитано. Лист Excel называется «книга.xlsx / Лист1».
+  // Файлы поставки и отдельные оповещения (сверка/модель) - разными чипами.
   const reviewNames = new Set(reviewSources(ws).files.map((entry) => entry.filename));
   (ws.files || []).forEach((f) => {
+    const named = String(f.filename || "");
     const parseStatus = f.parse_status || "ok";
-    const name = String(f.filename || "").toLowerCase().split(" / ")[0];
+    if (named === "сверка" || named === "модель") {
+      const alertBtn = document.createElement("button");
+      alertBtn.type = "button";
+      alertBtn.className = `badge clickable ${named === "сверка" ? "review" : "alert-model"}`;
+      const msg = String(f.parse_message || named).replace(/\s+/g, " ").trim();
+      alertBtn.textContent = msg.slice(0, 160);
+      alertBtn.title = msg;
+      alertBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        openAlertNotice(named, msg);
+      });
+      badges.appendChild(alertBtn);
+      return;
+    }
+    const name = named.toLowerCase().split(" / ")[0];
     const isPdf = name.endsWith(".pdf");
     const isExcel = /\.(xlsx|xls|xlsm)$/.test(name);
     const hasOwnTable = reviewNames.has(f.filename);
     const clickable = parseStatus !== "skipped";
     const span = document.createElement(clickable ? "button" : "span");
     span.type = clickable ? "button" : undefined;
-    span.className = `badge ${f.doc_type ? "" : "unknown"} ${parseStatus === "ok" ? "" : parseStatus} ${clickable ? "clickable" : ""}`.trim();
-    const typeRu = DOC_TYPE_RU[f.doc_type] || (isPdf ? "PDF" : isExcel ? "Excel" : "Не определен");
-    const ocrHint =
-      f.ocr_confidence != null ? ` · распознавание ${Math.round(Number(f.ocr_confidence) * 100)}%` : "";
+    const roleGuess =
+      f.doc_type === "INVOICE"
+        ? "invoice"
+        : f.doc_type === "PACKING_LIST"
+          ? "packing"
+          : f.doc_type === "SPECIFICATION"
+            ? "specification"
+            : guessRoleFromName(named);
+    const typeRu = roleRu(roleGuess) || DOC_TYPE_RU[f.doc_type] || (isPdf ? "PDF" : isExcel ? "Excel" : "");
+    span.className = `badge ${parseStatus === "ok" ? "" : parseStatus} ${clickable ? "clickable" : ""}`.trim();
     let statusHint = "";
     if (parseStatus === "skipped") statusHint = " · пропущен";
-    else if (parseStatus === "review") statusHint = " · требуется проверка";
-    else if (hasOwnTable) statusHint = " · таблица";
-    span.title = f.parse_message || (clickable ? "Открыть итоговую таблицу" : "");
+    else if (parseStatus === "review") statusHint = " · проверить";
+    else if (hasOwnTable) statusHint = " · есть строки";
+    span.title = clickable ? (hasOwnTable ? "Открыть таблицу этого файла" : "Открыть итоговую таблицу") : "";
     span.setAttribute("aria-controls", "review-dialog");
-    const named = String(f.filename || "");
-    const showMessage = (named === "модель" || named === "сверка") && f.parse_message;
-    if (showMessage) {
-      span.textContent = `${named} - ${String(f.parse_message).replace(/\s+/g, " ").slice(0, 180)}`;
-    } else {
-      span.textContent = `${f.filename} - ${typeRu}${ocrHint}${statusHint}`;
-    }
+    span.textContent = typeRu ? `${f.filename} - ${typeRu}${statusHint}` : `${f.filename}${statusHint}`;
     if (clickable) {
       span.addEventListener("click", (event) => {
         event.preventDefault();
