@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>История действий</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=61" />
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div>
+        <p class="brand">Таможенные документы</p>
+        <h1>История действий</h1>
+      </div>
+      <div class="top-actions">
+        <a class="btn" href="/">К рабочему месту</a>
+      </div>
+    </header>
+    <section class="panel">
+      <form class="history-filters" id="audit-filters">
+        <label>
+          <span class="upload-label">Логин</span>
+          <input id="audit-login" autocomplete="off" />
+        </label>
+        <label>
+          <span class="upload-label">Название или инвойс</span>
+          <input id="audit-q" autocomplete="off" />
+        </label>
+        <label>
+          <span class="upload-label">Период</span>
+          <select id="audit-preset">
+            <option value="">Свои даты</option>
+            <option value="1">Сегодня</option>
+            <option value="7">7 дней</option>
+            <option value="30" selected>Месяц</option>
+            <option value="90">Квартал</option>
+          </select>
+        </label>
+        <label>
+          <span class="upload-label">Дата с</span>
+          <input type="date" id="audit-from" />
+        </label>
+        <label>
+          <span class="upload-label">Дата по</span>
+          <input type="date" id="audit-to" />
+        </label>
+        <div class="history-filter-actions">
+          <button class="btn primary" type="submit">Показать</button>
+        </div>
+      </form>
+      <div id="audit-list" class="history-list"></div>
+    </section>
+  </div>
+  <script src="/assets/auth.js?v=1"></script>
+  <script src="/assets/audit.js?v=1"></script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Пользователи</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=61" />
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div>
+        <p class="brand">Таможенные документы</p>
+        <h1>Пользователи</h1>
+      </div>
+      <div class="top-actions">
+        <a class="btn" href="/">К рабочему месту</a>
+      </div>
+    </header>
+    <section class="panel">
+      <h2>Новая учётка</h2>
+      <p class="hint">Удалить пользователя нельзя. Блокировка сразу закрывает ему сессию. Последнего активного администратора заблокировать нельзя.</p>
+      <form id="user-form" class="history-filters">
+        <label>
+          <span class="upload-label">Логин</span>
+          <input name="login" required autocomplete="off" />
+        </label>
+        <label>
+          <span class="upload-label">Пароль</span>
+          <input name="password" required autocomplete="new-password" />
+        </label>
+        <label>
+          <span class="upload-label">Роль</span>
+          <select name="role">
+            <option value="worker">Рабочий</option>
+            <option value="admin">Администратор</option>
+          </select>
+        </label>
+        <div class="history-filter-actions">
+          <button class="btn primary" type="submit">Создать</button>
+        </div>
+      </form>
+      <p id="user-error" class="parse-error hidden"></p>
+      <div id="user-list" class="history-list"></div>
+    </section>
+  </div>
+  <script src="/assets/auth.js?v=1"></script>
+  <script src="/assets/users.js?v=1"></script>
+</body>
+</html>

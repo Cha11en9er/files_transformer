@@ -96,6 +96,7 @@ def test_create_defaults_title_to_invoice_no(tmp_path):
     from openpyxl import Workbook
 
     from app.main import app
+    from tests.support_auth import login
 
     path = tmp_path / "invoice.xlsx"
     book = Workbook()
@@ -109,6 +110,7 @@ def test_create_defaults_title_to_invoice_no(tmp_path):
     files = [("files", (path.name, payload, "application/octet-stream"))]
 
     client = TestClient(app)
+    login(client, tmp_path / "auth")
     blank = client.post(
         "/api/v1/shipments/",
         data={"title": "", "profile_type": "BEIJING"},
@@ -242,12 +244,14 @@ def test_unreadable_file_gives_russian_message(tmp_path):
 
 
 @requires_docs
-def test_route_end_to_end_create_and_export():
+def test_route_end_to_end_create_and_export(tmp_path):
     from fastapi.testclient import TestClient
 
     from app.main import app
+    from tests.support_auth import login
 
     client = TestClient(app)
+    login(client, tmp_path / "auth")
     files = []
     for rel in HANGZHOU:
         p = DOCS / rel

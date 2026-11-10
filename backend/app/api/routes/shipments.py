@@ -18,10 +18,11 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
+from app.api.deps import current_user
 from app.models.enums import (
     DocType,
     PermitDatabaseSource,
@@ -519,6 +520,7 @@ def _iter_create_events(
     profile_type: ProfileType,
     incoming: list[UploadFile],
     catalog_names: set[str] | None = None,
+    actor: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     total = len(incoming)
     yield {"event": "start", "total": total}
@@ -539,6 +541,7 @@ def _iter_create_events(
             incoming=incoming,
             catalog_names=catalog_names,
             total=total,
+            actor=actor,
         )
     finally:
         _PARSE_SLOTS.release()
@@ -551,6 +554,7 @@ def _iter_create_events_locked(
     incoming: list[UploadFile],
     catalog_names: set[str] | None = None,
     total: int,
+    actor: dict[str, Any] | None = None,
 ) -> Iterator[dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="parse_") as tmp:
         tmp_dir = Path(tmp)
@@ -1173,8 +1177,21 @@ def _iter_create_events_locked(
                 sources=source_pairs,
                 catalog_names=catalog_names,
                 shipment_id=str(shipment_id),
+                owner_user_id=str((actor or {}).get("id") or ""),
+                owner_login=str((actor or {}).get("login") or ""),
             )
             payload.history_id = history_id
+            if actor:
+                from app.services import auth_store
+
+                auth_store.record_audit(
+                    actor,
+                    "shipment_processed",
+                    shipment_id=history_id,
+                    title=resolved_title,
+                    invoice_no=str((header_fields or {}).get("invoice_no") or ""),
+                    detail="обработал поставку",
+                )
         except Exception as hist_exc:  # noqa: BLE001 — history must not break recognition
             header_notes = list(header_notes) + [
                 f"История не записалась: {humanize_exception(hist_exc)}"
@@ -1204,12 +1221,14 @@ def get_vision_frame(token: str, filename: str) -> FileResponse:
 
 @router.post("/")
 async def create_shipment(
+    request: Request,
     title: str = Form(""),
     profile_type: ProfileType = Form(...),
     files: list[UploadFile] = File(default=[]),
     extra_files: list[UploadFile] = File(default=[]),
     stream: str = Form(default=""),
 ) -> Any:
+    actor = current_user(request)
     extras = _filter_upload_batch(extra_files)
     catalog_names = {
         Path((upload.filename or "").replace("\\", "/")).name.lower()
@@ -1260,6 +1279,7 @@ async def create_shipment(
                 profile_type=profile_type,
                 incoming=incoming,
                 catalog_names=catalog_names,
+                actor=actor,
             ):
                 if event.get("event") == "done":
                     done = event
@@ -1285,7 +1305,7 @@ async def create_shipment(
 
         try:
             for event in _iter_create_events(
-                title=title, profile_type=profile_type, incoming=incoming, catalog_names=catalog_names
+                title=title, profile_type=profile_type, incoming=incoming, catalog_names=catalog_names, actor=actor
             ):
                 try:
                     yield _safe_line(event)

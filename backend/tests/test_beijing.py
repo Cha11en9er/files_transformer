@@ -238,12 +238,14 @@ def test_shipment_title_defaults_to_invoice_no() -> None:
     assert resolve_shipment_title("", {}) == "export"
 
 
-def test_export_preview_uses_invoice_no_when_title_blank() -> None:
+def test_export_preview_uses_invoice_no_when_title_blank(tmp_path) -> None:
     from fastapi.testclient import TestClient
 
     from app.main import app
+    from tests.support_auth import login
 
     client = TestClient(app)
+    login(client, tmp_path / "auth")
     preview = client.post(
         "/api/v1/shipments/export/preview",
         json={

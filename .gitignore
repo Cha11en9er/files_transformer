@@ -11,6 +11,7 @@ backend/data/model_inputs/*
 !backend/data/model_inputs/.gitkeep
 backend/data/history/*
 !backend/data/history/.gitkeep
+backend/data/auth/
 data/model_inputs/
 !data/model_inputs/.gitkeep
 data/history/

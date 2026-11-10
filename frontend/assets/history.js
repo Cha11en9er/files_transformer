@@ -110,14 +110,20 @@ function renderHistoryList() {
       const invoiceHint = item.invoice_no
         ? ` · инвойс ${String(item.invoice_no).replace(/</g, "&lt;")}`
         : "";
+      const muted = item.owner_unknown ? " is-muted" : "";
+      const author = item.owner_unknown
+        ? " · автор неизвестен"
+        : item.owner_login
+          ? ` · ${String(item.owner_login).replace(/</g, "&lt;")}`
+          : "";
       return `
-        <article class="history-card" data-history-id="${item.id}">
+        <article class="history-card${muted}" data-history-id="${item.id}">
           <div class="history-card-top">
             <div>
               <input class="history-title-input" data-history-rename value="${title}" aria-label="Название поставки" />
               <p class="history-meta">
                 ${item.updated_at_moscow || item.created_at_moscow || ""}
-                · ${profile}${invoiceHint}
+                · ${profile}${invoiceHint}${author}
                 · исходники ${item.source_count || 0} (${formatBytes(item.source_bytes)})
                 · архивы ${item.export_count || 0} (${formatBytes(item.export_bytes)})
               </p>

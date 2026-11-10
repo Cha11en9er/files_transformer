@@ -1725,6 +1725,58 @@ pre {
   flex-direction: column;
   gap: 12px;
 }
+.history-card.is-muted,
+.session-chip.is-muted {
+  opacity: 0.55;
+}
+.session-chip {
+  font-size: 13px;
+  color: var(--muted, #5c6b7a);
+}
+.login-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+}
+.login-card {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 22px 20px;
+}
+.login-card input,
+.history-filters select {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  width: 100%;
+}
+.audit-details {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+.history-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+@media (max-width: 820px) {
+  .login-card {
+    padding: 16px 14px;
+  }
+  .history-card-actions .btn {
+    flex: 1 1 auto;
+  }
+}
 .history-card {
   border: 1px solid var(--line);
   border-radius: 10px;

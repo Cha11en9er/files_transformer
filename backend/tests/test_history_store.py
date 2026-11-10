@@ -120,8 +120,10 @@ class HistoryApiTest(unittest.TestCase):
         )
         from fastapi.testclient import TestClient
         from app.main import create_app
+        from tests.support_auth import login
 
         self.client = TestClient(create_app())
+        login(self.client, Path(self._tmp.name) / "auth")
 
     def tearDown(self) -> None:
         self.client = None

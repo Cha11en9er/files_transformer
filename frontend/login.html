@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Вход</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=61" />
+</head>
+<body>
+  <main class="login-screen">
+    <form class="login-card" id="login-form">
+      <p class="brand">Таможенные документы</p>
+      <h1>Вход</h1>
+      <p class="hint">Сайт открывается только после входа. Документы поставок снаружи не показываются.</p>
+      <label>
+        <span class="upload-label">Логин</span>
+        <input name="login" autocomplete="username" required />
+      </label>
+      <label>
+        <span class="upload-label">Пароль</span>
+        <input name="password" type="password" autocomplete="current-password" required />
+      </label>
+      <p id="login-error" class="parse-error hidden"></p>
+      <button class="btn primary" type="submit">Войти</button>
+    </form>
+  </main>
+  <script>
+    document.getElementById("login-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const error = document.getElementById("login-error");
+      error.classList.add("hidden");
+      const res = await fetch("/api/v1/auth/login", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          login: form.login.value.trim(),
+          password: form.password.value,
+        }),
+      });
+      if (!res.ok) {
+        let message = "Неверный логин или пароль";
+        try {
+          const body = await res.json();
+          if (typeof body.detail === "string") message = body.detail;
+        } catch (err) { /* keep */ }
+        error.textContent = message;
+        error.classList.remove("hidden");
+        return;
+      }
+      location.replace("/");
+    });
+  </script>
+</body>
+</html>

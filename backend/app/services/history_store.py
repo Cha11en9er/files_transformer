@@ -72,6 +72,11 @@ def init_history_db() -> None:
         cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(shipments)")}
         if "invoice_no" not in cols:
             conn.execute("ALTER TABLE shipments ADD COLUMN invoice_no TEXT NOT NULL DEFAULT ''")
+        cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(shipments)")}
+        if "owner_user_id" not in cols:
+            conn.execute("ALTER TABLE shipments ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''")
+        if "owner_login" not in cols:
+            conn.execute("ALTER TABLE shipments ADD COLUMN owner_login TEXT NOT NULL DEFAULT ''")
 
 
 def _invoice_from_workspace(workspace: dict[str, Any] | None) -> str:
@@ -238,6 +243,8 @@ def create_draft(
     sources: list[tuple[Path, str]],
     catalog_names: set[str] | None = None,
     shipment_id: str | None = None,
+    owner_user_id: str = "",
+    owner_login: str = "",
 ) -> str:
     """Copy source files and write workspace. Returns history id."""
     init_history_db()
@@ -275,6 +282,8 @@ def create_draft(
         "updated_at": now,
         "sources": copied,
         "export_version": 0,
+        "owner_user_id": owner_user_id or "",
+        "owner_login": owner_login or "",
     }
     _write_json(_meta_path(sid), meta)
     ws = dict(workspace or {})
@@ -288,10 +297,22 @@ def create_draft(
             """
             INSERT INTO shipments (
                 id, title, profile_type, created_at, updated_at,
-                source_bytes, export_bytes, source_count, export_count, invoice_no
-            ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?)
+                source_bytes, export_bytes, source_count, export_count, invoice_no,
+                owner_user_id, owner_login
+            ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?)
             """,
-            (sid, title_text, profile, now, now, sizes[0], sizes[1], invoice_no),
+            (
+                sid,
+                title_text,
+                profile,
+                now,
+                now,
+                sizes[0],
+                sizes[1],
+                invoice_no,
+                owner_user_id or "",
+                owner_login or "",
+            ),
         )
     return sid
 
@@ -306,17 +327,22 @@ def shipment_updated_at(shipment_id: str) -> str:
     return str(row["updated_at"] if row else "") or ""
 
 
-def list_shipments() -> list[dict[str, Any]]:
+def list_shipments(*, owner_user_id: str | None = None) -> list[dict[str, Any]]:
+    """owner_user_id None = all rows (admin). A string limits to that owner."""
     init_history_db()
-    with _db() as conn:
-        rows = conn.execute(
-            """
+    sql = """
             SELECT id, title, profile_type, created_at, updated_at,
-                   source_bytes, export_bytes, source_count, export_count, invoice_no
+                   source_bytes, export_bytes, source_count, export_count, invoice_no,
+                   owner_user_id, owner_login
             FROM shipments
-            ORDER BY updated_at DESC
-            """
-        ).fetchall()
+        """
+    args: tuple[Any, ...] = ()
+    if owner_user_id is not None:
+        sql += " WHERE owner_user_id = ?"
+        args = (owner_user_id,)
+    sql += " ORDER BY updated_at DESC"
+    with _db() as conn:
+        rows = conn.execute(sql, args).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
@@ -325,6 +351,9 @@ def list_shipments() -> list[dict[str, Any]]:
         item["updated_date_moscow"] = moscow_date(item["updated_at"])
         item["created_date_moscow"] = moscow_date(item["created_at"])
         item["invoice_no"] = str(item.get("invoice_no") or "")
+        item["owner_user_id"] = str(item.get("owner_user_id") or "")
+        item["owner_login"] = str(item.get("owner_login") or "")
+        item["owner_unknown"] = not item["owner_user_id"]
         item["total_bytes"] = int(item["source_bytes"] or 0) + int(item["export_bytes"] or 0)
         out.append(item)
     return out
@@ -349,8 +378,9 @@ def get_shipment(shipment_id: str) -> dict[str, Any] | None:
                 """
                 INSERT OR REPLACE INTO shipments (
                     id, title, profile_type, created_at, updated_at,
-                    source_bytes, export_bytes, source_count, export_count, invoice_no
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_bytes, export_bytes, source_count, export_count, invoice_no,
+                    owner_user_id, owner_login
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     sid,
@@ -363,6 +393,8 @@ def get_shipment(shipment_id: str) -> dict[str, Any] | None:
                     sizes["source_count"],
                     sizes["export_count"],
                     str(meta.get("invoice_no") or ""),
+                    str(meta.get("owner_user_id") or ""),
+                    str(meta.get("owner_login") or ""),
                 ),
             )
             row = conn.execute("SELECT * FROM shipments WHERE id = ?", (sid,)).fetchone()
@@ -375,6 +407,9 @@ def get_shipment(shipment_id: str) -> dict[str, Any] | None:
         except (OSError, json.JSONDecodeError):
             workspace = None
     item = dict(row)
+    item["owner_user_id"] = str(item.get("owner_user_id") or meta.get("owner_user_id") or "")
+    item["owner_login"] = str(item.get("owner_login") or meta.get("owner_login") or "")
+    item["owner_unknown"] = not item["owner_user_id"]
     item["created_at_moscow"] = moscow_label(item["created_at"])
     item["updated_at_moscow"] = moscow_label(item["updated_at"])
     item["updated_date_moscow"] = moscow_date(item["updated_at"])
