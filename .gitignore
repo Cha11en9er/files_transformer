@@ -16,6 +16,7 @@ data/model_inputs/
 !data/model_inputs/.gitkeep
 data/history/
 !data/history/.gitkeep
+data/auth/
 uploads/
 exports/
 documents/

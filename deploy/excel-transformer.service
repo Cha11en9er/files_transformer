@@ -12,6 +12,8 @@ RestartSec=3
 User=root
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/opt/files_transformer_update/backend/.env
+# SQLite opens a file per request; keep well above the default 1024 soft limit.
+LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target

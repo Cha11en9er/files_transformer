@@ -13,9 +13,10 @@ import re
 import secrets
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import jwt
 
@@ -54,8 +55,24 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+@contextmanager
+def _db() -> Iterator[sqlite3.Connection]:
+    """Commit/rollback and always close.
+
+    A bare ``with sqlite3.connect(...)`` commits but does not close, so it leaks
+    file descriptors until GC. Every request calls init_db(), so the process hits
+    LimitNOFILE and SQLite then reports "unable to open database file".
+    """
+    conn = _connect()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
 def init_db() -> None:
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -172,21 +189,21 @@ def _row_user(row: sqlite3.Row | None) -> dict[str, Any] | None:
 
 def get_user(user_id: str) -> dict[str, Any] | None:
     init_db()
-    with _connect() as conn:
+    with _db() as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     return _row_user(row)
 
 
 def get_by_login(login: str) -> dict[str, Any] | None:
     init_db()
-    with _connect() as conn:
+    with _db() as conn:
         row = conn.execute("SELECT * FROM users WHERE login = ?", (login,)).fetchone()
     return _row_user(row)
 
 
 def list_users() -> list[dict[str, Any]]:
     init_db()
-    with _connect() as conn:
+    with _db() as conn:
         rows = conn.execute("SELECT * FROM users ORDER BY created_at ASC").fetchall()
     return [_row_user(row) for row in rows if row is not None]
 
@@ -200,7 +217,7 @@ def create_user(*, login: str, password: str, role: str) -> dict[str, Any]:
     user_id = str(uuid.uuid4())
     now = _iso(_now())
     try:
-        with _connect() as conn:
+        with _db() as conn:
             conn.execute(
                 """
                 INSERT INTO users (id, login, password_hash, role, blocked, created_at)
@@ -225,7 +242,7 @@ def _active_admins(conn: sqlite3.Connection, except_id: str = "") -> int:
 
 def set_blocked(user_id: str, blocked: bool) -> dict[str, Any]:
     init_db()
-    with _connect() as conn:
+    with _db() as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if row is None:
             raise AuthError("Пользователь не найден", 404)
@@ -244,7 +261,7 @@ def set_role(user_id: str, role: str) -> dict[str, Any]:
     if role not in {"admin", "worker"}:
         raise AuthError("Роль: admin или worker")
     init_db()
-    with _connect() as conn:
+    with _db() as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if row is None:
             raise AuthError("Пользователь не найден", 404)
@@ -260,7 +277,7 @@ def set_role(user_id: str, role: str) -> dict[str, Any]:
 def set_password(user_id: str, password: str) -> dict[str, Any]:
     password_text = validate_password(password)
     init_db()
-    with _connect() as conn:
+    with _db() as conn:
         row = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
         if row is None:
             raise AuthError("Пользователь не найден", 404)
@@ -277,7 +294,7 @@ def set_password(user_id: str, password: str) -> dict[str, Any]:
 def authenticate(login: str, password: str) -> dict[str, Any]:
     login_text = (login or "").strip()
     init_db()
-    with _connect() as conn:
+    with _db() as conn:
         row = conn.execute("SELECT * FROM users WHERE login = ?", (login_text,)).fetchone()
     if row is None or not verify_password(password or "", str(row["password_hash"])):
         log.warning("failed login for %s", login_text or "-")
@@ -300,7 +317,7 @@ def issue_refresh(user_id: str) -> tuple[str, str]:
     raw = secrets.token_urlsafe(32)
     session_id = str(uuid.uuid4())
     expires = _iso(_now() + timedelta(days=_REFRESH_DAYS))
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute(
             """
             INSERT INTO sessions (id, user_id, token_hash, expires_at, revoked)
@@ -315,7 +332,7 @@ def revoke_refresh(raw: str) -> None:
     if not raw:
         return
     init_db()
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute(
             "UPDATE sessions SET revoked = 1 WHERE token_hash = ?",
             (_token_hash(raw),),
@@ -328,7 +345,7 @@ def peek_refresh(raw: str) -> dict[str, Any] | None:
         return None
     init_db()
     now = _iso(_now())
-    with _connect() as conn:
+    with _db() as conn:
         row = conn.execute(
             "SELECT * FROM sessions WHERE token_hash = ?",
             (_token_hash(raw),),
@@ -348,7 +365,7 @@ def consume_refresh(raw: str) -> dict[str, Any] | None:
         return None
     init_db()
     now = _iso(_now())
-    with _connect() as conn:
+    with _db() as conn:
         row = conn.execute(
             "SELECT * FROM sessions WHERE token_hash = ?",
             (_token_hash(raw),),
@@ -404,7 +421,7 @@ def record_audit(
 ) -> None:
     init_db()
     who = user or {}
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute(
             """
             INSERT INTO audit_events (
@@ -427,7 +444,7 @@ def record_audit(
 
 def blocked_logins() -> set[str]:
     init_db()
-    with _connect() as conn:
+    with _db() as conn:
         rows = conn.execute("SELECT login FROM users WHERE blocked = 1").fetchall()
     return {str(row["login"]) for row in rows}
 
@@ -451,7 +468,7 @@ def list_audit(*, login: str = "", query: str = "", date_from: str = "", date_to
         sql += " AND created_at <= ?"
         args.append(end)
     sql += " ORDER BY created_at DESC"
-    with _connect() as conn:
+    with _db() as conn:
         rows = [dict(row) for row in conn.execute(sql, args).fetchall()]
     needle = query.strip().lower()
     if needle:
